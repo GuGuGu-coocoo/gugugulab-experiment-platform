@@ -82,3 +82,13 @@ class Audit(models.Model):
     action = models.CharField(max_length=48)
     target = models.CharField(max_length=128)
     created_at = models.DateTimeField(auto_now_add=True)
+
+class Invitation(Identified):
+    study = models.ForeignKey(Study, on_delete=models.PROTECT)
+    issuer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    token_hash = models.CharField(max_length=64, unique=True)
+    username = models.CharField(max_length=150)
+    actions = models.JSONField()
+    expires_at = models.DateTimeField()
+    consumed = models.BooleanField(default=False)
+    revoked = models.BooleanField(default=False)

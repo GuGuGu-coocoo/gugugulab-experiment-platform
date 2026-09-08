@@ -1,0 +1,1 @@
+{% extends 'core/base.html' %}{% block content %}<section><h1>登录研究工作台</h1><p>{{message}}</p><form method="post">{% csrf_token %}<label>用户名 <input name="username" autocomplete="username" required></label><label>密码 <input name="password" type="password" autocomplete="current-password" required></label><button>登录</button></form><a href="/activate">接受成员邀请</a></section>{% endblock %}
