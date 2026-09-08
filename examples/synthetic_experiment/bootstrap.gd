@@ -14,6 +14,8 @@ var accepting := false
 func _ready() -> void:
 	var box = VBoxContainer.new();box.position = Vector2(70,70);box.size = Vector2(850,500);add_child(box)
 	message = Label.new();message.text = "Synthetic experiment · two trials\nLocal save and server receipt are separate states.";box.add_child(message)
+	# Keep the two-line status region stable when trial/error text uses one line.
+	message.custom_minimum_size.y = message.get_minimum_size().y
 	code = LineEdit.new();code.placeholder_text = "Issued ID (leave empty for anonymous)";box.add_child(code)
 	password = LineEdit.new();password.secret = true;password.placeholder_text = "Issued password (if required)";box.add_child(password)
 	recovery = LineEdit.new();recovery.placeholder_text = "Researcher-authorized recovery: session UUID";box.add_child(recovery)
