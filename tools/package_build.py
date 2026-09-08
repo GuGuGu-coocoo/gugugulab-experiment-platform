@@ -16,7 +16,10 @@ if sys.argv[1]=='native':
             target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(z.read(entry))
             target.chmod((entry.external_attr>>16)&0o777 or 0o644)
 else:
-    files=sorted(p for p in (root/'build/web').rglob('*') if p.is_file())
+    # Package only known synthetic runtime outputs, never acceptance URLs or reports.
+    names=['index.html','index.js','index.wasm','index.pck','index.png','index.audio.worklet.js','index.audio.position.worklet.js','gec/sdk.js','gec/bridge.js','gec/inputs.js']
+    files=sorted(root/'build/web'/name for name in names)
+    assert all(p.is_file() for p in files),'Missing Web runtime output'
     h=hashlib.sha256()
     for p in files:h.update(p.relative_to(root/'build').as_posix().encode());h.update(p.read_bytes())
     d['program_sha256']=h.hexdigest()
