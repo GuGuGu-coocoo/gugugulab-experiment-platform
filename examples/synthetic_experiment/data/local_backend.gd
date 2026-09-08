@@ -47,6 +47,8 @@ func finish() -> Dictionary:
 	var result = await commit()
 	if not result.has("error"): current = {"state":"local_committed","remote_status":"unsupported"}
 	return result
+func recovery_export() -> Dictionary:
+	return {"format_version":1,"session_id":session_id,"records":records.duplicate(true),"remote_status":"unsupported"}
 func status() -> Dictionary:
 	return current
 func _exit_tree() -> void:

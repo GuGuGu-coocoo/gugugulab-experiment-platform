@@ -84,13 +84,18 @@ export class GEC {
     }} finally {this.busy=false;}
     if(firstError)throw firstError;
   }
-  async cleanup(id){await this.mutate(store=>{const r=store.get(id);r.onsuccess=()=>{const s=r.result;if(s.complete_ack&&!s.pending.length&&!s.checkpoint)store.put({id,kind:'cleaned',state:'remote_acknowledged'});};});if(id===this.id)this.state='remote_acknowledged';}
+  async cleanup(id){await this.mutate(store=>{const r=store.get(id);r.onsuccess=()=>{const s=r.result;if(s.complete_ack&&!s.pending.length&&!s.checkpoint)store.put({id,kind:'cleaned',state:'remote_acknowledged'});};});if(id===this.id){this.state='remote_acknowledged';this.error=null;}}
   async recover(id,permit){
     if(this.state!=='ready')fail('not_ready');
     const s=await this.get(id);if(!s||s.kind!=='session'||s.completion)fail('not_recoverable');
-    if(!s.checkpoint||s.checkpoint.version!==1||s.checkpoint.strategy!=='trial_boundary_v1'||s.config.purpose!=='synthetic')fail('data_only_recovery');
+    const canResume=!!s.checkpoint&&s.checkpoint.version===1&&s.checkpoint.strategy==='trial_boundary_v1'&&s.config.purpose==='synthetic';
     const recovered=await this.request(s.config,`/v1/participant/sessions/${id}/recover`,{permit,proof:s.proof},s.context.token);s.context.token=recovered.token;
-    await this.mutate(store=>{s.front_locked=false;s.segments.push(this.segment);store.put(s);});this.id=id;this.config=s.config;this.state='active';return copy(s.checkpoint);
+    await this.mutate(store=>{s.front_locked=false;if(canResume)s.segments.push(this.segment);store.put(s);});this.id=id;this.config=s.config;this.state=canResume?'active':'data_only';return {state:this.state,checkpoint:canResume?copy(s.checkpoint):null};
+  }
+  async recovery_export(){
+    const s=await this.get(this.id);if(!s||!['session','local'].includes(s.kind)||s.front_locked)fail('recovery_export_unavailable');
+    const binding={};for(const k of ['instance_id','study_id','release_id','build_id','protocol_version'])if(s.config?.[k])binding[k]=s.config[k];
+    return {format_version:1,session_id:s.id,binding,records:copy(s.records),checkpoint:copy(s.checkpoint),pending:copy(s.pending),completion:copy(s.completion)};
   }
   status(){return {state:this.state,error:this.error,buffered:this.buffer.length};}
   report(error){this.error=error.message;}

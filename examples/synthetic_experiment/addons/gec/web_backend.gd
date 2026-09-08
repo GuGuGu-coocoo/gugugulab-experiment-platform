@@ -26,3 +26,8 @@ func finish() -> Dictionary:
 	return await call_bridge("finish")
 func status() -> Dictionary:
 	return JSON.parse_string(bridge.status_json()) if bridge != null else current
+
+func recovery_export() -> Dictionary:
+	return await call_bridge("recovery_export")
+func download_recovery() -> Dictionary:
+	return await call_bridge("download_recovery")

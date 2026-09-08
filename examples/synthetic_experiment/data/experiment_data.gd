@@ -13,3 +13,6 @@ func status() -> Dictionary:
 	return backend.status()
 func finish() -> Dictionary:
 	return await backend.finish()
+
+func recovery_export() -> Dictionary:
+	return await backend.recovery_export()

@@ -19,6 +19,7 @@ func _ready() -> void:
 	recovery = LineEdit.new();recovery.placeholder_text = "Researcher-authorized recovery: session UUID";box.add_child(recovery)
 	permit = LineEdit.new();permit.secret = true;permit.placeholder_text = "One-time recovery permit";box.add_child(permit)
 	start = Button.new();start.text = "Start synthetic participation";start.pressed.connect(begin);box.add_child(start)
+	var export_button = Button.new();export_button.text = "Export current recovery data";export_button.pressed.connect(export_recovery);box.add_child(export_button)
 	var backend: Node
 	if OS.has_feature("web"):
 		backend = load("res://addons/gec/web_backend.gd").new()
@@ -43,9 +44,27 @@ func _ready() -> void:
 				print("SYNTHETIC_ERROR ",prepared.error);get_tree().quit(2)
 			return
 	data = DataModule.new(backend);task = Task.new(data)
+	if OS.has_feature("web"): call_deferred("mount_web_inputs")
 	if OS.get_cmdline_user_args().has("--synthetic-auto"): call_deferred("auto_run")
+func mount_web_inputs() -> void:
+	await get_tree().process_frame
+	var fields: Array = []
+	var controls = {"code":code,"password":password,"recovery":recovery,"permit":permit}
+	for name in controls:
+		var control = controls[name]
+		var rect = control.get_global_rect()
+		fields.append({"name":name,"label":control.placeholder_text,"secret":control.secret,"x":rect.position.x,"y":rect.position.y,"width":rect.size.x,"height":rect.size.y})
+		control.modulate.a = 0
+		control.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		control.focus_mode = Control.FOCUS_NONE
+	var viewport = get_viewport_rect().size
+	JavaScriptBridge.get_interface("GECBridge").mount_inputs(JSON.stringify({"fields":fields,"width":viewport.x,"height":viewport.y}))
 func begin() -> void:
 	start.disabled = true
+	if OS.has_feature("web"):
+		var values = JSON.parse_string(JavaScriptBridge.get_interface("GECBridge").inputs_json())
+		code.text = values.code;password.text = values.password;recovery.text = values.recovery;permit.text = values.permit
+		JavaScriptBridge.get_interface("GECBridge").clear_input_secrets()
 	var credentials: Dictionary = {"expected_version":"synthetic-1"}
 	if not code.text.is_empty(): credentials.participant_code = code.text
 	if not password.text.is_empty(): credentials.password = password.text
@@ -54,12 +73,16 @@ func begin() -> void:
 		if arg.begins_with("--recover="): credentials.recovery_session = arg.trim_prefix("--recover=")
 		if arg.begins_with("--permit="): credentials.permit = arg.trim_prefix("--permit=")
 	var result = await data.prepare(credentials)
-	password.text = ""
+	password.text = "";permit.text = ""
 	if result.has("error"):
+		start.disabled = false
 		message.text = "Cannot start: " + result.error
 		print("SYNTHETIC_ERROR ",result.error)
 		return
-	if result.has("checkpoint"): task.restore(result.checkpoint)
+	if result.get("state") == "data_only":
+		message.text = "Data recovered. No compatible task recovery policy; contact the researcher."
+		return
+	if result.get("checkpoint") != null: task.restore(result.checkpoint)
 	show_trial()
 func show_trial() -> void:
 	message.text = "Trial " + str(task.next_trial+1) + ": press LEFT or RIGHT"
@@ -96,3 +119,20 @@ func auto_run() -> void:
 			print("SYNTHETIC_DONE ",JSON.stringify(data.status()));get_tree().quit();return
 		await get_tree().create_timer(1.0).timeout
 	print("SYNTHETIC_TIMEOUT ",JSON.stringify(data.status()));get_tree().quit(3)
+
+func export_recovery() -> void:
+	if data == null: return
+	if OS.has_feature("web"):
+		var result = await data.backend.download_recovery()
+		if result.has("error"): message.text = result.error
+		return
+	var recovery_data = await data.recovery_export()
+	if recovery_data.has("error"): message.text = recovery_data.error;return
+	var dialog = FileDialog.new();dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE;dialog.access = FileDialog.ACCESS_FILESYSTEM;dialog.use_native_dialog = true;dialog.current_file = "recovery.json";dialog.filters = PackedStringArray(["*.json ; Recovery data"])
+	add_child(dialog)
+	dialog.file_selected.connect(func(path):
+		var file = FileAccess.open(path,FileAccess.WRITE)
+		if file == null: message.text = "Recovery export could not be saved";return
+		file.store_string(JSON.stringify(recovery_data));file.close()
+	)
+	dialog.popup_centered(Vector2i(800,500))

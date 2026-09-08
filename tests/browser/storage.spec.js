@@ -75,3 +75,35 @@ test('unknown storage version is preserved and rejected',async({page})=>{
  expect(message).toBe('VersionError');
  expect(await page.evaluate(()=>new Promise(resolve=>{const r=indexedDB.open('gec-1');r.onsuccess=()=>{resolve(r.result.version);r.result.close()}}))).toBe(2);
 });
+
+test('successful completion clears the earlier offline error after durable cleanup',async({page,context})=>{
+ await setup(page);
+ await page.evaluate(async payload=>{client.record('exp.rt',payload,{id:'rt',version:'1'});await client.commit();await client.finish()},payload);
+ await context.setOffline(true);
+ await page.evaluate(async()=>{try{await client.flush()}catch(error){client.report(error)}});
+ expect(await page.evaluate(()=>client.status().error)).toBeTruthy();
+ expect(await page.evaluate(async()=>(await client.get(client.id)).pending.length)).toBe(1);
+ await context.setOffline(false);
+ await page.evaluate(()=>client.flush());
+ expect(await page.evaluate(()=>client.status())).toEqual({state:'remote_acknowledged',error:null,buffered:0});
+ expect(await page.evaluate(async()=>(await client.get(client.id)).kind)).toBe('cleaned');
+ await page.evaluate(()=>client.close());
+});
+
+test('authorized recovery without task policy exports data without resuming trials or secrets',async({page,context})=>{
+ await setup(page);
+ const id=await page.evaluate(async payload=>{client.record('exp.rt',payload,{id:'rt',version:'1'});await client.commit();return client.id},payload);
+ await page.evaluate(()=>client.close());await page.reload();
+ await page.evaluate(async config=>{const {GEC}=await import('/sdk.js');window.client=new GEC(config);await client.prepare();clearInterval(client.timer)},config);
+ await expect(page.evaluate(()=>client.recovery_export())).rejects.toThrow('recovery_export_unavailable');
+ const admin=await context.newPage(),c=JSON.parse(fs.readFileSync('local_data/dev_credentials.json','utf8'));
+ await admin.goto('http://admin.localhost:8000/login');await admin.locator('[name=username]').fill(c.username);await admin.locator('[name=password]').fill(c.password);await admin.getByRole('button',{name:'登录',exact:true}).click();
+ await admin.goto('http://admin.localhost:8000/studies/'+config.study_id);await admin.locator('[name=session_id]').fill(id);await admin.getByRole('button',{name:'签发一次性恢复许可'}).click();
+ const permit=(await admin.locator('.notice').textContent()).split('许可：')[1].trim();
+ const result=await page.evaluate(async({id,permit})=>{const recovered=await client.recover(id,permit);return {recovered,data:await client.recovery_export()}},{id,permit});
+ expect(result.recovered).toEqual({state:'data_only',checkpoint:null});
+ expect(result.data.records).toHaveLength(1);expect(result.data.records[0].payload).toEqual(payload);
+ expect(Object.keys(result.data).sort()).toEqual(['binding','checkpoint','completion','format_version','pending','records','session_id']);
+ await expect(page.evaluate(payload=>client.record('exp.rt',payload,{id:'rt',version:'1'}),payload)).rejects.toThrow('not_recording');
+ await page.evaluate(()=>client.close());
+});

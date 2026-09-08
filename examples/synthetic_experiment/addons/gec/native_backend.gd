@@ -69,15 +69,15 @@ func prepare(options: Dictionary = {}) -> Dictionary:
 	if options.has("recovery_session"):
 		var old = read_session(options.recovery_session)
 		if old.is_empty() or old.get("kind") != "session" or old.completion != null: return {"error":"not_recoverable"}
-		if old.checkpoint == null or old.checkpoint.get("version") != 1 or old.checkpoint.get("strategy") != "trial_boundary_v1": return {"error":"data_only_recovery"}
+		var can_resume = old.checkpoint != null and old.checkpoint.get("version") == 1 and old.checkpoint.get("strategy") == "trial_boundary_v1"
 		var recovered = await http(old.config,"/v1/participant/sessions/"+old.id+"/recover",{"proof":old.proof,"permit":options.get("permit","")})
 		if recovered.has("error"): return recovered
 		old.context.token = recovered.token
 		old.front_locked = false
-		old.segments.append(segment)
+		if can_resume: old.segments.append(segment)
 		if not save(old): return {"error":"local_commit"}
 		session_id = old.id;config = old.config
-		current = {"state":"active","checkpoint":old.checkpoint}
+		current = {"state":"active" if can_resume else "data_only","checkpoint":old.checkpoint if can_resume else null}
 		start_uploader()
 		return current
 	var draft: Dictionary = {}
@@ -195,6 +195,13 @@ func flush() -> void:
 				if save(s) and save({"id":s.id,"kind":"cleaned","state":"remote_acknowledged"}):
 					if s.id == session_id: current = {"state":"remote_acknowledged"}
 	sending = false
+func recovery_export() -> Dictionary:
+	var s = read_session(session_id)
+	if s.is_empty() or s.get("kind") != "session" or s.get("front_locked",false): return {"error":"recovery_export_unavailable"}
+	var binding: Dictionary = {}
+	for key in ["instance_id","study_id","release_id","build_id","protocol_version"]:
+		if s.get("config",{}).has(key): binding[key] = s.config[key]
+	return {"format_version":1,"session_id":s.id,"binding":binding,"records":s.records,"checkpoint":s.checkpoint,"pending":s.pending,"completion":s.completion}
 func status() -> Dictionary:
 	return current
 func _exit_tree() -> void:
