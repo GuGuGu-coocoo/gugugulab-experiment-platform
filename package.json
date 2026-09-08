@@ -1,0 +1,14 @@
+{
+  "name": "gep-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "test:browser": ".venv/bin/python tools/verify_browser.py",
+    "test:server": ".venv/bin/pytest",
+    "build": ".venv/bin/python tools/build.py"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.58.2"
+  }
+}

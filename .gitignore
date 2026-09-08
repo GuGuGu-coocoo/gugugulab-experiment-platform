@@ -36,3 +36,10 @@ node_modules/
 
 # macOS metadata.
 .DS_Store
+
+# Verified native dependency runtime, installed by tools/install_sqlite.py.
+/examples/synthetic_experiment/addons/godot-sqlite/bin/
+/test-results/
+/playwright-report/
+
+.pnpm-store/
