@@ -1,0 +1,38 @@
+# Internal development documents and task inputs remain local.
+/docs/
+/AGENTS.md
+/question.md
+
+# Credentials and local environment configuration.
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Local dependencies, caches and generated output.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+node_modules/
+.godot/
+/dist/
+/build/
+/coverage/
+
+# Local runtime data (never commit participant data or databases).
+/local_data/
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+
+# macOS metadata.
+.DS_Store
