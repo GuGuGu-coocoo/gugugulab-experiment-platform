@@ -73,7 +73,7 @@ def exports(request, export_id=None):
             writer.writerow(['study_id','release_id','build_id','record_json'])
             for row in item.snapshot['records']:
                 writer.writerow([row['study_id'],row['release_id'],row['build_id'],'json:'+json.dumps(row['record'],ensure_ascii=False,allow_nan=False)])
-            response=HttpResponse(output.getvalue(),content_type='text/csv; charset=utf-8')
+            response=HttpResponse(output.getvalue().encode('utf-8-sig'),content_type='text/csv; charset=utf-8')
         else:
             response=HttpResponse(''.join(json.dumps(row,ensure_ascii=False,allow_nan=False)+'\n' for row in item.snapshot['records']),content_type='application/x-ndjson')
         response['Content-Disposition']=f'attachment; filename="{item.id}.{fmt}"'

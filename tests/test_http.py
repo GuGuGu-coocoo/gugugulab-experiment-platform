@@ -46,7 +46,10 @@ def test_csv_lossless_nested_values_and_sidecar_authorization(setup,event):
     item=Export.objects.create(study=setup['study'],snapshot={'records':[{'study_id':str(setup['study'].id),'release_id':'r','build_id':'b','record':golden}],'builds':{},'sessions':{}})
     url=f'/v1/admin/exports/{item.id}/download'
     result=c.get(url+'?format=csv')
-    rows=list(csv.DictReader(io.StringIO(result.content.decode())))
+    from pathlib import Path
+    Path('build').mkdir(exist_ok=True)
+    Path('build/csv_golden.csv').write_bytes(result.content)
+    rows=list(csv.DictReader(io.StringIO(result.content.decode("utf-8-sig"))))
     assert rows[0]['record_json'].startswith('json:')
     assert json.loads(rows[0]['record_json'][5:])==golden
     assert 'missing' not in json.loads(rows[0]['record_json'][5:])
