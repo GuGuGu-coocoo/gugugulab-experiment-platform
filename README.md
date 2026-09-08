@@ -22,7 +22,7 @@ pnpm install --frozen-lockfile
 - 本机 Web 与 macOS 原生合成链路已运行；其他平台不承诺兼容。
 - 完成任务、本地保存、服务器收齐和科学验收是不同事实。
 - 只支持原设备／原存储的明确 trial 恢复；公开 ID 不能取回旧答案或接管会话。
-- 最小 Compose 已有定义，但本机没有容器运行环境，尚未完成运行验收。Windows 11 / Chrome 的实体 LAN 基础链路已验；独立研究者操作和原生窗口可视检查仍待验。
+- 最小 Compose 已有定义，但本机没有容器运行环境，尚未完成运行验收。Windows 11 / Chrome 的实体 LAN 基础链路已验；Mac 原生窗口与实际按键已验，独立研究者操作仍待验。
 - Runner、Local Launcher、自动分析、真实研究和生产部署未启用；部分完整故障矩阵仍未完成，详见验收记录。
 
 接口：[GEP/1 协议](public_docs/protocol.md)。依赖：[第三方声明](public_docs/third_party.md)。
