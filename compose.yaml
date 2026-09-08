@@ -1,0 +1,23 @@
+services:
+  gep:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    environment:
+      GEP_EXPECTED_INSTANCE: ${GEP_EXPECTED_INSTANCE:?Set the initialized instance UUID}
+      GEP_DATA_DIR: /data
+    volumes:
+      - gep_data:/data
+    ports:
+      - "127.0.0.1:8000:8000"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+volumes:
+  gep_data:
+    external: true
+    name: ${GEP_VOLUME:?Set an explicitly initialized synthetic volume}
