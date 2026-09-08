@@ -36,3 +36,21 @@ def test_host_boundary_and_csrf(setup):
     assert client.post('/v1/admin/exports',{},content_type='application/json').status_code==403
     assert client.get('/v1/admin/exports/'+str(uuid.uuid4())+'/download',HTTP_HOST='experiment.localhost').status_code==403
     assert client.post('/v1/participant/sessions',setup['request'],content_type='application/json',HTTP_HOST='admin.localhost').status_code==403
+
+def test_csv_lossless_nested_values_and_sidecar_authorization(setup,event):
+    import csv,io,json
+    c=Client();c.force_login(setup['owner'])
+    grant=Grant.objects.create(user=setup['owner'],study=setup['study'],action='data.export_raw')
+    # Fixed export fixture exercises CSV encoding independently of payload schema.
+    golden={'null':None,'zero':0,'false':False,'chinese':'中文','code':'001','negative':-3,'formula':'=1+1','multi':['a','b']}
+    item=Export.objects.create(study=setup['study'],snapshot={'records':[{'study_id':str(setup['study'].id),'release_id':'r','build_id':'b','record':golden}],'builds':{},'sessions':{}})
+    url=f'/v1/admin/exports/{item.id}/download'
+    result=c.get(url+'?format=csv')
+    rows=list(csv.DictReader(io.StringIO(result.content.decode())))
+    assert rows[0]['record_json'].startswith('json:')
+    assert json.loads(rows[0]['record_json'][5:])==golden
+    assert 'missing' not in json.loads(rows[0]['record_json'][5:])
+    assert c.get(url+'?format=metadata').status_code==200
+    grant.delete()
+    assert c.get(url+'?format=csv').status_code==403
+    assert c.get(url+'?format=metadata').status_code==403

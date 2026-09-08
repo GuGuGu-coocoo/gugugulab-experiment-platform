@@ -70,7 +70,7 @@ def validate_event(session, event):
     require(event['protocol_version'] == PROTOCOL and event['session_id'] == str(session.id), 'event_binding')
     for field in ('event_id','session_id','segment_id'):
         uuid_text(event[field])
-    require(type(event['sequence']) is int and event['sequence'] >= 1, 'sequence')
+    require(type(event['sequence']) in (int,float) and event['sequence'] >= 1 and event['sequence'] == int(event['sequence']), 'sequence')
     schemas = session.release.build.descriptor['schemas']
     definition = schemas.get(event['event_type'])
     require(definition is not None, 'unknown_event_type')
@@ -137,3 +137,18 @@ def finish(session_id, token, declaration):
             session.save(update_fields=['completion'])
         result = completion_status(session)
     return result
+
+
+def recover(session_id, proof, permit):
+    from .models import RecoveryPermit, Audit
+    from .access import guard
+    with transaction.atomic():
+        session=Session.objects.get(pk=session_id)
+        ticket=RecoveryPermit.objects.get(session=session,token_hash=digest(permit))
+        guard(ticket.issuer,session.release.study,'session.recover')
+        require(not ticket.consumed and ticket.expires_at>timezone.now(),'recovery_permit_inactive',403)
+        require(hmac.compare_digest(session.proof_hash,digest(proof)) and not session.revoked and session.completion is None,'recovery_denied',403)
+        session.expires_at=timezone.now()+timedelta(days=7);session.save(update_fields=['expires_at'])
+        ticket.consumed=True;ticket.save(update_fields=['consumed'])
+        Audit.objects.create(study=session.release.study,actor=ticket.issuer,action='session.recovered',target=str(session.id))
+    return {'session_id':str(session.id),'token':token_for(session)}

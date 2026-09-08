@@ -13,7 +13,7 @@ from django.db import transaction
 from django.http import JsonResponse, HttpResponse, FileResponse
 from django.shortcuts import render, redirect
 from django.utils import timezone
-from .models import Study, Grant, Instance, Participant, Build, Release, Session, Audit, Invitation, Export
+from .models import Study, Grant, Instance, Participant, Build, Release, Session, Audit, Invitation, Export, RecoveryPermit
 from .access import guard, ACTIONS
 from .protocol import require, parse, Rejected
 from .views import endpoint
@@ -51,6 +51,8 @@ def signin(request):
     admin_host(request)
     message=''
     if request.method=='POST':
+        from .throttle import check
+        check('login:'+request.META.get('REMOTE_ADDR','')+':'+request.POST.get('username',''))
         user=authenticate(request,username=request.POST.get('username'),password=request.POST.get('password'))
         if user:
             login(request,user)
@@ -97,12 +99,14 @@ def study_page(request,study_id):
                 guard(request.user,study,'build.upload')
                 descriptor=parse(request.POST['descriptor'].encode());descriptor_valid(descriptor)
                 require(descriptor['platform']=='macos_arm64','native_platform')
+                require(not Build.objects.filter(study=study,descriptor__version=descriptor['version'],descriptor__platform=descriptor['platform']).exclude(digest=descriptor['program_sha256']).exists(),'version_content_conflict',409)
                 build,_=Build.objects.get_or_create(study=study,digest=descriptor['program_sha256'],defaults={'descriptor':descriptor})
                 require(build.descriptor==descriptor,'build_conflict',409)
             elif op=='upload':
                 guard(request.user,study,'build.upload')
                 upload=request.FILES['package'];require(upload.size<=MAX_ARCHIVE,'archive_limit',413)
                 raw=upload.read(MAX_ARCHIVE+1);descriptor,sha=validate_package(raw)
+                require(not Build.objects.filter(study=study,descriptor__version=descriptor['version'],descriptor__platform=descriptor['platform']).exclude(digest=sha).exists(),'version_content_conflict',409)
                 root=settings.DATA_DIR/'packages';root.mkdir(mode=0o700,exist_ok=True)
                 path=root/(sha+'.zip')
                 if not path.exists():
@@ -111,6 +115,13 @@ def study_page(request,study_id):
                         stream.write(raw);stream.flush();os.fsync(stream.fileno())
                     temp.replace(path)
                 build,_=Build.objects.get_or_create(study=study,digest=sha,defaults={'descriptor':descriptor,'package_path':path.name})
+            elif op=='preview':
+                guard(request.user,study,'build.preview')
+                build=Build.objects.get(pk=request.POST['build_id'],study=study)
+                require(bool(build.package_path),'web_preview_only')
+                from django.core import signing
+                token=signing.dumps({'build':str(build.id),'user':request.user.id},salt='preview')
+                return redirect('http://experiment.localhost:8000/preview/'+token+'/web/index.html')
             elif op=='approve':
                 guard(request.user,study,'release.approve_pilot')
                 build=Build.objects.get(pk=request.POST['build_id'],study=study)
@@ -119,6 +130,17 @@ def study_page(request,study_id):
                 guard(request.user,study,'recruitment.manage')
                 state=request.POST['state'];require(state in ('open','paused','closed'),'state')
                 study.recruitment=state;study.save()
+            elif op=='revoke_session':
+                guard(request.user,study,'study.configure')
+                session=Session.objects.get(pk=request.POST['session_id'],release__study=study)
+                session.revoked=True;session.save(update_fields=['revoked'])
+            elif op=='recover':
+                guard(request.user,study,'session.recover')
+                session=Session.objects.get(pk=request.POST['session_id'],release__study=study)
+                require(not session.revoked and session.completion is None,'not_recoverable',409)
+                token=secrets.token_urlsafe(32)
+                RecoveryPermit.objects.create(session=session,issuer=request.user,token_hash=digest(token),expires_at=timezone.now()+timedelta(minutes=15))
+                notice='同设备恢复：会话 '+str(session.id)+'；15 分钟一次性许可：'+token
             elif op=='invite':
                 guard(request.user,study,'member.manage');guard(request.user,study,'permission.delegate')
                 actions=request.POST.getlist('actions')

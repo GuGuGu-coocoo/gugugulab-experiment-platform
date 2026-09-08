@@ -11,3 +11,8 @@ urlpatterns += [
     path('',gui.home), path('login',gui.signin), path('logout',gui.signout), path('activate',gui.activate),
     path('studies/<uuid:study_id>',gui.study_page), path('releases/<uuid:release_id>/config',gui.config),
 ]
+from core.hosting import resource
+urlpatterns += [path('run/<uuid:release_id>/<path:resource_path>',resource)]
+
+from core.hosting import preview
+urlpatterns += [path("preview/<str:token>/<path:resource_path>",preview)]

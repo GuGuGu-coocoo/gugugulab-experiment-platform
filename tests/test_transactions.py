@@ -82,3 +82,25 @@ def test_schema_and_sequence_failures_rollback(setup,event):
     with pytest.raises(Rejected,match='identity_conflict'):
         receive(setup['session'].id,setup['token'],batch(event,bad))
     assert Event.objects.count()==0
+
+def test_godot_integral_json_number_sequence(setup,event):
+    event['sequence']=1.0
+    ack=receive(setup['session'].id,setup['token'],batch(event))
+    assert ack['accepted']==[event['event_id']]
+    assert Event.objects.get().envelope['sequence']==1.0
+    event['event_id']=str(uuid.uuid4());event['sequence']=1.5
+    with pytest.raises(Rejected,match='sequence'):
+        receive(setup['session'].id,setup['token'],batch(event))
+
+def test_configuration_binding_expiry_and_revocation(setup,event):
+    from datetime import timedelta
+    from django.utils import timezone
+    wrong=dict(setup['request'],operation_id=str(uuid.uuid4()),study_id=str(uuid.uuid4()))
+    with pytest.raises(Rejected,match='wrong_binding'):admit(setup['release'],wrong)
+    wrong=dict(setup['request'],operation_id=str(uuid.uuid4()),build_id=str(uuid.uuid4()))
+    with pytest.raises(Rejected,match='wrong_binding'):admit(setup['release'],wrong)
+    setup['session'].revoked=True;setup['session'].save()
+    with pytest.raises(Rejected,match='session_inactive'):receive(setup['session'].id,setup['token'],batch(event))
+    setup['session'].revoked=False;setup['session'].expires_at=timezone.now()-timedelta(seconds=1);setup['session'].save()
+    with pytest.raises(Rejected,match='session_inactive'):receive(setup['session'].id,setup['token'],batch(event))
+    assert Event.objects.count()==0

@@ -1,3 +1,4 @@
+import hashlib
 import io
 import json
 import zipfile
@@ -12,7 +13,9 @@ from core.protocol import Rejected
 def package(extra=None):
     target=io.BytesIO()
     with zipfile.ZipFile(target,'w') as z:
-        z.writestr('manifest.json',Path('examples/synthetic_experiment/descriptor.json').read_bytes())
+        descriptor=json.loads(Path('examples/synthetic_experiment/descriptor.json').read_text())
+        descriptor['program_sha256']=hashlib.sha256(b'web/index.html<html>synthetic</html>').hexdigest()
+        z.writestr('manifest.json',json.dumps(descriptor))
         z.writestr('web/index.html','<html>synthetic</html>')
         if extra:z.writestr(extra,'bad')
     return target.getvalue()

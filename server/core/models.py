@@ -92,3 +92,15 @@ class Invitation(Identified):
     expires_at = models.DateTimeField()
     consumed = models.BooleanField(default=False)
     revoked = models.BooleanField(default=False)
+
+class RecoveryPermit(Identified):
+    session = models.ForeignKey(Session, on_delete=models.PROTECT)
+    token_hash = models.CharField(max_length=64,unique=True)
+    expires_at = models.DateTimeField()
+    consumed = models.BooleanField(default=False)
+    issuer = models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT)
+
+class Throttle(models.Model):
+    key = models.CharField(max_length=64,primary_key=True)
+    window = models.BigIntegerField()
+    count = models.PositiveIntegerField(default=0)

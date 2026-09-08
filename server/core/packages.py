@@ -55,12 +55,15 @@ def validate_package(raw):
         descriptor_valid(manifest)
         require(manifest['platform']=='godot_web' and 'web/index.html' in paths,'entry_missing')
         # Read every byte for CRC and actual bounds; validation does not trust directory metadata alone.
-        count=0
-        for item in entries:
+        count=0;program=hashlib.sha256()
+        for item in sorted(entries,key=lambda e:e.filename):
+            if item.filename!='manifest.json':program.update(item.filename.encode())
             with archive.open(item) as stream:
                 while chunk:=stream.read(65536):
                     count+=len(chunk)
+                    if item.filename!='manifest.json':program.update(chunk)
                     require(count<=MAX_EXPANDED,'expanded_limit',413)
+        require(program.hexdigest()==manifest['program_sha256'],'program_digest_mismatch')
         return manifest,hashlib.sha256(raw).hexdigest()
     except (zipfile.BadZipFile,KeyError,RuntimeError):
         from .protocol import Rejected
