@@ -3,6 +3,7 @@ import csv
 import io
 from functools import wraps
 from django.http import JsonResponse, HttpResponse
+from django.conf import settings
 from django.views.decorators.csrf import csrf_exempt
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
@@ -35,7 +36,7 @@ def bearer(request):
 @csrf_exempt
 @endpoint
 def participant(request, session_id=None, action=None):
-    require(request.get_host().split(':')[0] in ('experiment.localhost','127.0.0.1','testserver'), 'wrong_host',403)
+    require(request.get_host().split(':')[0] in (settings.EXPERIMENT_HOST,'127.0.0.1','testserver'), 'wrong_host',403)
     require(request.method == ('GET' if action in ('status','context') else 'POST'), 'method',405)
     if session_id is None:
         data=parse(request.body)

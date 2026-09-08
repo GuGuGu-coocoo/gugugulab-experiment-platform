@@ -10,7 +10,7 @@ from .views import endpoint
 
 @endpoint
 def resource(request,release_id,resource_path):
-    require(request.get_host().split(':')[0]=='experiment.localhost','wrong_host',403)
+    require(request.get_host().split(':')[0]==settings.EXPERIMENT_HOST,'wrong_host',403)
     require(request.method=='GET','method',405)
     release=Release.objects.select_related('build').get(pk=release_id)
     require(release.approved and bool(release.build.package_path),'not_published',404)
@@ -36,7 +36,7 @@ def preview(request,token,resource_path):
     from django.contrib.auth import get_user_model
     from .models import Build,Instance
     from .access import guard
-    require(request.get_host().split(':')[0]=='experiment.localhost','wrong_host',403)
+    require(request.get_host().split(':')[0]==settings.EXPERIMENT_HOST,'wrong_host',403)
     require(request.method=='GET' and resource_path.startswith('web/') and '..' not in resource_path.split('/'),'path',404)
     try: claims=signing.loads(token,salt='preview',max_age=900)
     except signing.BadSignature:

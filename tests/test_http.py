@@ -64,3 +64,13 @@ def test_body_limit_before_parsing_and_wrong_program_version(setup):
     assert response.status_code==413
     data=dict(setup['request'],operation_id=str(uuid.uuid4()),expected_version='wrong-version')
     assert c.post('/v1/participant/sessions',data,content_type='application/json').status_code==422
+
+
+def test_lan_experiment_host_does_not_open_admin(settings):
+    settings.EXPERIMENT_HOST = '192.168.50.213'
+    settings.ALLOWED_HOSTS = ['192.168.50.213', 'experiment.localhost']
+    c = Client()
+    assert c.get('/login', HTTP_HOST='192.168.50.213').status_code == 403
+    assert c.post('/v1/admin/exports', {}, content_type='application/json', HTTP_HOST='192.168.50.213').status_code == 403
+    assert c.get('/v1/participant/sessions', HTTP_HOST='192.168.50.213').status_code == 405
+    assert c.get('/v1/participant/sessions', HTTP_HOST='experiment.localhost').status_code == 403
