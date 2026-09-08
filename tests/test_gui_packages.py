@@ -45,3 +45,20 @@ def test_gui_real_object_authority_and_invitation(setup):
     assert c.get(f'/studies/{other.id}').status_code==403
     Grant.objects.filter(user=setup['owner'],study=study,action='permission.delegate').delete()
     assert c.post(url,{'op':'invite','username':'blocked','actions':['study.view']}).status_code==403
+
+def test_existing_account_invite_never_resets_password(setup):
+    from django.contrib.auth import get_user_model
+    from django.utils import timezone
+    from datetime import timedelta
+    from core.services import digest
+    user=get_user_model().objects.create_user('existing',password='original-synthetic-password')
+    for action in ['member.manage','permission.delegate','study.view']:
+        Grant.objects.create(user=setup['owner'],study=setup['study'],action=action,delegable=True)
+    invitation=Invitation.objects.create(study=setup['study'],issuer=setup['owner'],username=user.username,actions=['study.view'],token_hash=digest('synthetic-ticket'),expires_at=timezone.now()+timedelta(hours=1))
+    c=Client()
+    assert c.post('/activate',{'token':'synthetic-ticket','password':'attempted-replacement'}).status_code==403
+    c.force_login(user)
+    assert c.post('/activate',{'token':'synthetic-ticket'}).status_code==302
+    user.refresh_from_db();assert user.check_password('original-synthetic-password')
+    assert c.post('/activate',{'token':'synthetic-ticket'}).status_code==403
+    assert Grant.objects.filter(user=user,study=setup['study'],action='study.view').exists()

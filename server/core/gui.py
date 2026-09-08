@@ -146,10 +146,15 @@ def study_page(request,study_id):
                 actions=request.POST.getlist('actions')
                 require(bool(actions) and set(actions)<=ACTIONS,'actions')
                 require(set(actions)<=set(Grant.objects.filter(user=request.user,study=study,delegable=True).values_list('action',flat=True)),'delegation_forbidden',403)
-                username=request.POST['username'];require(not get_user_model().objects.filter(username=username).exists(),'account_exists',409)
+                username=request.POST['username'];require(0<len(username)<=150,'username')
                 token=secrets.token_urlsafe(32)
                 Invitation.objects.create(study=study,issuer=request.user,username=username,actions=actions,token_hash=digest(token),expires_at=timezone.now()+timedelta(hours=24))
                 notice='邀请密钥（请通过可信渠道交付）：'+token
+            elif op=='revoke_invite':
+                guard(request.user,study,'member.manage');guard(request.user,study,'permission.delegate')
+                invitation=Invitation.objects.get(pk=request.POST['invitation_id'],study=study)
+                require(set(invitation.actions)<=set(Grant.objects.filter(user=request.user,study=study,delegable=True).values_list('action',flat=True)),'delegation_forbidden',403)
+                invitation.revoked=True;invitation.save(update_fields=['revoked'])
             elif op=='revoke_member':
                 guard(request.user,study,'member.manage');guard(request.user,study,'permission.delegate')
                 grants=Grant.objects.filter(study=study,user_id=request.POST['user_id'])
@@ -162,7 +167,7 @@ def study_page(request,study_id):
             Audit.objects.create(study=study,actor=request.user,action=op,target=str(study.id))
         if not notice:return redirect('/studies/'+str(study.id))
     sessions=[{'id':s.id,'state':completion_status(s)['state']} for s in Session.objects.filter(release__study=study)]
-    return render(request,'core/study.html',{'study':study,'builds':Build.objects.filter(study=study),'releases':Release.objects.filter(study=study),'sessions':sessions,'members':Grant.objects.filter(study=study,action='study.view').select_related('user'),'actions':sorted(ACTIONS),'notice':notice})
+    return render(request,'core/study.html',{'study':study,'builds':Build.objects.filter(study=study),'releases':Release.objects.filter(study=study),'sessions':sessions,'members':Grant.objects.filter(study=study,action='study.view').select_related('user'),'actions':sorted(ACTIONS),'invitations':Invitation.objects.filter(study=study,consumed=False,revoked=False),'notice':notice})
 
 @endpoint
 def config(request,release_id):
@@ -182,9 +187,14 @@ def activate(request):
             require(not invite.consumed and not invite.revoked and invite.expires_at>timezone.now(),'invitation_inactive',403)
             guard(invite.issuer,invite.study,'member.manage');guard(invite.issuer,invite.study,'permission.delegate')
             require(set(invite.actions)<=set(Grant.objects.filter(user=invite.issuer,study=invite.study,delegable=True).values_list('action',flat=True)),'delegation_changed',403)
-            password=request.POST['password'];require(len(password)>=16,'password_too_short')
-            user=get_user_model().objects.create_user(invite.username,password=password)
-            Grant.objects.bulk_create([Grant(study=invite.study,user=user,action=a) for a in invite.actions])
+            user=get_user_model().objects.filter(username=invite.username).first()
+            if user:
+                require(request.user.is_authenticated and request.user.pk==user.pk and user.is_active,'existing_account_login_required',403)
+            else:
+                password=request.POST.get('password','');require(len(password)>=16,'password_too_short')
+                user=get_user_model().objects.create_user(invite.username,password=password)
+            for action in invite.actions:
+                Grant.objects.get_or_create(study=invite.study,user=user,action=action)
             invite.consumed=True;invite.save()
             Audit.objects.create(study=invite.study,actor=invite.issuer,action='invite.accepted',target=str(user.id))
         return redirect('/login')

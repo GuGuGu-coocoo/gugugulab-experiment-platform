@@ -26,6 +26,8 @@ def context(session):
 
 def admit(release, data):
     uuid_text(data['operation_id'])
+    if 'expected_version' in data:
+        require(data['expected_version']==release.build.descriptor.get('version'),'wrong_program_version')
     proof = data['proof']
     require(isinstance(proof, str) and 43 <= len(proof) <= 128, 'invalid_proof')
     binding = {k: data[k] for k in ('operation_id', 'instance_id', 'study_id', 'release_id', 'build_id')}

@@ -57,3 +57,10 @@ def test_csv_lossless_nested_values_and_sidecar_authorization(setup,event):
     grant.delete()
     assert c.get(url+'?format=csv').status_code==403
     assert c.get(url+'?format=metadata').status_code==403
+
+def test_body_limit_before_parsing_and_wrong_program_version(setup):
+    c=Client()
+    response=c.generic('POST','/v1/participant/sessions',b'{}',content_type='application/json',CONTENT_LENGTH=str(262145))
+    assert response.status_code==413
+    data=dict(setup['request'],operation_id=str(uuid.uuid4()),expected_version='wrong-version')
+    assert c.post('/v1/participant/sessions',data,content_type='application/json').status_code==422
