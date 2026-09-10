@@ -2,6 +2,7 @@
 /docs/
 /AGENTS.md
 /question.md
+/todo.md
 
 # Credentials and local environment configuration.
 .env
