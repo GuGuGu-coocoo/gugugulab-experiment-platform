@@ -113,3 +113,18 @@ def test_recruitment_stops_new_admission_but_honors_valid_upload_window(setup,ev
         admit(setup['release'],dict(setup['request'],operation_id=str(uuid.uuid4())))
     assert receive(setup['session'].id,setup['token'],batch(event))['accepted']==[event['event_id']]
     assert Event.objects.count()==1
+
+
+@pytest.mark.parametrize('condition',['inactive','expired','participation_limit'])
+def test_roster_validity_and_participation_limit_are_server_enforced(setup,condition):
+    from datetime import timedelta
+    from django.utils import timezone
+    study=setup['study'];study.mode='id';study.max_sessions=1;study.save()
+    person=Participant.objects.create(study=study,code='001')
+    request=dict(setup['request'],operation_id=str(uuid.uuid4()),participant_code='001')
+    expected='admission_denied'
+    if condition=='inactive':person.active=False;person.save()
+    elif condition=='expired':person.expires_at=timezone.now()-timedelta(seconds=1);person.save()
+    else:
+        admit(setup['release'],request);request['operation_id']=str(uuid.uuid4());expected='participation_limit'
+    with pytest.raises(Rejected,match=expected):admit(setup['release'],request)
