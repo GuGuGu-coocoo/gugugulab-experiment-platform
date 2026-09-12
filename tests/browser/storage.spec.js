@@ -137,3 +137,20 @@ test('expired finished Web queue reauthenticates for data only and cleans after 
  await expect(page.evaluate(payload=>client.record('exp.rt',payload,{id:'rt',version:'1'}),payload)).rejects.toThrow('not_recording');
  await page.evaluate(()=>client.close());
 });
+
+test('bounded buffer rejects overflow and new participation preserves cleaned tombstones',async({page})=>{
+ await setup(page);
+ const saved=await page.evaluate(async payload=>{
+  const ids=[];for(let i=0;i<64;i++)ids.push(client.record('exp.rt',payload,{id:'rt',version:'1'}).event_id);
+  let rejected=false;try{client.record('exp.rt',payload,{id:'rt',version:'1'})}catch(e){rejected=e.message==='not_recording_or_backpressure'}
+  const before=(await client.get(client.id)).records.length;
+  await client.commit();await client.finish();await client.flush();await client.flush();
+  return {id:client.id,ids,rejected,before,tombstone:await client.get(client.id)};
+ },payload);
+ expect(saved.rejected).toBe(true);expect(saved.before).toBe(0);expect(new Set(saved.ids).size).toBe(64);expect(saved.tombstone).toEqual({id:saved.id,kind:'cleaned',state:'remote_acknowledged'});
+ await page.evaluate(()=>client.close());await page.reload();
+ await page.evaluate(async config=>{const {GEC}=await import('/sdk.js');window.client=new GEC(config);await client.prepare();clearInterval(client.timer);await client.begin()},config);
+ expect(await page.evaluate(id=>client.get(id),saved.id)).toEqual(saved.tombstone);
+ expect(await page.evaluate(()=>client.recovery_export())).toMatchObject({records:[],checkpoint:null});
+ await page.evaluate(()=>client.close());
+});

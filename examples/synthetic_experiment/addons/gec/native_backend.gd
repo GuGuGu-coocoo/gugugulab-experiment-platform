@@ -91,6 +91,7 @@ func prepare(options: Dictionary = {}) -> Dictionary:
 		if not query("BEGIN IMMEDIATE"): return {"error":"local_commit"}
 		var ok := true
 		for old in rows():
+			if old.get("kind") == "cleaned": continue
 			old.front_locked = true
 			ok = query("UPDATE sessions SET value=? WHERE id=?",[JSON.stringify(old),old.id]) and ok
 		ok = query("INSERT INTO sessions VALUES(?,?)",[draft.id,JSON.stringify(draft)]) and ok

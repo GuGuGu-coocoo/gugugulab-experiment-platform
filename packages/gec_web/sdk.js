@@ -35,7 +35,7 @@ export class GEC {
     if(this.localOnly){this.id=uuid();await this.mutate(store=>store.put({id:this.id,kind:'local',records:[],pending:[],segments:[this.segment],checkpoint:null,completion:null}));this.state='active';return {state:'active'};}
     // Persist proof and operation before admission. Failed admission reuses this operation.
     let draft=(await this.all()).find(s=>s.kind==='admission'&&JSON.stringify(s.config)===JSON.stringify(this.config));
-    if(!draft){draft={id:uuid(),kind:'admission',config:this.config,proof:Array.from(crypto.getRandomValues(new Uint8Array(32)),v=>v.toString(16).padStart(2,'0')).join('')};await this.mutate(store=>{const r=store.getAll();r.onsuccess=()=>{for(const old of r.result){old.front_locked=true;store.put(old);}store.put(draft);};});}
+    if(!draft){draft={id:uuid(),kind:'admission',config:this.config,proof:Array.from(crypto.getRandomValues(new Uint8Array(32)),v=>v.toString(16).padStart(2,'0')).join('')};await this.mutate(store=>{const r=store.getAll();r.onsuccess=()=>{for(const old of r.result){if(old.kind==='cleaned')continue;old.front_locked=true;store.put(old);}store.put(draft);};});}
     const c=this.config;
     const response=await this.request(c,'/v1/participant/sessions',{operation_id:draft.id,proof:draft.proof,instance_id:c.instance_id,study_id:c.study_id,release_id:c.release_id,build_id:c.build_id,...credentials});
     for(const k of ['instance_id','study_id','release_id','build_id'])if(response[k]!==c[k])fail('admission_binding');
