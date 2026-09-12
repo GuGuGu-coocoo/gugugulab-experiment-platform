@@ -83,3 +83,9 @@ Mac 原生窗口补验：用户确认独立窗口文字/按钮正常，实体左
 ## 2026-09-10 状态索引
 
 本次仅依据上述 2026-09-08 证据整理 [README 的开发状态与目标架构](../README.md)，没有新增功能测试结果。原生 GUI 输入、Compose、限额/状态/恢复/清理剩余矩阵、大包上传中断、Windows 修复后布局与 T17 独立研究者仍待闭合。上文较早“Web 四框稍后修复”记录已由“今日界面修复收尾”覆盖，不能据此重复认定源码未修复；也不能将源码修复等同于 Windows 新布局实机确认。Launcher、完整下载套件及 Admin 补交图示为目标能力，不是新验收证据。
+
+## 2026-09-12 native GUI recovery acceptance
+
+The native recovery input limitation is resolved for the tested macOS workflow. A diagnostic harness loaded the real scene and compared fields without logging credential contents: automated text injection dropped an underscore; paste reported a tool timeout but delivered the exact 43-character permit. Clicking Start then resumed Trial 2.
+
+A separate run in the exported macOS executable used the actual recovery fields, paste, Start and Right, with no recovery command-line arguments. It reached `remote_acknowledged`. Both runs retained the original session and first trial records, created a new segment and clock epoch, stored exactly four unique events, consumed one recovery permit, matched the authorized JSONL snapshot and retained only the acknowledged local tombstone. This closes the native GUI input issue; independent human usability acceptance remains outstanding. The server regression suite also passed all 32 tests on this date.
