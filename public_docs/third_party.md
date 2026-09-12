@@ -13,3 +13,5 @@ Native SQLite: [godot-sqlite v4.7](https://github.com/2shady4u/godot-sqlite/rele
 Playwright 1.58.2 is a development dependency under Apache-2.0. It controls the locally installed Google Chrome for engineering tests; it does not establish independent human acceptance.
 
 Container acceptance tooling (not bundled): [Lima 2.2.0](https://github.com/lima-vm/lima/releases/tag/v2.2.0), Apache-2.0, official Darwin arm64 archive SHA-256 `bbdef91774885a0d05f7b048c4eb89ae2bcf3a0c252ae7ca7934e63df76d93c3`. Docker Engine 29.1.3 and Compose 2.40.3 were installed from Ubuntu signed repositories in an isolated VM; their projects use Apache-2.0 and retain dependency notices. The Python container and Ubuntu guest include separately licensed system packages; these images are not committed or redistributed by this repository.
+
+Windows acceptance-only dependency: [websocket-client 1.8.0](https://pypi.org/project/websocket-client/1.8.0/), Apache-2.0. Its pure-Python wheel is pinned by SHA-256 in tools/windows_browser_requirements.txt and installed only in the selected test directory. It and Chrome are not bundled into project releases.
