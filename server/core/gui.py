@@ -1,3 +1,6 @@
+import csv
+from functools import wraps
+from django.core.exceptions import ObjectDoesNotExist
 import hashlib
 import io
 import json
@@ -14,7 +17,7 @@ from django.http import JsonResponse, HttpResponse, FileResponse
 from django.shortcuts import render, redirect
 from django.utils import timezone
 from .models import Study, Grant, Instance, Participant, Build, Release, Session, Audit, Invitation, Export, RecoveryPermit
-from .access import guard, ACTIONS
+from .access import guard, allowed, ACTIONS
 from .protocol import require, parse, Rejected
 from .views import endpoint
 from .services import digest, completion_status
@@ -27,6 +30,68 @@ def admin_host(request):
 
 def public_api_url():
     return os.environ.get('GEP_PUBLIC_API','http://experiment.localhost:8000').rstrip('/')
+
+
+ACTION_LABELS = {
+    'study.view': '研究可见：查看研究概况',
+    'study.configure': '配置研究：修改参与设置及名单',
+    'build.upload': '上传构建：登记实验资源',
+    'build.preview': '预览构建：打开隔离试运行',
+    'release.approve_pilot': '批准合成发行：允许该版本用于合成参与',
+    'recruitment.manage': '招募管理：开放、暂停或关闭新参与',
+    'data.export_raw': '原始数据导出：可下载研究原始记录，请谨慎授予',
+    'session.recover': '会话恢复：签发原设备恢复许可',
+    'member.manage': '成员管理：邀请或撤销研究成员',
+    'permission.delegate': '权限委派：可转授已获准委派的权限，请谨慎授予',
+    'audit.view': '审计查看：查看管理操作记录',
+}
+
+
+def study_context(request, study, notice=''):
+    permissions={action for action in ACTIONS if allowed(request.user,study,action)}
+    can_manage={'member.manage','permission.delegate'} <= permissions
+    return {
+        'study':study, 'notice':notice, 'public_api_url':public_api_url(),
+        'builds':Build.objects.filter(study=study),
+        'releases':Release.objects.filter(study=study).select_related('build'),
+        'sessions':[{'id':s.id,'state':completion_status(s)['state']} for s in Session.objects.filter(release__study=study)],
+        'members':Grant.objects.filter(study=study,action='study.view').exclude(user_id=Instance.objects.get(pk=1).owner_id).select_related('user') if can_manage else [],
+        'invitations':Invitation.objects.filter(study=study,consumed=False,revoked=False) if can_manage else [],
+        'actions':[{'code':a,'label':ACTION_LABELS[a]} for a in sorted(permissions & set(Grant.objects.filter(user=request.user,study=study,delegable=True).values_list('action',flat=True)))],
+        'can_configure':'study.configure' in permissions,
+        'can_upload':'build.upload' in permissions,
+        'can_preview':'build.preview' in permissions,
+        'can_approve':'release.approve_pilot' in permissions,
+        'can_recruit':'recruitment.manage' in permissions,
+        'can_export':'data.export_raw' in permissions,
+        'can_recover':'session.recover' in permissions,
+        'can_manage':can_manage,
+    }
+
+
+def study_form_errors(fn):
+    @wraps(fn)
+    def wrapped(request, study_id):
+        try:
+            return fn(request, study_id)
+        except (Rejected, ObjectDoesNotExist, ValueError, KeyError, TypeError, csv.Error) as error:
+            if request.method!='POST' or 'text/html' not in request.headers.get('Accept',''):
+                raise
+            admin_host(request)
+            study=Study.objects.get(pk=study_id)
+            guard(request.user,study,'study.view')
+            context=study_context(request,study)
+            code=error.code if isinstance(error,Rejected) else 'invalid_request'
+            messages={
+                'policy_frozen_after_release':'已有批准发行，参与政策已冻结。请创建新研究以使用不同政策。',
+                'duplicate_or_invalid_code':'名单存在重复、已有或无效 ID；本次未导入任何行。',
+                'roster_columns':'名单列数不正确；密码模式请填写 ID 与密码两列。本次未导入任何行。',
+                'password_too_short':'密码长度不足，请检查后重新提交。',
+                'forbidden':'当前账号没有此操作权限，未执行更改。',
+            }
+            context.update(error=messages.get(code,'操作未完成，请检查输入或权限后重试。'),error_code=code)
+            return render(request,'core/study.html',context,status=error.status if isinstance(error,Rejected) else 400)
+    return wrapped
 
 
 def connection_config(release):
@@ -47,7 +112,7 @@ def home(request):
             Grant.objects.bulk_create([Grant(user=request.user,study=study,action=action,delegable=True) for action in ACTIONS])
         return redirect('/studies/'+str(study.id))
     studies=Study.objects.filter(grant__user=request.user,grant__action='study.view').distinct()
-    return render(request,'core/home.html',{'studies':studies})
+    return render(request,'core/home.html',{'studies':studies,'can_create':Instance.objects.filter(owner=request.user).exists()})
 
 
 @endpoint
@@ -73,11 +138,12 @@ def signout(request):
 
 
 @endpoint
+@study_form_errors
 def study_page(request,study_id):
     admin_host(request)
     study=Study.objects.get(pk=study_id)
     guard(request.user,study,'study.view')
-    notice=''
+    notice=request.session.pop('roster_notice:'+str(study.id),'')
     if request.method=='POST':
         op=request.POST.get('op')
         with transaction.atomic():
@@ -90,15 +156,22 @@ def study_page(request,study_id):
                 study.mode=mode;study.max_sessions=limit;study.save()
             elif op=='roster':
                 guard(request.user,study,'study.configure')
-                rows=request.POST['roster'].splitlines();require(len(rows)<=1000,'roster_limit')
+                raw=request.POST['roster'];require(len(raw)<=256000,'roster_limit',413)
+                delimiter='\t' if request.POST.get('roster_format','legacy_tab')=='legacy_tab' else ','
+                try:
+                    rows=list(csv.reader(io.StringIO(raw,newline=''),delimiter=delimiter,strict=True))
+                except csv.Error:
+                    raise Rejected('roster_columns')
+                require(0<len(rows)<=1000,'roster_limit')
                 seen=set()
                 for row in rows:
-                    parts=row.split('\t');code=parts[0]
+                    parts=row;require(bool(parts),'roster_columns');code=parts[0]
                     require(0<len(code)<=128 and code not in seen and not Participant.objects.filter(study=study,code=code).exists(),'duplicate_or_invalid_code')
                     require(len(parts)==(2 if study.mode=='password' else 1),'roster_columns')
                     seen.add(code)
                     require(study.mode!='password' or len(parts[1])>=12,'password_too_short')
                     Participant.objects.create(study=study,code=code,password_hash=make_password(parts[1]) if len(parts)==2 else '')
+                request.session['roster_notice:'+str(study.id)]=f'名单导入成功：新增 {len(rows)} 个 ID。'
             elif op=='native':
                 guard(request.user,study,'build.upload')
                 descriptor=parse(request.POST['descriptor'].encode());descriptor_valid(descriptor)
@@ -161,6 +234,7 @@ def study_page(request,study_id):
                 invitation.revoked=True;invitation.save(update_fields=['revoked'])
             elif op=='revoke_member':
                 guard(request.user,study,'member.manage');guard(request.user,study,'permission.delegate')
+                require(not Instance.objects.filter(owner_id=request.POST['user_id']).exists(),'owner_protected',403)
                 grants=Grant.objects.filter(study=study,user_id=request.POST['user_id'])
                 mine=set(Grant.objects.filter(user=request.user,study=study,delegable=True).values_list('action',flat=True))
                 require(set(grants.values_list('action',flat=True))<=mine,'higher_privilege_target',403)
@@ -170,8 +244,7 @@ def study_page(request,study_id):
                 raise Rejected('unknown_operation')
             Audit.objects.create(study=study,actor=request.user,action=op,target=str(study.id))
         if not notice:return redirect('/studies/'+str(study.id))
-    sessions=[{'id':s.id,'state':completion_status(s)['state']} for s in Session.objects.filter(release__study=study)]
-    return render(request,'core/study.html',{'study':study,'builds':Build.objects.filter(study=study),'releases':Release.objects.filter(study=study),'sessions':sessions,'members':Grant.objects.filter(study=study,action='study.view').select_related('user'),'actions':sorted(ACTIONS),'invitations':Invitation.objects.filter(study=study,consumed=False,revoked=False),'notice':notice,'public_api_url':public_api_url()})
+    return render(request,'core/study.html',study_context(request,study,notice))
 
 @endpoint
 def config(request,release_id):

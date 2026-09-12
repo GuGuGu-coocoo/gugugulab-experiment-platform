@@ -38,12 +38,13 @@ def test_gui_and_preview_use_configured_public_api(setup,tmp_path,settings,monke
         output.writestr('web/index.html','<html><head></head><body>synthetic</body></html>')
     (package_root/'preview.zip').write_bytes(archive.getvalue())
     build=Build.objects.create(study=setup['study'],descriptor={'platform':'godot_web'},digest='b'*64,package_path='preview.zip')
+    web_release=Release.objects.create(study=setup['study'],build=build,approved=True,config={'purpose':'synthetic'})
     for action in ['study.view','build.preview']:
         Grant.objects.create(user=setup['owner'],study=setup['study'],action=action)
     c=Client();c.force_login(setup['owner'])
     page=c.get(f'/studies/{setup["study"].id}')
     assert page.status_code==200
-    assert f'http://experiment.localhost:8123/run/{setup["release"].id}/web/index.html'.encode() in page.content
+    assert f'http://experiment.localhost:8123/run/{web_release.id}/web/index.html'.encode() in page.content
     response=c.post(f'/studies/{setup["study"].id}',{'op':'preview','build_id':str(build.id)})
     assert response.status_code==302
     assert response['Location'].startswith('http://experiment.localhost:8123/preview/')

@@ -68,8 +68,8 @@ def exports(request, export_id=None):
         fmt=request.GET.get('format','jsonl')
         require(fmt in ('jsonl','csv','metadata'),'export_format')
         if fmt=='metadata':
-            return JsonResponse({k:v for k,v in item.snapshot.items() if k!='records'})
-        if fmt=='csv':
+            response=JsonResponse({k:v for k,v in item.snapshot.items() if k!='records'})
+        elif fmt=='csv':
             output=io.StringIO(newline='');writer=csv.writer(output)
             writer.writerow(['study_id','release_id','build_id','record_json'])
             for row in item.snapshot['records']:
@@ -77,7 +77,8 @@ def exports(request, export_id=None):
             response=HttpResponse(output.getvalue().encode('utf-8-sig'),content_type='text/csv; charset=utf-8')
         else:
             response=HttpResponse(''.join(json.dumps(row,ensure_ascii=False,allow_nan=False)+'\n' for row in item.snapshot['records']),content_type='application/x-ndjson')
-        response['Content-Disposition']=f'attachment; filename="{item.id}.{fmt}"'
+        extension='metadata.json' if fmt=='metadata' else fmt
+        response['Content-Disposition']=f'attachment; filename="{item.id}.{extension}"'
         return response
     require(request.method=='POST','method',405)
     data=parse(request.body)
