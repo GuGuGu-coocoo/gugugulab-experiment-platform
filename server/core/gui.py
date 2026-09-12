@@ -25,8 +25,12 @@ def admin_host(request):
     require(request.get_host().split(':')[0] in ('admin.localhost','localhost','testserver'),'wrong_host',403)
 
 
+def public_api_url():
+    return os.environ.get('GEP_PUBLIC_API','http://experiment.localhost:8000').rstrip('/')
+
+
 def connection_config(release):
-    return {'config_version':'1','protocol_version':'gep/1','sdk_version':'0.1.0','api_url':os.environ.get('GEP_PUBLIC_API','http://experiment.localhost:8000'),'instance_id':str(Instance.objects.get(pk=1).instance_id),'study_id':str(release.study_id),'release_id':str(release.id),'build_id':str(release.build_id),'purpose':'synthetic'}
+    return {'config_version':'1','protocol_version':'gep/1','sdk_version':'0.1.0','api_url':public_api_url(),'instance_id':str(Instance.objects.get(pk=1).instance_id),'study_id':str(release.study_id),'release_id':str(release.id),'build_id':str(release.build_id),'purpose':'synthetic'}
 
 
 @endpoint
@@ -121,7 +125,7 @@ def study_page(request,study_id):
                 require(bool(build.package_path),'web_preview_only')
                 from django.core import signing
                 token=signing.dumps({'build':str(build.id),'user':request.user.id},salt='preview')
-                return redirect('http://experiment.localhost:8000/preview/'+token+'/web/index.html')
+                return redirect(public_api_url()+'/preview/'+token+'/web/index.html')
             elif op=='approve':
                 guard(request.user,study,'release.approve_pilot')
                 build=Build.objects.get(pk=request.POST['build_id'],study=study)
@@ -167,7 +171,7 @@ def study_page(request,study_id):
             Audit.objects.create(study=study,actor=request.user,action=op,target=str(study.id))
         if not notice:return redirect('/studies/'+str(study.id))
     sessions=[{'id':s.id,'state':completion_status(s)['state']} for s in Session.objects.filter(release__study=study)]
-    return render(request,'core/study.html',{'study':study,'builds':Build.objects.filter(study=study),'releases':Release.objects.filter(study=study),'sessions':sessions,'members':Grant.objects.filter(study=study,action='study.view').select_related('user'),'actions':sorted(ACTIONS),'invitations':Invitation.objects.filter(study=study,consumed=False,revoked=False),'notice':notice})
+    return render(request,'core/study.html',{'study':study,'builds':Build.objects.filter(study=study),'releases':Release.objects.filter(study=study),'sessions':sessions,'members':Grant.objects.filter(study=study,action='study.view').select_related('user'),'actions':sorted(ACTIONS),'invitations':Invitation.objects.filter(study=study,consumed=False,revoked=False),'notice':notice,'public_api_url':public_api_url()})
 
 @endpoint
 def config(request,release_id):

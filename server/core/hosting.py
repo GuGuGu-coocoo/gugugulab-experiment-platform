@@ -4,7 +4,7 @@ import zipfile
 from django.conf import settings
 from django.http import HttpResponse
 from .models import Release
-from .gui import connection_config
+from .gui import connection_config, public_api_url
 from .protocol import require
 from .views import endpoint
 
@@ -44,5 +44,5 @@ def preview(request,token,resource_path):
         raise Rejected('preview_expired',403)
     build=Build.objects.get(pk=claims['build']);user=get_user_model().objects.get(pk=claims['user'])
     guard(user,build.study,'build.preview')
-    config={'config_version':'1','protocol_version':'gep/1','sdk_version':'0.1.0','purpose':'synthetic','api_url':'http://experiment.localhost:8000','instance_id':str(Instance.objects.get(pk=1).instance_id),'study_id':str(build.study_id),'release_id':'preview','build_id':str(build.id),'preview':True}
+    config={'config_version':'1','protocol_version':'gep/1','sdk_version':'0.1.0','purpose':'synthetic','api_url':public_api_url(),'instance_id':str(Instance.objects.get(pk=1).instance_id),'study_id':str(build.study_id),'release_id':'preview','build_id':str(build.id),'preview':True}
     return serve(build,config,resource_path)
