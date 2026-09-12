@@ -20,5 +20,6 @@ func run() -> void:
 	assert((await backend.record("exp.rt",{},{})).has("error"))
 	await backend.flush()
 	saved = backend.read_session(backend.session_id)
-	assert(saved.pending.is_empty() and saved.records.size() == 2 and saved.checkpoint != null)
+	if exported.completion != null: assert(saved.kind == "cleaned")
+	else: assert(saved.pending.is_empty() and saved.records.size() == 2 and saved.checkpoint != null)
 	print("NATIVE_DATA_ONLY_RECOVERY_VERIFIED"); quit()

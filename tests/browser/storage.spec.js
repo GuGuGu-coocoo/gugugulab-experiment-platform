@@ -1,3 +1,4 @@
+import {execFileSync} from 'node:child_process';
 import {test,expect} from '@playwright/test';
 import fs from 'node:fs';
 const config=JSON.parse(fs.readFileSync('build/native/connection.json','utf8'));
@@ -107,6 +108,30 @@ test('authorized recovery without task policy exports data without resuming tria
  expect(result.recovered).toEqual({state:'data_only',checkpoint:null});
  await page.evaluate(()=>client.flush());
  expect(await page.evaluate(async id=>{const s=await client.get(id);return [s.paused,s.attempts,s.retryAt,s.pending.length]},id)).toEqual([false,0,0,0]);
+ expect(result.data.records).toHaveLength(1);expect(result.data.records[0].payload).toEqual(payload);
+ expect(Object.keys(result.data).sort()).toEqual(['binding','checkpoint','completion','format_version','pending','records','session_id']);
+ await expect(page.evaluate(payload=>client.record('exp.rt',payload,{id:'rt',version:'1'}),payload)).rejects.toThrow('not_recording');
+ await page.evaluate(()=>client.close());
+});
+
+test('expired finished Web queue reauthenticates for data only and cleans after receipt',async({page,context})=>{
+ await setup(page);
+ const id=await page.evaluate(async payload=>{client.record('exp.rt',payload,{id:'rt',version:'1'});await client.commit({version:1,strategy:'trial_boundary_v1',dependencies:[],next_trial:1});await client.finish();const s=await client.get(client.id);await client.request(s.config,`/v1/participant/sessions/${s.id}/completion`,s.completion,s.context.token);return client.id},payload);
+ await page.evaluate(()=>client.mutate(store=>{const r=store.get(client.id);r.onsuccess=()=>{const s=r.result;s.paused=true;s.attempts=32;s.retryAt=Number.MAX_SAFE_INTEGER;store.put(s)}}));
+ execFileSync('.venv/bin/python',['-c','import sqlite3,sys;c=sqlite3.connect("local_data/gep.sqlite3");c.execute("update core_session set expires_at=? where id=?",["2000-01-01 00:00:00",sys.argv[1].replace("-","")]);c.commit()',id]);
+ await page.evaluate(()=>client.close());await page.reload();
+ await page.evaluate(async config=>{const {GEC}=await import('/sdk.js');window.client=new GEC(config);await client.prepare();clearInterval(client.timer)},config);
+ await expect(page.evaluate(()=>client.recovery_export())).rejects.toThrow('recovery_export_unavailable');
+ const admin=await context.newPage(),c=JSON.parse(fs.readFileSync('local_data/dev_credentials.json','utf8'));
+ await admin.goto('http://admin.localhost:8000/login');await admin.locator('[name=username]').fill(c.username);await admin.locator('[name=password]').fill(c.password);await admin.getByRole('button',{name:'登录',exact:true}).click();
+ await admin.goto('http://admin.localhost:8000/studies/'+config.study_id);await admin.locator('[name=session_id]').fill(id);await admin.getByRole('button',{name:'签发一次性恢复许可'}).click();
+ const permit=(await admin.locator('.notice').textContent()).split('许可：')[1].trim();
+ await expect(page.evaluate(id=>client.recover(id,'invalid-synthetic-permit'),id)).rejects.toThrow();
+ expect(await page.evaluate(async id=>(await client.get(id)).paused,id)).toBe(true);
+ const result=await page.evaluate(async({id,permit})=>{const recovered=await client.recover(id,permit);return {recovered,data:await client.recovery_export()}},{id,permit});
+ expect(result.recovered).toEqual({state:'data_only',checkpoint:null});
+ await page.evaluate(()=>client.flush());
+ expect(await page.evaluate(id=>client.get(id),id)).toEqual({id,kind:'cleaned',state:'remote_acknowledged'});
  expect(result.data.records).toHaveLength(1);expect(result.data.records[0].payload).toEqual(payload);
  expect(Object.keys(result.data).sort()).toEqual(['binding','checkpoint','completion','format_version','pending','records','session_id']);
  await expect(page.evaluate(payload=>client.record('exp.rt',payload,{id:'rt',version:'1'}),payload)).rejects.toThrow('not_recording');

@@ -149,8 +149,8 @@ def recover(session_id, proof, permit):
         ticket=RecoveryPermit.objects.get(session=session,token_hash=digest(permit))
         guard(ticket.issuer,session.release.study,'session.recover')
         require(not ticket.consumed and ticket.expires_at>timezone.now(),'recovery_permit_inactive',403)
-        require(hmac.compare_digest(session.proof_hash,digest(proof)) and not session.revoked and session.completion is None,'recovery_denied',403)
+        require(hmac.compare_digest(session.proof_hash,digest(proof)) and not session.revoked,'recovery_denied',403)
         session.expires_at=timezone.now()+timedelta(days=7);session.save(update_fields=['expires_at'])
         ticket.consumed=True;ticket.save(update_fields=['consumed'])
         Audit.objects.create(study=session.release.study,actor=ticket.issuer,action='session.recovered',target=str(session.id))
-    return {'session_id':str(session.id),'token':token_for(session)}
+    return {'session_id':str(session.id),'token':token_for(session),'task_finished':session.completion is not None}

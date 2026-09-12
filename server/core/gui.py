@@ -137,7 +137,7 @@ def study_page(request,study_id):
             elif op=='recover':
                 guard(request.user,study,'session.recover')
                 session=Session.objects.get(pk=request.POST['session_id'],release__study=study)
-                require(not session.revoked and session.completion is None,'not_recoverable',409)
+                require(not session.revoked,'not_recoverable',409)
                 token=secrets.token_urlsafe(32)
                 RecoveryPermit.objects.create(session=session,issuer=request.user,token_hash=digest(token),expires_at=timezone.now()+timedelta(minutes=15))
                 notice='同设备恢复：会话 '+str(session.id)+'；15 分钟一次性许可：'+token

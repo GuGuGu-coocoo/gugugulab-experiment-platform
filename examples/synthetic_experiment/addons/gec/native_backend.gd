@@ -68,10 +68,11 @@ func prepare(options: Dictionary = {}) -> Dictionary:
 	if not api.begins_with("https://") and not api.begins_with("http://127.0.0.1:") and not api.begins_with("http://experiment.localhost:"): return {"error":"https_required"}
 	if options.has("recovery_session"):
 		var old = read_session(options.recovery_session)
-		if old.is_empty() or old.get("kind") != "session" or old.completion != null: return {"error":"not_recoverable"}
-		var can_resume = old.checkpoint != null and old.checkpoint.get("version") == 1 and old.checkpoint.get("strategy") == "trial_boundary_v1"
+		if old.is_empty() or old.get("kind") != "session": return {"error":"not_recoverable"}
+		var can_resume = old.completion == null and old.checkpoint != null and old.checkpoint.get("version") == 1 and old.checkpoint.get("strategy") == "trial_boundary_v1"
 		var recovered = await http(old.config,"/v1/participant/sessions/"+old.id+"/recover",{"proof":old.proof,"permit":options.get("permit","")})
 		if recovered.has("error"): return recovered
+		can_resume = can_resume and not recovered.get("task_finished",false)
 		old.context.token = recovered.token
 		old.front_locked = false
 		old.paused = false;old.attempts = 0;old.retry_at = 0

@@ -11,6 +11,7 @@ var recovery: LineEdit
 var permit: LineEdit
 var started_at := 0
 var accepting := false
+var data_only := false
 func _ready() -> void:
 	var box = VBoxContainer.new();box.position = Vector2(70,70);box.size = Vector2(850,500);add_child(box)
 	message = Label.new();message.text = "Synthetic experiment · two trials\nLocal save and server receipt are separate states.";box.add_child(message)
@@ -82,7 +83,8 @@ func begin() -> void:
 		print("SYNTHETIC_ERROR ",result.error)
 		return
 	if result.get("state") == "data_only":
-		message.text = "Data recovered. No compatible task recovery policy; contact the researcher."
+		data_only = true
+		message.text = "Data recovery only. No trials will resume."
 		return
 	if result.get("checkpoint") != null: task.restore(result.checkpoint)
 	show_trial()
@@ -105,7 +107,8 @@ func respond(choice: String,elapsed: float) -> void:
 		result = await data.finish()
 		message.text = "Task finished. " + JSON.stringify(result)
 func _process(_delta: float) -> void:
-	if data != null and task.next_trial == 2: message.text = "Task finished. Data state: " + JSON.stringify(data.status())
+	if data_only: message.text = "Data recovery only. No trials will resume. " + JSON.stringify(data.status())
+	elif data != null and task.next_trial == 2: message.text = "Task finished. Data state: " + JSON.stringify(data.status())
 func auto_run() -> void:
 	await begin()
 	if not accepting: get_tree().quit(2);return

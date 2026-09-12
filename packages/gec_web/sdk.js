@@ -87,9 +87,10 @@ export class GEC {
   async cleanup(id){await this.mutate(store=>{const r=store.get(id);r.onsuccess=()=>{const s=r.result;if(s.complete_ack&&!s.pending.length&&!s.checkpoint)store.put({id,kind:'cleaned',state:'remote_acknowledged'});};});if(id===this.id){this.state='remote_acknowledged';this.error=null;}}
   async recover(id,permit){
     if(this.state!=='ready')fail('not_ready');
-    const s=await this.get(id);if(!s||s.kind!=='session'||s.completion)fail('not_recoverable');
-    const canResume=!!s.checkpoint&&s.checkpoint.version===1&&s.checkpoint.strategy==='trial_boundary_v1'&&s.config.purpose==='synthetic';
+    const s=await this.get(id);if(!s||s.kind!=='session')fail('not_recoverable');
+    let canResume=!s.completion&&!!s.checkpoint&&s.checkpoint.version===1&&s.checkpoint.strategy==='trial_boundary_v1'&&s.config.purpose==='synthetic';
     const recovered=await this.request(s.config,`/v1/participant/sessions/${id}/recover`,{permit,proof:s.proof},s.context.token);s.context.token=recovered.token;
+    canResume=canResume&&!recovered.task_finished;
     await this.mutate(store=>{s.front_locked=false;s.paused=false;s.attempts=0;s.retryAt=0;if(canResume)s.segments.push(this.segment);store.put(s);});this.id=id;this.config=s.config;this.state=canResume?'active':'data_only';return {state:this.state,checkpoint:canResume?copy(s.checkpoint):null};
   }
   async recovery_export(){
