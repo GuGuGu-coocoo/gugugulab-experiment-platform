@@ -94,3 +94,37 @@ def test_limited_admin_cannot_delegate_export_or_remove_higher_grants(setup):
     assert c.post(url,{'op':'revoke_member','user_id':setup['owner'].id}).status_code==403
     assert Grant.objects.filter(pk=protected.pk).exists()
     assert not Invitation.objects.filter(study=setup['study']).exists()
+
+
+@pytest.mark.parametrize('kind,code',[
+    ('symlink','non_regular_file'),('modified','program_digest_mismatch'),
+    ('remote_schema','schema_references_unsupported'),('missing_entry','entry_missing'),
+    ('sdk','incompatible_build'),('file_count','file_count'),('ratio','compression_ratio')])
+def test_package_adversarial_metadata_and_contents(kind,code):
+    import stat
+    source=zipfile.ZipFile(io.BytesIO(package()));target=io.BytesIO()
+    with zipfile.ZipFile(target,'w',compression=zipfile.ZIP_DEFLATED) as output:
+        for entry in source.infolist():
+            if kind=='missing_entry' and entry.filename=='web/index.html':continue
+            data=source.read(entry)
+            if entry.filename=='manifest.json' and kind in ('remote_schema','sdk'):
+                descriptor=json.loads(data)
+                if kind=='sdk':descriptor['sdk_version']='unsupported'
+                else:next(iter(descriptor['schemas'].values()))['schema']={'$ref':'https://example.invalid/never-fetch'}
+                data=json.dumps(descriptor).encode()
+            if kind=='modified' and entry.filename=='web/index.html':data=b'modified after descriptor'
+            output.writestr(entry.filename,data)
+        if kind=='symlink':
+            link=zipfile.ZipInfo('web/link');link.create_system=3;link.external_attr=(stat.S_IFLNK|0o777)<<16;output.writestr(link,'index.html')
+        elif kind=='file_count':
+            for i in range(255):output.writestr(f'web/extra-{i}.txt','x')
+        elif kind=='ratio':output.writestr('web/compressed.txt',b'0'*100000)
+    with pytest.raises(Rejected,match=code):validate_package(target.getvalue())
+
+
+@pytest.mark.parametrize('setting,code',[('MAX_ARCHIVE','archive_limit'),('MAX_EXPANDED','expanded_limit')])
+def test_package_small_boundaries_reject_before_publication(monkeypatch,setting,code):
+    from core import packages
+    monkeypatch.setattr(packages,setting,1)
+    with pytest.raises(Rejected,match=code) as result:validate_package(package())
+    assert result.value.status==413
