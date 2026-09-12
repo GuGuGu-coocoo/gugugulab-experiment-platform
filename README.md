@@ -27,21 +27,38 @@ pnpm install --frozen-lockfile
 
 ## 开发状态与下一步验收
 
-更新于 **2026-09-12**。Phase 01、02 的有限合成工程验收已完成；Phase 03 工程回归完成，当前先根据原设计者预演反馈继续开发，再由原设计者无逐步指导地自行验收到体验可交付，最后才执行 **T17 非开发者独立研究者验收**。因此尚不能宣称 Phase 01–03 全部通过。
+更新于 **2026-09-12**。Phase 01、02 的有限合成工程验收完成；Phase 03 原版本工程回归通过，但预演暴露的可用性与产品结构差距仍在修复。**Phase 03 尚未完成，独立 T17 尚未通过。**
 
-| 阶段 | 当前结果 |
-|---|---|
-| Phase 01：真实数据链路 | Web → 本地事务 → API → 数据库 → ACK → 授权导出通过；实际 Compose 重启、容器替换、Owner 保留及错卷拒绝通过 |
-| Phase 02：插件与可靠性 | macOS 独立原生发行、三种准入、丢 ACK、检查点恢复、共享设备与清理中断通过；Windows 实体 LAN 断网/恢复和新版布局、背压补验通过 |
-| Phase 03：研究者图形首版 | 配置与两种发行、上传失败保护、图形权限和导出工程回归通过；正在处理原设计者预演反馈，之后依次进行原设计者自主体验验收和非开发者独立 T17 |
+| 阶段 | 范围 | 当前状态 |
+|---|---|---|
+| Phase 01 | 数据链路、事务、去重、授权导出、最小 Compose 持久化 | 有限工程验收完成 |
+| Phase 02 | Web/macOS 插件、三种准入、断网补传、检查点恢复、共享设备与清理边界 | 有限工程验收完成；实体 Windows LAN 已补验 |
+| Phase 03A | 下载、设置回显、名单反馈、错误提示与权限控件 | 首批基础修复已实现并通过定向工程验证 |
+| Phase 03B | Owner/Admin/普通用户、账号生命周期、实例权限矩阵、Excel 预览导入 | 下一开发批次，尚未实现完整模型 |
+| Phase 03C | 研究公开设置、唯一当前招募发行、旧会话兼容 | 待开发 |
+| Phase 03D | GEC 统一参与壳、短恢复码、完整冻结原生包 | 待开发 |
+| Phase 03E | 模块化后台、主题与中英文、被试研究门户 | 待开发 |
+| Phase 03F | 集成回归、原设计者自主体验、非开发者独立 T17 | 待前述范围完成；不能用自动化替代人类验收 |
+| Phase 04 | 具体研究、正式部署、独立备份恢复、隐私治理与科学时序 | 未启动 |
 
-本轮服务端 **56 项**通过，发行准备 **2 项**与后续真实贯通 **31 项**通过。补验过程中修复了授权恢复后队列仍暂停、已结束待传队列无法重新认证，以及新参与修改已清理墓碑的问题；原生 GUI 恢复和 Windows 输入框遮挡均已实际复验。
+**最近完成的基础修复：**
 
-暂不邀请外部独立测试者。先完成预演反馈开发和工程回归，再由原设计者按完整研究者工作流自主体验；只有其明确确认可交付后，维护者才按[启动指南](public_docs/quickstart.md)准备干净合成环境，非开发者按[研究者验收指南](public_docs/researcher_acceptance.md)执行 T17。自动 GUI、开发者指导操作和原设计者自主验收都不能替代 T17。
+- metadata 作为 `.metadata.json` 附件下载；下载时继续检查权限，固定快照保持不变。
+- 参与方式和招募状态正确回显；招募选择后立即提交，暂停/关闭仍保留有效旧会话上传。
+- 名单支持标准 CSV、前导零及带引号的密码，错误整批回滚，成功显示新增数量；旧 Tab 提交保持兼容。
+- 发行显示平台与版本，只有已批准且有托管资源的 Web 发行显示网页入口；预览与入口使用配置的实验服务地址和端口。
+- 后台提供中文权限说明和表单错误反馈；无权控件隐藏，服务端仍拒绝越权请求，其他成员不能撤销 Owner 的研究权限。
 
-真实磁盘耗尽、物理断电、介质安全擦除和科学计时未验；独立备份恢复 T12、正式研究治理和 VPS 部署属于 Phase 04。完整证据与限制见[验收记录](public_docs/verification.md)。
+最近批次 **44 项定向服务端测试、1 项真实 Chrome 浏览器测试通过**，包括实际 metadata 下载、招募状态持久化及就地错误显示。此前原版本服务端 **56 项**、发行准备 **2 项**及贯通 **31 项**通过；两批证据覆盖不同范围，不能相加当作一次完整回归。环境、复现命令及限制见[验收记录](public_docs/verification.md)。
 
-接口：[GEP/1 协议](public_docs/protocol.md)。依赖：[第三方声明](public_docs/third_party.md)。
+验收顺序：完成反馈开发与工程回归 → 原设计者无逐步指导地自行跑通并确认体验可交付 → 未参与开发的人执行[独立 T17](public_docs/researcher_acceptance.md)。原设计者受指导预演、自主体验及自动 GUI 测试都不能替代独立 T17。
+
+## 使用指南
+
+- [研究者](public_docs/researcher.md)：参与设置、名单、发行、招募与导出。
+- [实验开发者](public_docs/experiment_developer.md)：通用数据模块、GEC 接入及版本边界。
+- [维护者](public_docs/maintainer.md)：合成环境、服务地址与定向验证。
+- [完整启动与构建](public_docs/quickstart.md) · [GEP/1 协议](public_docs/protocol.md) · [第三方声明](public_docs/third_party.md)。
 
 ## 许可
 
@@ -51,52 +68,65 @@ GEP 与 GEC 的项目原创代码采用 [Apache License 2.0](LICENSE)。允许�
 
 ## 目标架构
 
-**Experiment Delivery 与 Data Collection 解耦。**下图是目标设计，不代表所有节点已交付。虚线是后续规划；实线表示数据或资源流向，也不单独代表验收通过。
+目标是让研究者专注实验本体：通过少量适配代码接入 GEC，在 GEP 配置研究后，选择 Web 托管或下载完整实验包交给被试。**以下为目标设计，尚未全部交付。**实验文件分发与数据收集分开，GEC 不接管刺激、Trial、随机化或科学逻辑。
 
 ```mermaid
 flowchart TB
-  Researcher[研究者] --> Admin[GEP 后台：权限、Study 与发布]
-  Admin --> Release[不可变 Release：实验、资源、GEC、配置、Schema]
-  Release --> Web[Web 分发]
-  Release -.目标能力.-> Package[完整 Downloadable Package]
-  Package -.机构现有设施.-> Delivery[U盘 / 网盘 / 教学软件 / LAN 共享]
-  Release -.未来可选.-> Launcher[GEP Launcher：提前下载、校验、缓存、LAN 分发]
-  Web --> Experiment[被试设备：实验本体]
-  Delivery -.本地实验资源.-> Experiment
-  Launcher -.LAN 实验资源.-> Experiment
-  Experiment --> Module[实验自己的通用数据模块]
-  Module --> GEC[GEC 插件]
-  GEC --> Local[被试本地持久化：记录、检查点、待上传队列]
-  Local --> Upload[后台分批上传 / 失败重试]
-  Upload --> API[GEP API：身份、版本、数据校验与去重]
+  Researcher[研究者] --> Admin[GEP 后台：研究、账号权限、构建与发行]
+  Admin --> Release[不可变 Release：实验、GEC、冻结配置与完整性清单]
+  Site[个人网站：参加研究链接] -.规划.-> Portal[独立信任域：被试研究门户]
+  Admin -.设置公开招募与当前发行.-> Portal
+  Release --> Web[Web 托管与配置注入]
+  Release -.规划.-> Package[完整原生下载包]
+  Portal -.研究入口.-> Web
+  Package -.研究者分发.-> Native[被试设备上的原生实验]
+  Web -.规划统一界面.-> Entry[GEC 前置界面：准入与原设备恢复]
+  Native -.规划统一界面.-> Entry
+  Entry --> Task[Godot 科学任务与通用数据模块]
+  Task --> GEC[GEC 数据接入：事件、checkpoint、finish]
+  GEC --> Local[本地持久化：记录、检查点、待上传队列]
+  Local --> Upload[分批上传与失败重试]
+  Upload --> API[GEP API：授权、版本校验、原子接收与去重]
   API --> Database[中央数据库与私有存储]
   Database --> ACK[持久化确认 ACK]
   ACK --> GEC
-  Local --> Recovery[导出恢复数据包]
-  Recovery -.补交流程目标.-> Import[研究者收集 / Admin 补交]
-  Import -.权限校验及原 ID 去重.-> API
-  Admin --> Export[授权导出]
-  Database --> Export
+  GEC -.规划统一界面.-> Finish[GEC 收尾界面：本地已保存、上传中、收齐或重试]
+  Local --> Recovery[恢复数据导出]
+  Recovery -.后续补交能力.-> Import[研究者通过 Admin 补交]
+  Import -.原标识与去重.-> API
+  Database --> Export[授权固定快照导出]
+  Admin --> Export
 ```
 
-- **已有合成实现**：GEP 后台、Web/macOS GEC、本地保存、上传重试、ACK、恢复数据导出和授权取数；完整验收状态见上表。
-- **完整下载包目标**：包含实验全部资源、GEC、冻结 Study/Release 公开配置、schema/protocol 与 manifest，本地运行，不跳回 study 网站重新加载实验。现有独立原生程序加配置导出不等于后台完整套件下载已交付。已发布完整 artifact（包括配置）不可修改，变更必须创建新 Release。
-- **失败补交目标**：GEC 导出原 Study/Release/session/event 标识和记录，研究者通过 Admin 补交并去重；现有恢复导出不能当作完整 Admin 补交已验收。导出不删除未确认队列，也不等于 GEP 已收齐。
-- **Future GEP Launcher**：optional local delivery utility，只做 download → verify → cache → serve。不是本地 GEP、GEC 的一部分或 v1 必需客户端。先验证机构现有分发设施是否足够，再决定是否开发；40–50 台是需求场景，不是当前容量保证。
+实线表示主要数据或资源流向，虚线标识规划中的连接；验收范围以上方进度表为准。
 
-未来 Launcher 可提供失败数据导出入口，但教师机分发缓存本身没有各被试数据；当前数据仍应从被试端 GEC 导出。若需要教师机统一收集并导出，须另行实现更后期的 **Offline Extension**：
+### GEC 统一参与流程
 
-```mermaid
-flowchart LR
-  Client[被试 GEC] -.未来数据传输.-> Buffer[Launcher 本地数据缓冲]
-  Buffer -.网络恢复后同步.-> API[GEP API]
-  Buffer -.上传失败时导出.-> File[恢复数据包]
-```
+GEC 提供前置准入／恢复和后置收尾界面；实验结束调用 `finish()` 后，由 GEC 展示本地保存、上传和服务器确认状态。参与方式由冻结配置动态决定，同一实验构建支持无需 ID、名单 ID、ID+密码。
 
-该扩展尚未实现，不要求 GEC 依赖 Launcher，不替代被试端本地保存；也不承诺当前支持完全离线首次准入。本节目标不扩大当前 Phase 01–03 验收范围。
+Web 自动注入配置；普通原生流程优先提供包含实验资源、GEC、冻结公开配置与完整性清单的完整包。单独替换 `connection.json` 保留为开发／兼容路径。**当前已有原生程序与配置导出，后台完整包下载尚未交付。**
 
-### 本地可用性修复（Phase 03 继续开发）
+恢复入口计划使用六位短码，结合短有效期、限次、限速、一次性消费和原设备私密证明；短码本身不能接管旧会话。旧 release、session、待上传队列和有效恢复路径保持原绑定，不能被新配置静默重定向。
 
-后台已补充 metadata 附件下载、参与与招募设置回显、CSV 名单导入反馈、中文权限说明及表单错误提示。发行列表显示平台/版本，只有已批准且具有托管资源的 Web 发行显示网页入口。无权操作不显示控件，服务端继续拒绝伪造请求；实例 Owner 的研究权限不可被其他成员撤销。
+### 账号与后台
 
-统一 GEC 前后参与界面、实例级账号权限矩阵、完整原生下载包、模块后台和公开研究门户仍在规划实施中。现有连接配置导出属于开发/兼容流程。参见[研究者](public_docs/researcher.md)、[实验开发者](public_docs/experiment_developer.md)、[维护者](public_docs/maintainer.md)指南；新增功能和历史工程通过分别记录，Phase 03 尚未完成。
+目标账号层级为 Owner → Admin → 普通用户。Owner 管理实例与 Admin；Admin 管理非 Owner 账号，不能修改 Owner 或授予 Owner-only 权限。账号支持邀请自行设密及临时密码首次登录强制修改。
+
+独立“用户与权限”页面按用户列出每项研究的可见性及细分权限；不可见研究的子权限必须关闭，服务端拒绝矛盾状态。权限变更及 Excel 批量导入先校验预览，再由操作者密码重新认证后原子提交、审计差异；不导出现有密码或哈希。
+
+后台采用卡片 Dashboard、稳定导航及研究模块页，视觉参考 Gugugu Lab 的温暖浅色、细边框和低饱和深绿，支持系统／浅色／深色主题与中英文。数据页面优先保证表格、搜索、筛选、状态和无障碍可读性。**这些结构调整尚未整体实现。**
+
+### 被试门户与发行
+
+个人网站未来提供参加研究链接，跳转至独立信任域的实验门户。被试选择研究，不选择 release UUID 或技术版本。每项研究默认只有一个当前招募发行；切换只影响新 session，已开始、恢复和待上传会话继续绑定原发行。
+
+门户只展示明确设为公开且正在招募的研究；名单制、邀请制或私有研究不因开放准入自动公开。已结束研究默认隐藏，可选择展示无开始按钮的公开摘要。并行 A/B 需要研究者明确且可审计的分配规则。**门户及公网部署尚未启用。**
+
+### 后续分发与补交
+
+- 完整包可通过机构现有设施、网盘、U 盘或 LAN 共享分发；发布产物不可变，修改必须创建新 Release。
+- GEC 已能导出恢复数据；研究者通过 Admin 补交并按原标识去重仍是后续目标。导出不删除未确认队列，也不代表服务器已经收齐。
+- Future GEP Launcher 是可选 LAN 分发工具，仅提前下载、校验、缓存与分发。它不是本地 GEP 或必需客户端，待现有分发设施暴露明确痛点后再评估，不开发通用 Runner。
+- 教师机本地数据缓冲及延迟同步属于更后期扩展；当前不承诺完全离线首次准入或程序关闭后持续后台上传。
+
+完整包已纳入 Phase 03D；Launcher、教师机数据缓冲及 Admin 恢复包补交不属于本轮 Phase 03A–F 必需交付。正式部署、独立备份恢复和具体研究验收保留在 Phase 04。
