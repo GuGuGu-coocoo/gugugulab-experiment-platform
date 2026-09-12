@@ -84,3 +84,5 @@ godot --headless --path examples/synthetic_experiment -- --local --synthetic-aut
 `tools/verify_lan_evidence.py --study <study-uuid> --evidence-dir <private-evidence-directory> --ssh-host <authorized-ssh-alias>` compares saved recovery JSON against the guarded synthetic database and reads Windows/Chrome version metadata over an existing SSH connection. It does not read clipboard contents or arbitrary remote files, and cannot infer physical unplug/reopen actions. Keep evidence outside Git.
 
 Web setup fields use native browser inputs for paste and IME. Recovery JSON contains the current authorized session's records, checkpoint and pending IDs, without its bearer token or private recovery proof. Exporting this file does not delete pending data. Unspecified task recovery policy permits authorized data recovery only; it does not resume trials.
+
+独立研究者验收准备与逐步操作见[验收指南](researcher_acceptance.md)。为独立操作另建空的合成实例和测试账号，避免开发测试对象干扰；不重新初始化已有数据目录。
