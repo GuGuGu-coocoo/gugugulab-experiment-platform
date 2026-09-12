@@ -62,3 +62,35 @@ def test_existing_account_invite_never_resets_password(setup):
     user.refresh_from_db();assert user.check_password('original-synthetic-password')
     assert c.post('/activate',{'token':'synthetic-ticket'}).status_code==403
     assert Grant.objects.filter(user=user,study=setup['study'],action='study.view').exists()
+
+
+@pytest.mark.parametrize('condition',['expired','revoked','issuer_revoked','delegation_removed'])
+def test_inactive_or_outdated_invitation_cannot_create_user(setup,condition):
+    from datetime import timedelta
+    from django.utils import timezone
+    from django.contrib.auth import get_user_model
+    from core.services import digest
+    for action in ['member.manage','permission.delegate','study.view']:
+        Grant.objects.create(user=setup['owner'],study=setup['study'],action=action,delegable=True)
+    invite=Invitation.objects.create(study=setup['study'],issuer=setup['owner'],username='new_synthetic_member',actions=['study.view'],token_hash=digest('bounded-invitation'),expires_at=timezone.now()+timedelta(hours=1))
+    if condition=='expired':invite.expires_at=timezone.now()-timedelta(seconds=1);invite.save()
+    elif condition=='revoked':invite.revoked=True;invite.save()
+    elif condition=='issuer_revoked':Grant.objects.filter(user=setup['owner'],study=setup['study'],action='member.manage').delete()
+    else:Grant.objects.filter(user=setup['owner'],study=setup['study'],action='study.view').update(delegable=False)
+    response=Client().post('/activate',{'token':'bounded-invitation','password':'synthetic-password-long-enough'})
+    assert response.status_code==403
+    assert not get_user_model().objects.filter(username='new_synthetic_member').exists()
+    invite.refresh_from_db();assert not invite.consumed
+
+
+def test_limited_admin_cannot_delegate_export_or_remove_higher_grants(setup):
+    from django.contrib.auth import get_user_model
+    user=get_user_model().objects.create_user('limited_synthetic_admin',password='synthetic-password')
+    for action in ['study.view','member.manage','permission.delegate']:
+        Grant.objects.create(user=user,study=setup['study'],action=action,delegable=True)
+    protected=Grant.objects.create(user=setup['owner'],study=setup['study'],action='data.export_raw',delegable=True)
+    c=Client();c.force_login(user);url='/studies/'+str(setup['study'].id)
+    assert c.post(url,{'op':'invite','username':'unapproved_reader','actions':['data.export_raw']}).status_code==403
+    assert c.post(url,{'op':'revoke_member','user_id':setup['owner'].id}).status_code==403
+    assert Grant.objects.filter(pk=protected.pk).exists()
+    assert not Invitation.objects.filter(study=setup['study']).exists()

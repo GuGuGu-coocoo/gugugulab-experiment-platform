@@ -104,3 +104,12 @@ def test_configuration_binding_expiry_and_revocation(setup,event):
     setup['session'].revoked=False;setup['session'].expires_at=timezone.now()-timedelta(seconds=1);setup['session'].save()
     with pytest.raises(Rejected,match='session_inactive'):receive(setup['session'].id,setup['token'],batch(event))
     assert Event.objects.count()==0
+
+
+@pytest.mark.parametrize('state',['paused','closed'])
+def test_recruitment_stops_new_admission_but_honors_valid_upload_window(setup,event,state):
+    setup['study'].recruitment=state;setup['study'].save(update_fields=['recruitment'])
+    with pytest.raises(Rejected,match='admission_closed'):
+        admit(setup['release'],dict(setup['request'],operation_id=str(uuid.uuid4())))
+    assert receive(setup['session'].id,setup['token'],batch(event))['accepted']==[event['event_id']]
+    assert Event.objects.count()==1
