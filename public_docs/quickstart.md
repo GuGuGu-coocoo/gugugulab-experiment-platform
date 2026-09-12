@@ -71,11 +71,11 @@ godot --headless --path examples/synthetic_experiment -- --local --synthetic-aut
 
 返回 `local_committed` 和 `remote_status: unsupported`，不伪造服务器确认。普通运行去掉自动输入参数。
 
-## 最小 Compose（尚未实测）
+## 最小 Compose（隔离合成环境已实测）
 
 `compose.yaml` 和 `deploy/Dockerfile` 已提供：外部指定卷、非 root、只读容器根目录、无额外 capability、显式实例标记。启动必须同时有数据库、秘密和匹配实例标记；不会自动创建空 Owner。镜像依赖用带哈希的 `requirements.txt`。
 
-本机没有 Docker、Colima、Lima、Podman 或可用容器守护进程。容器构建、初始化卷的操作流程及重启／错卷验收仍未完成，不能据此宣称 Compose 已交付验收或用于正式部署。
+2026-09-12 已在专用 Lima 2.2.0 / Linux arm64 / Docker 29.1.3 / Compose 2.40.3 环境完成真实原生上传闭环、容器重启/替换持久化、Owner 保留、重复初始化拒绝及错卷拒绝。初始化和启动步骤见[Compose 指南](../deploy/README.md)。这不是正式部署或备份恢复验收。
 
 ## LAN acceptance helpers
 

@@ -5,7 +5,7 @@ from pathlib import Path
 def configure():
     root=Path(os.environ.get('GEP_DATA_DIR','local_data')).resolve()
     expected=os.environ.get('GEP_EXPECTED_INSTANCE')
-    if not expected or not all((root/name).is_file() for name in ('instance','secret','gep.sqlite3')):
+    if not expected or (root/'initializing').exists() or not all((root/name).is_file() for name in ('instance','secret','gep.sqlite3')):
         raise RuntimeError('Expected instance and initialized volume are required')
     if (root/'instance').read_text().strip()!=expected:
         raise RuntimeError('Wrong volume instance marker')

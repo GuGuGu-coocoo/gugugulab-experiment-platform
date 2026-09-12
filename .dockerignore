@@ -1,0 +1,9 @@
+# Send only runtime source and pinned dependencies to the Docker daemon.
+**
+!requirements.txt
+!server/
+!server/**
+!deploy/
+!deploy/Dockerfile
+server/**/__pycache__/
+server/**/*.pyc

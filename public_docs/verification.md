@@ -33,7 +33,7 @@
 | T01–T03、T05、T07–T08 | 本机工程通过；真实 Godot、API、数据库和导出，及服务器负向矩阵 |
 | T04 | Chrome 两 hostname 和 host-only Cookie 通过；只接纳维护者审查包，不声称恶意同源实验彼此隔离 |
 | T06 | IndexedDB 事务／刷新／ACK 失败通过；真实磁盘耗尽和物理断电未执行 |
-| T09 | **未执行**：没有容器运行环境；仅启动标记保护组件测试通过 |
+| T09 | 2026-09-12 实际 Compose 通过：真实原生上传/授权导出、容器重启及替换持久化、Owner 保留、重复初始化和错卷拒绝；见 [Compose 指南](../deploy/README.md) |
 | T10 | **外部待验**：Windows 11 Pro build 26200 / Chrome 152.0.7977.76 已完成真实受信任 HTTPS、物理断网、补传、关闭重开队列、trial 恢复及双标签争用；小限额背压等剩余矩阵待补齐 |
 | T11 | 到期／撤销／旧队列固定绑定组件通过；真实研究撤回与保留治理未启用 |
 | T12 | Phase 04；独立备份恢复、RPO/RTO 未验 |
@@ -93,3 +93,5 @@ A separate run in the exported macOS executable used the actual recovery fields,
 Native cleanup fault coverage: five additional real SQLite/HTTP tests passed. Failed batch-ACK persistence retained all four pending records; failed completion-ACK persistence retained raw records and checkpoint; failed tombstone persistence retained the durable completion ACK. SIGKILL immediately before or after the cleanup COMMIT reopened safely and completed cleanup. All five cases ended with four unique server records and the expected original RT values. These are process/transaction failure tests, not physical power-loss or secure-erasure claims.
 
 Authorized recovery previously left a paused upload queue paused. Both backends now reset the retry budget only after the server accepts the study permit and private proof. Native data-only recovery and Web real IndexedDB tests reject invalid permits without unpausing; valid recovery uploads preserved records without replay. Both distributions rebuilt successfully; 2 release prerequisites and all 21 subsequent end-to-end tests passed. Completed-session reauthorization remains outside this new test evidence.
+
+Compose acceptance on 2026-09-12 used an isolated Ubuntu arm64 VM with Docker 29.1.3 / Compose 2.40.3. Real GUI setup and the exported Godot experiment completed against that instance. Restart and container replacement preserved database records, build, Owner and volume file; reinitialization failed and a different initialized volume stopped with the expected marker error. Final-image incomplete initialization also refused serving. The full server suite passed 34 tests.
