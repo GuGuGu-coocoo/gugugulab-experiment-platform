@@ -74,6 +74,7 @@ func prepare(options: Dictionary = {}) -> Dictionary:
 		if recovered.has("error"): return recovered
 		old.context.token = recovered.token
 		old.front_locked = false
+		old.paused = false;old.attempts = 0;old.retry_at = 0
 		if can_resume: old.segments.append(segment)
 		if not save(old): return {"error":"local_commit"}
 		session_id = old.id;config = old.config

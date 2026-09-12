@@ -90,7 +90,7 @@ export class GEC {
     const s=await this.get(id);if(!s||s.kind!=='session'||s.completion)fail('not_recoverable');
     const canResume=!!s.checkpoint&&s.checkpoint.version===1&&s.checkpoint.strategy==='trial_boundary_v1'&&s.config.purpose==='synthetic';
     const recovered=await this.request(s.config,`/v1/participant/sessions/${id}/recover`,{permit,proof:s.proof},s.context.token);s.context.token=recovered.token;
-    await this.mutate(store=>{s.front_locked=false;if(canResume)s.segments.push(this.segment);store.put(s);});this.id=id;this.config=s.config;this.state=canResume?'active':'data_only';return {state:this.state,checkpoint:canResume?copy(s.checkpoint):null};
+    await this.mutate(store=>{s.front_locked=false;s.paused=false;s.attempts=0;s.retryAt=0;if(canResume)s.segments.push(this.segment);store.put(s);});this.id=id;this.config=s.config;this.state=canResume?'active':'data_only';return {state:this.state,checkpoint:canResume?copy(s.checkpoint):null};
   }
   async recovery_export(){
     const s=await this.get(this.id);if(!s||!['session','local'].includes(s.kind)||s.front_locked)fail('recovery_export_unavailable');
