@@ -38,7 +38,7 @@
 | T11 | 到期／撤销／旧队列固定绑定组件通过；真实研究撤回与保留治理未启用 |
 | T12 | Phase 04；独立备份恢复、RPO/RTO 未验 |
 | T13 | 委派、重复邀请、已有账号不可重置与撤权组件通过；正式 Owner 治理／MFA 未启用 |
-| T14 | 有界 ZIP、路径／类型／摘要／版本检查和实际发布通过；上传中断全矩阵仍需扩展 |
+| T14 | 有界 ZIP、路径／类型／摘要／版本检查和实际发布通过；2026-09-12 超限、截断、网络中断及 fsync/rename 两处进程终止和幂等重试通过 |
 | T15 | 有限 JSON 文本 CSV 解析和 Excel 导入通过；不是科学字段展开或通用电子表格保证 |
 | T16 | Git／配置／依赖产物检查；未加入运行库、真实数据或凭据；完整生产安全审计未执行 |
 | T17 | 自动 GUI 工程回归通过；**独立人类验收未执行** |
@@ -46,7 +46,7 @@
 | T19 | 通用模块、独立本地后端、同一 task 与两种 GEC 通过；本地不报远端成功 |
 | T20 | 当前 macOS arm64 独立二进制及事务／重启／丢 ACK 通过；原生窗口/匿名启动/实体左右键已由用户实际操作验证；正式签名公证未做 |
 | T21 | 三模式 GUI+API，UUID、001、错误凭据、重复创建、跨研究隔离通过 |
-| T22 | 两发行、公开配置、默认外置路径、错绑定／版本、旧 pending 目标固定通过；完整大包中断矩阵未验 |
+| T22 | 两发行、公开配置、默认外置路径、错绑定／版本、旧 pending 目标固定通过；2026-09-12 实际 Godot 包的网络截断、fsync/rename 两处进程终止和旧发行保护通过 |
 | T23 | Web 刷新与原生强杀，完整 trial、原 session、新 segment/epoch 通过；新增恢复数据包导出；Web 无策略时授权恢复仅允许数据导出、不进入试次的真实 API/IndexedDB 检查通过；原生无策略路径尚待独立实测 |
 | T24 | Web 活动保留／未齐／ACK 失败／清理中断与共享设备锁定通过；原生完成清理及进程终止边界通过；原生清理每个中断点的完整矩阵未执行 |
 
@@ -97,3 +97,5 @@ Authorized recovery previously left a paused upload queue paused. Both backends 
 Compose acceptance on 2026-09-12 used an isolated Ubuntu arm64 VM with Docker 29.1.3 / Compose 2.40.3. Real GUI setup and the exported Godot experiment completed against that instance. Restart and container replacement preserved database records, build, Owner and volume file; reinitialization failed and a different initialized volume stopped with the expected marker error. Final-image incomplete initialization also refused serving. The full server suite passed 34 tests.
 
 Finished-queue reauthentication was previously rejected. It now requires the same scoped permit/private proof and keeps the original completion set closed. Both real IndexedDB and native SQLite tests recover expired finished queues as data-only, retain IDs/segments and clean only after receipt; extra undeclared events and revoked sessions remain rejected. The GUI explicitly says no trials resume and displays data status. Rebuilt Web/macOS packages passed 2 release prerequisites plus all 23 end-to-end tests; 36 server tests passed. This supersedes the earlier completed-session reauthentication limitation.
+
+Web upload interruption coverage: the real Godot archive was sent to a separate real Gunicorn process using the guarded synthetic database. Oversized declared bodies returned 413; complete multipart bodies containing truncated ZIPs returned 422; network interruption created no build/release. SIGKILL after file fsync but before rename, and after rename but before database registration, preserved the existing approved release. A full retry registered exactly one new build, repeating it remained idempotent, and no new release was approved. Original participation HTML and release references remained identical. Both durability-boundary tests passed. They do not simulate physical power failure.
