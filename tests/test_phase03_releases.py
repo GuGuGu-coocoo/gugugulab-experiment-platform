@@ -378,9 +378,14 @@ def test_policy_and_recruitment_never_auto_publish():
     portal = Client().get('/', HTTP_HOST='experiment.localhost')
     assert f'data-study="{study.id}"' not in portal.content.decode()
 
-    # A private roster study stays absent even when open with a valid current release.
+    # A private roster study stays absent even when open with a valid current
+    # release. The release keeps admitting by its own frozen mode, so the v1
+    # contract is re-frozen as ``id``; the study-policy change alone would no
+    # longer reopen a frozen anonymous contract (covered in test_phase03_shell).
     study.mode = 'id'
     study.save()
+    first.config = {**first.config, 'mode': 'id', 'tag': 'v1'}
+    first.save(update_fields=['config'])
     participant = Participant.objects.create(study=study, code='PRIVATE-CODE-001')
     session, _ = admit_request(entry_request(context, first, study.revision, participant_code='PRIVATE-CODE-001'))
     assert Participant.objects.filter(pk=participant.pk).exists() and session.release_id == first.id

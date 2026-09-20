@@ -81,19 +81,36 @@ def _resume(old, data, proof):
     return old, token_for(old)
 
 
+def frozen_mode(release, study):
+    """Admission mode of one release.
+
+    A release approved with an explicit ``mode`` admits by that frozen contract
+    even after the study's policy changed, so the published public configuration
+    and the server rules cannot diverge. A legacy release without one keeps the
+    pre-shell rule and follows the study policy at admission time. An unknown
+    frozen mode fails closed instead of falling back to a guessed protocol.
+    """
+    frozen = release.config.get('mode') if isinstance(release.config, dict) else None
+    if frozen is None:
+        return study.mode
+    require(frozen in ('anonymous', 'id', 'password'), 'unsupported_capability', 409)
+    return frozen
+
+
 def _create_session(release, data, binding, proof):
     """Write the first session for an operation under the study row lock."""
     study = Study.objects.select_for_update().get(pk=release.study_id)
     release = Release.objects.select_related('build').get(pk=release.pk)
     require(release.approved and study.recruitment == 'open', 'admission_closed', 403)
-    if study.mode == 'anonymous':
+    mode = frozen_mode(release, study)
+    if mode == 'anonymous':
         require(data.get('participant_code') is None, 'unexpected_code')
         participant = Participant.objects.create(study=study)
     else:
         participant = Participant.objects.filter(study=study, code=data.get('participant_code'), active=True).first()
         require(participant is not None, 'admission_denied', 403)
         require(participant.expires_at is None or participant.expires_at > timezone.now(), 'admission_denied', 403)
-        if study.mode == 'password':
+        if mode == 'password':
             require(check_password(data.get('password', ''), participant.password_hash), 'admission_denied', 403)
         require(Session.objects.filter(participant=participant).count() < study.max_sessions, 'participation_limit', 403)
     session = Session(participant=participant, release=release, operation=data['operation_id'], proof_hash=digest(proof), request=binding, expires_at=timezone.now()+timedelta(days=7))
@@ -267,6 +284,10 @@ def recover(session_id, proof, permit):
 
 RECOVERY_CODE_CAPABILITY = 'recovery_code/v1'
 RECOVERY_NAMED_CAPABILITY = 'recovery_named/v1'
+# Frozen public-configuration capability for the reusable GEC participation
+# shell. A release approved with an explicit mode advertises this capability; a
+# shell that does not know it must fail closed instead of guessing a protocol.
+SHELL_CAPABILITY = 'gec-shell/v1'
 RECOVERY_CODE_DIGITS = 6
 RECOVERY_CODE_TTL = timedelta(minutes=5)
 RECOVERY_CODE_MAX_ATTEMPTS = 5

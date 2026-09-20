@@ -20,7 +20,7 @@ from .models import Study, Grant, Instance, Participant, Build, Release, Session
 from .access import guard, allowed, ACTIONS, authority_actions
 from .protocol import require, parse, Rejected
 from .views import endpoint
-from .services import digest, completion_status, issue_recovery_code
+from .services import digest, completion_status, issue_recovery_code, SHELL_CAPABILITY
 from .packages import validate_package, descriptor_valid, MAX_ARCHIVE
 from . import publication
 
@@ -119,7 +119,25 @@ def study_form_errors(fn):
 
 
 def connection_config(release):
-    return {'config_version':'1','protocol_version':'gep/1','sdk_version':'0.1.0','api_url':public_api_url(),'instance_id':str(Instance.objects.get(pk=1).instance_id),'study_id':str(release.study_id),'release_id':str(release.id),'build_id':str(release.build_id),'purpose':'synthetic'}
+    """Frozen public configuration for one release.
+
+    ``mode`` and ``shell_capability`` are copied from the release's own frozen
+    config, never from the study's current policy, so a release approved before a
+    policy change keeps admitting by the mode it was approved with. A legacy
+    release without a frozen mode keeps the pre-shell contract: the keys are
+    omitted and the shell falls back to the legacy field set. A frozen mode the
+    shell cannot understand fails closed instead of being published. No roster,
+    password or other credential ever enters this public document.
+    """
+    config={'config_version':'1','protocol_version':'gep/1','sdk_version':'0.1.0','api_url':public_api_url(),'instance_id':str(Instance.objects.get(pk=1).instance_id),'study_id':str(release.study_id),'release_id':str(release.id),'build_id':str(release.build_id),'purpose':'synthetic'}
+    frozen=release.config if isinstance(release.config,dict) else {}
+    mode=frozen.get('mode')
+    if mode is not None and mode not in ('anonymous','id','password'):
+        raise Rejected('unsupported_capability',409)
+    if mode is not None:
+        config['mode']=mode
+        config['shell_capability']=SHELL_CAPABILITY
+    return config
 
 
 @endpoint
