@@ -8,6 +8,8 @@ binding digest and authorization, then applies all changes and audits in one
 atomic transaction. Nothing is partially applied and no preview token alone
 grants authority; a replayed successful commit is idempotent but is still
 refused once the actor is no longer authorized for that exact operation.
+
+Bounded XLSX imports live in :mod:`core.importers` and share this preview core.
 """
 import hashlib
 import json
@@ -29,6 +31,8 @@ PREVIEW_TTL = timedelta(minutes=10)
 PURGE_LIMIT = 200
 MATRIX_KIND = 'matrix'
 RECONCILE_KIND = 'reconcile'
+USERS_KIND = 'users_import'
+ROSTER_KIND = 'roster_import'
 
 
 def _canonical(value):
@@ -149,7 +153,8 @@ def _replay_authorize(locked, row):
     if row.kind == RECONCILE_KIND:
         require(is_instance_owner(locked), 'owner_only', 403)
         return
-    raise Rejected('preview_invalid', 404)
+    from .importers import replay_authorize
+    replay_authorize(locked, row)
 
 
 def _gate(actor, password, preview_id, kind, scope='', require_owner=False):

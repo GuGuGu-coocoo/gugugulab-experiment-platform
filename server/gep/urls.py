@@ -18,8 +18,10 @@ from core.hosting import preview
 urlpatterns += [path("preview/<str:token>/<path:resource_path>",preview)]
 
 from core import gui_accounts
+from core import gui_imports
 urlpatterns += [
     path('users',gui_accounts.users_page),
+    path('users/templates/<str:kind>',gui_imports.template_download),
     path('account/password',gui_accounts.password_page),
     path('activate-account',gui_accounts.activate_account_page),
 ]

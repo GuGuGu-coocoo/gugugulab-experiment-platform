@@ -84,7 +84,9 @@ def message_for(code):
     return MESSAGES.get(code, '操作未完成，请检查输入或权限后重试。')
 
 
-COMMIT_OPS = {'matrix': 'matrix_commit', 'reconcile': 'reconcile_commit'}
+COMMIT_OPS = {'matrix': 'matrix_commit', 'reconcile': 'reconcile_commit',
+              'users_import': 'import_users_commit', 'roster_import': 'import_roster_commit'}
+IMPORT_OPS = ('import_users_preview', 'import_users_commit', 'import_roster_preview', 'import_roster_commit')
 
 
 def _target(username):
@@ -98,6 +100,9 @@ def _apply(request):
     password = request.POST.get('password', '')
     revision = request.POST.get('revision')
     username = request.POST.get('username', '')
+    if op in IMPORT_OPS:
+        from . import gui_imports
+        return gui_imports.apply_import(request, op)
     if op == 'invite_account':
         result = accounts.invite_account(request.user, password, revision, username, request.POST.get('role', 'user'))
         return {'notice': f"已创建账号邀请：{result['username']}（角色 {result['role']}）。", 'invitation_token': result['token'], 'invitation_username': result['username']}

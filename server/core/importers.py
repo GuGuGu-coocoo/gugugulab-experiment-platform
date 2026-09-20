@@ -1,0 +1,371 @@
+"""Preview-bound, bounded XLSX imports (users/permissions and roster).
+
+Both imports parse a bounded workbook with :mod:`core.excel`, normalize it into
+per-row errors plus a private staged intent, and expose the same single-use
+preview identity as the permission matrix: the commit re-locks the instance and
+actor, re-checks the binding digest and re-checks *each staged operation's*
+current authority, so a revoked delegation, a moved Owner pointer or a changed
+study mode is refused as a whole with zero partial writes.
+"""
+from django.contrib.auth import get_user_model
+from django.contrib.auth.hashers import make_password
+from django.db import transaction
+from django.utils import timezone
+
+from . import accounts, excel, permissions
+from .access import (ACTIONS, ROLES, dominates, is_account_administrator, is_instance_owner,
+                     manageable_actions)
+from .models import AccountInvitation, Grant, Participant, Study
+from .protocol import Rejected, require
+
+USERS_KIND = permissions.USERS_KIND
+ROSTER_KIND = permissions.ROSTER_KIND
+
+
+# --------------------------------------------------------------------------- user import
+
+def _users_binding(actor, instance, ops):
+    usernames = {op['username'] for op in ops}
+    pairs = {(op['user_id'], op['study_id']) for op in ops if op.get('user_id') and op.get('study_id')}
+    return permissions._digest({
+        'kind': USERS_KIND, 'actor': actor.pk, 'revision': instance.governance_revision,
+        'ops': ops, 'users': permissions._account_digest({op['user_id'] for op in ops if op.get('user_id')}),
+        'invitations': permissions._invitation_digest(usernames), 'grants': permissions._grant_digest(pairs),
+        'studies': permissions._study_digest({op['study_id'] for op in ops if op.get('study_id')}),
+    })
+
+
+def _row_error(errors, row, code, message):
+    errors.append({'row': row, 'code': code, 'message': message})
+
+
+def _normalize_users(actor, raw):
+    rows = excel.read_rows(raw, excel.USERS_HEADERS)
+    errors = []
+    ops = []
+    seen_create = {}
+    seen_study = set()
+    for item in rows:
+        number = item['row']
+        values = item['values']
+        username, username_ok = excel.text_cell(values['username'])
+        operation, operation_ok = excel.text_cell(values['operation'])
+        if not username_ok or not operation_ok:
+            _row_error(errors, number, 'numeric_cell', '用户名与操作必须是文本，不能是数字或日期。')
+            continue
+        if not username:
+            _row_error(errors, number, 'username', '用户名不能为空。')
+            continue
+        if operation not in excel.OPERATIONS:
+            _row_error(errors, number, 'operation', 'operation 必须是 create / update / disable / enable。')
+            continue
+        revision, revision_ok = excel.integer_cell(values['revision'])
+        target = get_user_model().objects.filter(username=username).first()
+        profile = permissions._profile(target.pk) if target is not None else None
+        if operation == 'create':
+            role, role_ok = excel.text_cell(values['role'])
+            role = role or 'user'
+            if not role_ok or role not in ROLES:
+                _row_error(errors, number, 'role', 'role 必须是 user 或 admin。')
+                continue
+            if role == 'admin' and not is_instance_owner(actor):
+                _row_error(errors, number, 'admin_appointment_owner_only', '只有 Owner 可以创建 Admin 账号。')
+                continue
+            if target is not None:
+                _row_error(errors, number, 'account_exists', '账号已存在；导入不会覆盖或重置已有密码，请使用 update/disable/enable。')
+                continue
+            if permissions._invitation_digest({username}):
+                _row_error(errors, number, 'invitation_active', '该账号已有未使用的邀请。')
+                continue
+            seen_create.setdefault(username, number)
+            if seen_create[username] != number:
+                _row_error(errors, number, 'duplicate_identifier', '同一用户名在导入中出现多次。')
+                continue
+            ops.append({'row': number, 'operation': 'create', 'username': username, 'role': role})
+            continue
+        if target is None:
+            _row_error(errors, number, 'account_missing', '目标账号不存在；导入不会按显示名猜测创建。')
+            continue
+        if not revision_ok:
+            _row_error(errors, number, 'revision', 'update / disable / enable 必须填写目标账号当前版本（整数）。')
+            continue
+        if profile is None or profile.revision != revision:
+            _row_error(errors, number, 'revision_mismatch', '目标账号版本已变化；请刷新后重新导出模板再试。')
+            continue
+        if target.pk == actor.pk:
+            _row_error(errors, number, 'self_target', '不能对自己的账号执行此操作。')
+            continue
+        if is_instance_owner(target):
+            _row_error(errors, number, 'owner_protected', 'Owner 账号不可通过账号管理修改。')
+            continue
+        if not is_instance_owner(actor) and not dominates(actor, target):
+            _row_error(errors, number, 'higher_privilege_target', '目标账号拥有操作者无法支配的研究权限。')
+            continue
+        if operation in ('disable', 'enable'):
+            want_active = operation == 'enable'
+            if target.is_active == want_active:
+                _row_error(errors, number, 'no_change', '目标状态没有变化。')
+                continue
+            ops.append({'row': number, 'operation': operation, 'username': username, 'user_id': target.pk})
+            continue
+        study_id, study_ok = excel.text_cell(values['study_id'])
+        if not study_ok or not study_id:
+            _row_error(errors, number, 'study_id', 'update 必须填写研究 UUID。')
+            continue
+        study = Study.objects.filter(pk=study_id).first() if _uuid_ok(study_id) else None
+        if study is None:
+            _row_error(errors, number, 'study_missing', '研究不存在。')
+            continue
+        actions_text, actions_ok = excel.text_cell(values['actions'])
+        if not actions_ok:
+            _row_error(errors, number, 'actions', 'actions 必须是文本。')
+            continue
+        actions = [action.strip() for action in actions_text.split(';') if action.strip()]
+        if not actions or not set(actions) <= ACTIONS:
+            _row_error(errors, number, 'actions', 'actions 必须是用分号分隔的已知动作代码。')
+            continue
+        if 'study.view' not in actions:
+            _row_error(errors, number, 'visibility_required', '显式动作必须同时包含 study.view。')
+            continue
+        if not is_instance_owner(actor):
+            manageable = manageable_actions(actor, study)
+            if not set(actions) <= manageable:
+                _row_error(errors, number, 'delegation_forbidden', '包含操作者无权委派的动作或未授权研究。')
+                continue
+        key = (target.pk, study.pk)
+        if key in seen_study:
+            _row_error(errors, number, 'duplicate_identifier', '同一账号与研究在导入中出现多次。')
+            continue
+        seen_study.add(key)
+        selected = {action: False for action in actions}
+        for action, delegable in Grant.objects.filter(user=target, study=study).values_list('action', 'delegable'):
+            if action in selected and delegable:
+                selected[action] = True
+        ops.append({'row': number, 'operation': 'update', 'username': username, 'user_id': target.pk,
+                    'study_id': str(study.pk), 'target': selected})
+    return rows, ops, errors
+
+
+def _uuid_ok(value):
+    import uuid
+    try:
+        uuid.UUID(str(value))
+        return True
+    except (ValueError, AttributeError, TypeError):
+        return False
+
+
+def preview_users(actor, raw):
+    require(is_account_administrator(actor), 'forbidden', 403)
+    with transaction.atomic():
+        instance = accounts._locked_instance()
+        locked = get_user_model().objects.select_for_update().get(pk=actor.pk)
+        require(locked.is_active, 'auth_required', 403)
+        profile = permissions._profile(locked.pk)
+        require(is_instance_owner(locked) or (profile is not None and profile.role == 'admin'), 'forbidden', 403)
+        rows, ops, errors = _normalize_users(locked, raw)
+        summary = {'rows': len(rows), 'operations': [{'row': op['row'], 'operation': op['operation'],
+                                                     'username': op['username'], 'user_id': op.get('user_id'),
+                                                     'role': op.get('role', ''),
+                                                     'study_id': str(op.get('study_id', '')),
+                                                     'actions': sorted(op.get('target', {}))} for op in ops],
+                   'invitations': sorted(op['username'] for op in ops if op['operation'] == 'create')}
+        row = permissions._preview(locked, USERS_KIND, '', summary, errors,
+                                   _users_binding(locked, instance, ops), {'ops': ops}, instance.governance_revision)
+    return row
+
+
+def _reauthorize_user_op(actor, op):
+    """Per-operation authority for one staged user-import row, read fresh."""
+    if op['operation'] == 'create':
+        require(op.get('role') != 'admin' or is_instance_owner(actor), 'admin_appointment_owner_only', 403)
+        return
+    target = get_user_model().objects.select_for_update().get(pk=op['user_id'])
+    require(not is_instance_owner(target), 'preview_stale', 409)
+    require(target.pk != actor.pk, 'preview_stale', 409)
+    require(is_instance_owner(actor) or dominates(actor, target), 'preview_stale', 409)
+    return target
+
+
+def commit_users(actor, password, preview_id):
+    require(bool(preview_id), 'preview_required', 400)
+    with transaction.atomic():
+        instance, locked, row, replay = permissions._gate(actor, password, preview_id, USERS_KIND)
+        if replay:
+            return row.result
+        require(not row.errors, 'preview_errors', 409)
+        ops = row.staged['ops']
+        require(_users_binding(locked, instance, ops) == row.binding, 'preview_stale', 409)
+        tokens = []
+        for op in ops:
+            if op['operation'] == 'create':
+                _reauthorize_user_op(locked, op)
+                require(not get_user_model().objects.filter(username=op['username']).exists(), 'preview_stale', 409)
+                token = accounts._rand_password()
+                invitation = AccountInvitation.objects.create(
+                    issuer=locked, username=op['username'], role=op['role'],
+                    token_hash=accounts.digest(token), expires_at=timezone.now() + accounts.INVITATION_TTL)
+                accounts.audit(locked, 'account.invite_issued', invitation.id,
+                               after={'username': op['username'], 'role': op['role']})
+                tokens.append({'username': op['username'], 'token': token})
+                continue
+            target = _reauthorize_user_op(locked, op)
+            if op['operation'] in ('disable', 'enable'):
+                profile = accounts._profile_locked(target)
+                accounts.apply_account_active(locked, target, profile, op['operation'] == 'enable')
+                continue
+            study = Study.objects.get(pk=op['study_id'])
+            target_actions = {action: bool(flag) for action, flag in op['target'].items()}
+            require(_matrix_authorize_import(locked, target, study, target_actions), 'preview_stale', 409)
+            current = {action: delegable for action, delegable in
+                       Grant.objects.filter(user=target, study=study).values_list('action', 'delegable')}
+            for action in sorted(current):
+                if action not in target_actions:
+                    Grant.objects.filter(user=target, study=study, action=action).delete()
+            for action in sorted(target_actions):
+                if current.get(action) != target_actions[action]:
+                    Grant.objects.update_or_create(user=target, study=study, action=action,
+                                                   defaults={'delegable': target_actions[action]})
+            before, after = permissions.grant_diff(current, target_actions)
+            accounts.audit(locked, 'permission.import_grants', f'{target.pk}:{study.pk}',
+                           before={'actions': before}, after={'actions': after})
+        result = {'invited': sorted(op['username'] for op in ops if op['operation'] == 'create'),
+                  'updated': sorted(op['username'] for op in ops if op['operation'] == 'update'),
+                  'disabled': sorted(op['username'] for op in ops if op['operation'] == 'disable'),
+                  'enabled': sorted(op['username'] for op in ops if op['operation'] == 'enable')}
+        permissions._finish(row, instance, result)
+    return {'result': result, 'invitation_tokens': tokens}
+
+
+def _matrix_authorize_import(actor, target_user, study, target):
+    if is_instance_owner(actor):
+        return not is_instance_owner(target_user) and target_user.pk != actor.pk
+    return (target_user.pk != actor.pk and not is_instance_owner(target_user)
+            and dominates(actor, target_user)
+            and set(target) <= manageable_actions(actor, study))
+
+
+# --------------------------------------------------------------------------- roster import
+
+def _roster_binding(actor, study, staged_rows, revision):
+    """Bind the complete normalized staging, including credential hashes, to the
+    study mode and governance revision; the digest never leaves the database."""
+    existing = sorted(Participant.objects.filter(study=study).values_list('code', flat=True))
+    return permissions._digest({'kind': ROSTER_KIND, 'actor': actor.pk, 'study': str(study.pk),
+                                'mode': study.mode, 'revision': revision, 'existing': existing,
+                                'rows': [{'code': row['code'], 'password_hash': row['password_hash']}
+                                         for row in staged_rows]})
+
+
+def preview_roster(actor, study, raw):
+    from .access import guard
+    guard(actor, study, 'study.configure')
+    headers = excel.ROSTER_HEADERS if study.mode == 'password' else ('id',)
+    rows = excel.read_rows(raw, headers)
+    errors = []
+    staged_rows = []
+    seen = set()
+    existing = set(Participant.objects.filter(study=study).values_list('code', flat=True))
+    for item in rows:
+        number = item['row']
+        code, code_ok = excel.text_cell(item['values']['id'])
+        if not code:
+            _row_error(errors, number, 'id', 'ID 不能为空。')
+            continue
+        if not code_ok:
+            _row_error(errors, number, 'numeric_identifier', 'ID 必须是文本；数字形式的 ID 会被拒绝，不会猜测前导零。')
+            continue
+        if len(code) > 128:
+            _row_error(errors, number, 'id', 'ID 过长。')
+            continue
+        if code in seen:
+            _row_error(errors, number, 'duplicate_identifier', '本次导入中 ID 重复。')
+            continue
+        if code in existing:
+            _row_error(errors, number, 'existing_identifier', '名单中已有该 ID；追加导入不会覆盖。')
+            continue
+        seen.add(code)
+        if study.mode == 'password':
+            password, password_ok = excel.text_cell(item['values']['password'])
+            if not password_ok:
+                _row_error(errors, number, 'password', '密码必须是文本。')
+                continue
+            if len(password) < 12:
+                _row_error(errors, number, 'password_too_short', '密码至少 12 个字符。')
+                continue
+            staged_rows.append({'code': code, 'password_hash': make_password(password)})
+        else:
+            staged_rows.append({'code': code, 'password_hash': ''})
+    with transaction.atomic():
+        instance = accounts._locked_instance()
+        locked = get_user_model().objects.select_for_update().get(pk=actor.pk)
+        require(locked.is_active, 'auth_required', 403)
+        study = Study.objects.get(pk=study.pk)
+        guard(locked, study, 'study.configure')
+        summary = {'study': study.title, 'study_id': str(study.pk), 'mode': study.mode, 'rows': len(rows),
+                   'new_ids': len(staged_rows), 'passwords_set': study.mode == 'password',
+                   'fingerprint': permissions._digest([row['code'] for row in staged_rows])}
+        row = permissions._preview(locked, ROSTER_KIND, str(study.pk), summary, errors,
+                                   _roster_binding(locked, study, staged_rows, instance.governance_revision),
+                                   {'rows': staged_rows}, instance.governance_revision)
+    return row
+
+
+def commit_roster(actor, password, preview_id):
+    require(bool(preview_id), 'preview_required', 400)
+    with transaction.atomic():
+        instance, locked, row, replay = permissions._gate(actor, password, preview_id, ROSTER_KIND,
+                                                          scope=permissions.row_scope(preview_id, ROSTER_KIND))
+        if replay:
+            return row.result
+        require(not row.errors, 'preview_errors', 409)
+        from .access import guard
+        study = Study.objects.get(pk=row.scope)
+        guard(locked, study, 'study.configure')
+        staged_rows = row.staged['rows']
+        require(_roster_binding(locked, study, staged_rows, instance.governance_revision) == row.binding, 'preview_stale', 409)
+        for staged in staged_rows:
+            Participant.objects.create(study=study, code=staged['code'], password_hash=staged['password_hash'])
+            accounts.audit(locked, 'roster.imported', str(study.pk), after={'code': staged['code']})
+        result = {'study': study.title, 'added': len(staged_rows)}
+        permissions._finish(row, instance, result)
+    return result
+
+
+# --------------------------------------------------------------------------- replay
+
+def replay_authorize(locked, row):
+    """Re-check a consumed import preview's current per-operation authority.
+
+    Called from :func:`core.permissions._replay_authorize`; uses only the
+    secret-free summary recorded at preview time.
+    """
+    if row.kind == USERS_KIND:
+        summary = row.summary or {}
+        ops = summary.get('operations')
+        require(isinstance(ops, list), 'preview_invalid', 404)
+        for op in ops:
+            operation = op.get('operation')
+            if operation == 'create':
+                require('role' in op, 'preview_invalid', 404)
+                require(op['role'] != 'admin' or is_instance_owner(locked), 'admin_appointment_owner_only', 403)
+                continue
+            target = get_user_model().objects.filter(pk=op.get('user_id')).first()
+            require(target is not None, 'preview_stale', 409)
+            require(not is_instance_owner(target), 'preview_stale', 409)
+            require(target.pk != locked.pk, 'preview_stale', 409)
+            require(is_instance_owner(locked) or dominates(locked, target), 'preview_stale', 409)
+            if operation == 'update':
+                study = Study.objects.filter(pk=op.get('study_id')).first()
+                require(study is not None, 'preview_stale', 409)
+                require(is_instance_owner(locked) or set(op.get('actions') or []) <= manageable_actions(locked, study),
+                        'preview_stale', 409)
+        return
+    if row.kind == ROSTER_KIND:
+        study = Study.objects.filter(pk=row.scope).first()
+        require(study is not None, 'preview_invalid', 404)
+        require(study.mode == (row.summary or {}).get('mode'), 'preview_stale', 409)
+        from .access import guard
+        guard(locked, study, 'study.configure')
+        return
+    raise Rejected('preview_invalid', 404)

@@ -38,6 +38,12 @@
 <button>预览更改</button></form>
 {% else %}{{entry.summary}}{% if row.is_owner or row.id == request.user.id %} <small>只读</small>{% endif %}{% endif %}
 </td></tr>{% endfor %}{% empty %}<tr><td colspan="3">当前没有可显示的研究权限行。</td></tr>{% endfor %}</table></section>
+<section><h2>Excel 批量导入（先预览，再用本人密码确认）</h2>
+<p>模板不含任何已有密码或哈希。导入永不重置已有密码：新账号默认发出一次性邀请；已有账号必须写明操作与当前账号版本，不会按显示名猜测或覆盖。公式、宏、外部链接、数字形式的 ID 会被整体拒绝；上限 2 MiB、展开 10 MiB、1000 行、32 列。</p>
+<p><a href="/users/templates/users">下载用户与权限模板（.xlsx）</a>{% for study in configure_studies %} · <a href="/users/templates/roster?study={{study.id}}">下载《{{study.title}}》名单模板</a>{% endfor %}</p>
+<form method="post" enctype="multipart/form-data">{% csrf_token %}<input type="hidden" name="op" value="import_users_preview"><label>用户与权限模板 <input type="file" name="file" accept=".xlsx" required></label><button>预览用户与权限导入</button></form>
+{% if configure_studies %}<form method="post" enctype="multipart/form-data">{% csrf_token %}<input type="hidden" name="op" value="import_roster_preview"><label>目标研究 <select name="study_id">{% for study in configure_studies %}<option value="{{study.id}}">{{study.title}}</option>{% endfor %}</select></label><label>名单模板 <input type="file" name="file" accept=".xlsx" required></label><button>预览名单导入（仅追加）</button></form>{% endif %}
+</section>
 <section><h2>新增账号</h2>
 <form method="post">{% csrf_token %}<input type="hidden" name="op" value="invite_account"><input type="hidden" name="revision" value="{{revision}}">
 <label>用户名 <input name="username" maxlength="150" required></label>
