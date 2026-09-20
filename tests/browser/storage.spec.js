@@ -1,10 +1,13 @@
 import {execFileSync} from 'node:child_process';
 import {test,expect} from '@playwright/test';
-import fs from 'node:fs';
-const config=JSON.parse(fs.readFileSync('build/native/connection.json','utf8'));
+import {isolated,connectionConfig} from './isolated_target.mjs';
+// Isolated-instance target: this spec must never write to the protected dev or
+// acceptance database (GEP_DEV_INSTANCE=1 opts into the maintainer dev instance).
+const target=isolated();
+const config=connectionConfig(target);
 async function setup(page){
  await page.route('**/sdk.js',r=>r.fulfill({path:'packages/gec_web/sdk.js',contentType:'text/javascript'}));
- await page.goto('http://experiment.localhost:8000/');
+ await page.goto(target.experiment+'/');
  await page.evaluate(async config=>{const {GEC}=await import('/sdk.js');window.client=new GEC(config);await client.prepare();clearInterval(client.timer);await client.begin();},config);
 }
 const payload={trial_id:'t1',choice:'left',rt_ms:321.5,response_status:'responded'};
@@ -37,7 +40,7 @@ test('IndexedDB atomic abort, offline reload, lost ACK, active retention and cle
 test('single writer and shared-device new participation locks old front recovery',async({page,context})=>{
  await setup(page);
  const old=await page.evaluate(()=>client.id);
- const other=await context.newPage();await other.goto('http://experiment.localhost:8000/');
+ const other=await context.newPage();await other.goto(target.experiment+'/');
  await other.route('**/sdk.js',r=>r.fulfill({path:'packages/gec_web/sdk.js',contentType:'text/javascript'}));
  const result=await other.evaluate(async config=>{const {GEC}=await import('/sdk.js');const c=new GEC(config);try{await c.prepare();return 'incorrect'}catch(e){return e.message}},config);
  expect(result).toBe('writer_busy');await other.close();
@@ -70,7 +73,7 @@ test('configuration replacement cannot retarget pending records',async({page})=>
  await page.evaluate(()=>client.close());
 });
 test('unknown storage version is preserved and rejected',async({page})=>{
- await page.route('**/sdk.js',r=>r.fulfill({path:'packages/gec_web/sdk.js',contentType:'text/javascript'}));await page.goto('http://experiment.localhost:8000/');
+ await page.route('**/sdk.js',r=>r.fulfill({path:'packages/gec_web/sdk.js',contentType:'text/javascript'}));await page.goto(target.experiment+'/');
  await page.evaluate(()=>new Promise(resolve=>{const r=indexedDB.open('gec-1',2);r.onupgradeneeded=()=>r.result.createObjectStore('future');r.onsuccess=()=>{r.result.close();resolve()}}));
  const message=await page.evaluate(async config=>{const {GEC}=await import('/sdk.js');const c=new GEC(config);try{await c.prepare();return 'bad'}catch(e){c.close();return e.name}},config);
  expect(message).toBe('VersionError');
@@ -98,9 +101,13 @@ test('authorized recovery without task policy exports data without resuming tria
  await page.evaluate(()=>client.close());await page.reload();
  await page.evaluate(async config=>{const {GEC}=await import('/sdk.js');window.client=new GEC(config);await client.prepare();clearInterval(client.timer)},config);
  await expect(page.evaluate(()=>client.recovery_export())).rejects.toThrow('recovery_export_unavailable');
- const admin=await context.newPage(),c=JSON.parse(fs.readFileSync('local_data/dev_credentials.json','utf8'));
- await admin.goto('http://admin.localhost:8000/login');await admin.locator('[name=username]').fill(c.username);await admin.locator('[name=password]').fill(c.password);await admin.getByRole('button',{name:'登录',exact:true}).click();
- await admin.goto('http://admin.localhost:8000/studies/'+config.study_id+'/sessions');await admin.locator('[name=session_id]').fill(id);await admin.getByRole('button',{name:'签发一次性恢复许可'}).click();
+ const admin=await context.newPage(),c=target.credentials;
+ await admin.goto(target.admin+'/login');await admin.locator('[name=username]').fill(c.username);await admin.locator('[name=password]').fill(c.password);await admin.getByRole('button',{name:'登录',exact:true}).click();
+ // New GUI contract (P0307 module pages): the one-time permit is issued from the
+ // dedicated UUID form on the sessions module, not from a per-row input.
+ await admin.goto(target.admin+'/studies/'+config.study_id+'/sessions');
+ const permit_form=admin.locator('form[data-recover-uuid-form="1"]');
+ await permit_form.locator('[name=session_id]').fill(id);await permit_form.getByRole('button',{name:'签发一次性恢复许可'}).click();
  const permit=(await admin.locator('.notice').textContent()).split('许可：')[1].trim();
  await expect(page.evaluate(id=>client.recover(id,'invalid-synthetic-permit'),id)).rejects.toThrow();
  expect(await page.evaluate(async id=>(await client.get(id)).paused,id)).toBe(true);
@@ -118,13 +125,16 @@ test('expired finished Web queue reauthenticates for data only and cleans after 
  await setup(page);
  const id=await page.evaluate(async payload=>{client.record('exp.rt',payload,{id:'rt',version:'1'});await client.commit({version:1,strategy:'trial_boundary_v1',dependencies:[],next_trial:1});await client.finish();const s=await client.get(client.id);await client.request(s.config,`/v1/participant/sessions/${s.id}/completion`,s.completion,s.context.token);return client.id},payload);
  await page.evaluate(()=>client.mutate(store=>{const r=store.get(client.id);r.onsuccess=()=>{const s=r.result;s.paused=true;s.attempts=32;s.retryAt=Number.MAX_SAFE_INTEGER;store.put(s)}}));
- execFileSync('.venv/bin/python',['-c','import sqlite3,sys;c=sqlite3.connect("local_data/gep.sqlite3");c.execute("update core_session set expires_at=? where id=?",["2000-01-01 00:00:00",sys.argv[1].replace("-","")]);c.commit()',id]);
+ if(!target.db)throw new Error('GEP_ISO_DB is required for the expiry check');
+ execFileSync('.venv/bin/python',['-c','import sqlite3,sys;c=sqlite3.connect(sys.argv[2]);c.execute("update core_session set expires_at=? where id=?",["2000-01-01 00:00:00",sys.argv[1].replace("-","")]);c.commit()',id,target.db]);
  await page.evaluate(()=>client.close());await page.reload();
  await page.evaluate(async config=>{const {GEC}=await import('/sdk.js');window.client=new GEC(config);await client.prepare();clearInterval(client.timer)},config);
  await expect(page.evaluate(()=>client.recovery_export())).rejects.toThrow('recovery_export_unavailable');
- const admin=await context.newPage(),c=JSON.parse(fs.readFileSync('local_data/dev_credentials.json','utf8'));
- await admin.goto('http://admin.localhost:8000/login');await admin.locator('[name=username]').fill(c.username);await admin.locator('[name=password]').fill(c.password);await admin.getByRole('button',{name:'登录',exact:true}).click();
- await admin.goto('http://admin.localhost:8000/studies/'+config.study_id+'/sessions');await admin.locator('[name=session_id]').fill(id);await admin.getByRole('button',{name:'签发一次性恢复许可'}).click();
+ const admin=await context.newPage(),c=target.credentials;
+ await admin.goto(target.admin+'/login');await admin.locator('[name=username]').fill(c.username);await admin.locator('[name=password]').fill(c.password);await admin.getByRole('button',{name:'登录',exact:true}).click();
+ await admin.goto(target.admin+'/studies/'+config.study_id+'/sessions');
+ const permit_form=admin.locator('form[data-recover-uuid-form="1"]');
+ await permit_form.locator('[name=session_id]').fill(id);await permit_form.getByRole('button',{name:'签发一次性恢复许可'}).click();
  const permit=(await admin.locator('.notice').textContent()).split('许可：')[1].trim();
  await expect(page.evaluate(id=>client.recover(id,'invalid-synthetic-permit'),id)).rejects.toThrow();
  expect(await page.evaluate(async id=>(await client.get(id)).paused,id)).toBe(true);

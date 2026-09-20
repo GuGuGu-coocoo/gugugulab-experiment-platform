@@ -74,6 +74,11 @@ async function createStudy(page, spec) {
   await page.goto(job.admin_url + '/');
   await page.locator('[name=title]').fill(spec.title);
   await page.getByRole('button', {name: '创建', exact: true}).click();
+  // New GUI contract (P0307 module pages): policy, roster, builds, recruitment
+  // and current release live on separate module pages of the same study.
+  const study_url = page.url();
+  const study_id = study_url.split('/').pop();
+  await page.goto(study_url + '/participation');
   await page.locator('[name=mode]').selectOption(spec.mode);
   await page.locator('[name=max_sessions]').fill(String(spec.max_sessions));
   await page.getByRole('button', {name: '保存政策'}).click();
@@ -82,9 +87,12 @@ async function createStudy(page, spec) {
     await page.getByRole('button', {name: '导入名单'}).click();
     await page.locator('.notice').waitFor({timeout: 15000});
   }
+  await page.goto(study_url + '/builds');
   if (spec.upload_web) {
-    await page.locator('[name=package]').setInputFiles(spec.upload_web);
-    await page.getByRole('button', {name: '上传并验证'}).click();
+    // The builds page carries a native archive form and a web form; both inputs
+    // are named "package", so the web form is addressed by its own id.
+    await page.locator('#package-upload input[name=package]').setInputFiles(spec.upload_web);
+    await page.locator('#package-upload').getByRole('button', {name: '上传并验证'}).click();
     await page.getByRole('button', {name: '隔离预览（仅本地保存）'}).waitFor({timeout: 120000});
   }
   if (spec.native_descriptor) {
@@ -95,6 +103,7 @@ async function createStudy(page, spec) {
     await page.locator('article', {hasText: platform}).getByRole('button', {name: '批准合成发行'}).click();
     await page.waitForLoadState('load');
   }
+  await page.goto(study_url + '/recruitment');
   const releases = await releaseMap(page);
   if (spec.current === 'web') {
     await page.locator(`[data-release-option="${releases.web}"]`).check();
@@ -106,8 +115,6 @@ async function createStudy(page, spec) {
     page.locator('[name=state]').selectOption('open'),
   ]);
   await page.waitForLoadState('load');
-  const study_url = page.url();
-  const study_id = study_url.split('/').pop();
   const config_response = await page.context().request.get(`${job.admin_url}/releases/${releases.native || releases.web}/config`);
   const connection = await config_response.json();
   const config_path = path.join(job.run_dir, `connection_${spec.key}.json`);
@@ -199,8 +206,10 @@ async function holdAdmission(page) {
   return () => release();
 }
 async function issueTicket(page, study_url, session_id, button) {
-  await page.goto(study_url);
-  const form = page.locator(`form:has(button:text("${button}"))`);
+  // New GUI contract (P0307 module pages): the recovery code and the one-time
+  // permit are issued from the dedicated UUID form on the sessions module.
+  await page.goto(study_url + '/sessions');
+  const form = page.locator('form[data-recover-uuid-form="1"]');
   await form.locator('[name=session_id]').fill(session_id);
   await form.getByRole('button', {name: button}).click();
   const notice = await page.locator('.notice').textContent();
@@ -453,9 +462,12 @@ async function webNamedDataOnly(context, page, url) {
 }
 
 async function exportJsonl(page, study, out) {
-  await page.goto(study.study_url);
-  await page.getByRole('button', {name: '创建 JSONL 固定快照'}).click();
-  const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('link', {name: '下载 JSONL'}).click()]);
+  // New GUI contract (P0307 module pages): exports live on the /exports module.
+  await page.goto(study.study_url + '/exports');
+  await page.locator('#export-form').getByRole('button', {name: '创建 JSONL 固定快照'}).click();
+  const link = page.locator('#export-result').getByRole('link', {name: '下载 JSONL'});
+  await link.waitFor({timeout: 30000});
+  const [download] = await Promise.all([page.waitForEvent('download'), link.click()]);
   await download.saveAs(out);
   return out;
 }

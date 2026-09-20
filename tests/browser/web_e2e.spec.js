@@ -21,8 +21,11 @@ test('real Godot Web input through IndexedDB API database and authorized export'
  const expected=saved.records;
  await context.setOffline(false);await expect.poll(async()=>{const s=(await rows(page)).find(x=>x.id===saved.id);return s?.kind},{timeout:15000}).toBe('cleaned');
  const c=target_config.credentials;await page.goto(target_config.admin+'/login');await page.locator('[name=username]').fill(c.username);await page.locator('[name=password]').fill(c.password);await page.getByRole('button',{name:'登录',exact:true}).click();
- await page.goto(target_config.study);await page.getByRole('button',{name:'创建 JSONL 固定快照'}).click();
- const [download]=await Promise.all([page.waitForEvent('download'),page.getByRole('link',{name:'下载 JSONL'}).click()]);const stream=await download.createReadStream();let raw='';for await(const chunk of stream)raw+=chunk;
+ // New GUI contract (P0307 module pages): exports live on the study's /exports
+ // module and the snapshot form creates the JSONL download link in-place.
+ await page.goto(target_config.study+'/exports');await page.locator('#export-form').getByRole('button',{name:'创建 JSONL 固定快照'}).click();
+ const download_link=page.locator('#export-result').getByRole('link',{name:'下载 JSONL'});await download_link.waitFor({timeout:30000});
+ const [download]=await Promise.all([page.waitForEvent('download'),download_link.click()]);const stream=await download.createReadStream();let raw='';for await(const chunk of stream)raw+=chunk;
  const actual=raw.trim().split('\n').map(JSON.parse).map(r=>r.record).filter(e=>e.session_id===saved.id);
  expect(actual.sort((a,b)=>a.sequence-b.sequence)).toEqual(expected.sort((a,b)=>a.sequence-b.sequence));
  expect(actual.filter(e=>e.event_type==='exp.rt').map(e=>e.payload.choice)).toEqual(['left','right']);

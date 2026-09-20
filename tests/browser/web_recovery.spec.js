@@ -14,7 +14,12 @@ test('real Godot Web resumes original session at complete trial with new epoch',
  const url=target_config.run;await page.goto(url);await expect(page.locator('#status')).toBeHidden({timeout:30000});await page.locator('#gec-start').click();await expect(page.locator('#canvas')).toHaveAttribute('aria-label',/Trial [12]|第 [12] 次/);await page.keyboard.press('ArrowLeft');
  await expect.poll(async()=>{const s=(await read(page)).find(s=>s.kind==='session');return s?.checkpoint?.next_trial}).toBe(1);
  const saved=(await read(page)).find(s=>s.kind==='session');await page.reload();await expect(page.locator('#status')).toBeHidden({timeout:30000});
- const admin=await context.newPage();const c=target_config.credentials;await admin.goto(target_config.admin+'/login');await admin.locator('[name=username]').fill(c.username);await admin.locator('[name=password]').fill(c.password);await admin.getByRole('button',{name:'登录',exact:true}).click();await admin.goto(target_config.study);await admin.locator('[name=session_id]').fill(saved.id);await admin.getByRole('button',{name:'签发一次性恢复许可'}).click();const permit=(await admin.locator('.notice').textContent()).split('许可：')[1].trim();
+ const admin=await context.newPage();const c=target_config.credentials;await admin.goto(target_config.admin+'/login');await admin.locator('[name=username]').fill(c.username);await admin.locator('[name=password]').fill(c.password);await admin.getByRole('button',{name:'登录',exact:true}).click();
+ // New GUI contract (P0307 module pages): sessions and the UUID permit form live
+ // on the study's /sessions module, not on the study overview page.
+ await admin.goto(target_config.study+'/sessions');
+ const permit_form=admin.locator('form[data-recover-uuid-form="1"]');
+ await permit_form.locator('[name=session_id]').fill(saved.id);await permit_form.getByRole('button',{name:'签发一次性恢复许可'}).click();const permit=(await admin.locator('.notice').textContent()).split('许可：')[1].trim();
  await page.bringToFront();
  await context.grantPermissions(['clipboard-read','clipboard-write']);
  await page.locator('#gec-shell summary').click();

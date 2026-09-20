@@ -54,14 +54,18 @@ async function packageFlow(page, context) {
   await page.goto(job.admin_url + '/');
   await page.locator('[name=title]').fill(job.title);
   await page.getByRole('button', {name: '创建', exact: true}).click();
-  await page.locator('[name=mode]').selectOption('anonymous');
-  await page.locator('[name=max_sessions]').fill(String(job.max_sessions));
-  await page.getByRole('button', {name: '保存政策'}).click();
+  // New GUI contract (P0307 module pages): policy, builds, recruitment and
+  // exports are separate module pages of the same study.
   const study_url = page.url();
   const study_id = study_url.split('/').pop();
   check(/\/studies\/[0-9a-f-]{36}$/.test(study_url), 'study created through the GUI', study_url);
+  await page.goto(study_url + '/participation');
+  await page.locator('[name=mode]').selectOption('anonymous');
+  await page.locator('[name=max_sessions]').fill(String(job.max_sessions));
+  await page.getByRole('button', {name: '保存政策'}).click();
 
   // 2. Native descriptor, then the actual program archive.
+  await page.goto(study_url + '/builds');
   await page.locator('[name=descriptor]').fill(fs.readFileSync(job.descriptor, 'utf8'));
   await page.getByRole('button', {name: '登记不可变构建'}).click();
   await page.waitForLoadState('load');
@@ -70,7 +74,9 @@ async function packageFlow(page, context) {
   check(true, 'native descriptor registered through the GUI');
 
   await page.locator('#native-package-upload [name=package]').setInputFiles(job.program);
-  await page.getByRole('button', {name: '上传并绑定程序包'}).click();
+  // Both build forms submit with the same label; the native form is addressed
+  // by its own id (P0307 GUI).
+  await page.locator('#native-package-upload').getByRole('button', {name: '上传并验证'}).click();
   await page.waitForLoadState('load');
   await page.locator('article p', {hasText: '已绑定程序包'}).first().waitFor({timeout: 300000});
   check(true, 'native program archive bound through the GUI upload form', fs.statSync(job.program).size);
@@ -113,6 +119,7 @@ async function packageFlow(page, context) {
   }
 
   // 6. Open recruitment so the downloaded package can admit.
+  await page.goto(study_url + '/recruitment');
   await Promise.all([page.waitForResponse(r => r.url().includes('/studies/') && r.request().method() === 'POST'),
                      page.locator('[name=state]').selectOption('open')]);
   await page.waitForLoadState('load');
@@ -146,32 +153,65 @@ async function packageFlow(page, context) {
   await page.goto(study_url);
 
   // 7. Invite a second researcher holding build scope, then revoke it.
-  await page.goto(study_url);
-  await page.locator('[name=username]').fill(job.member.username);
-  await page.locator('[name=actions][value="study.view"]').check();
-  await page.locator('[name=actions][value="build.upload"]').check();
-  await page.getByRole('button', {name: '创建 24 小时邀请'}).click();
+  // 7. Invite a second researcher through /users, then grant exactly the two
+  // study actions through the permission matrix (preview + re-authenticated
+  // confirm). New GUI contract (P0307): invitations and the matrix live on
+  // /users; the old study-page invitation form no longer exists.
+  await page.goto(job.admin_url + '/users');
+  const inviteForm = page.locator('form:has(input[name=op][value=invite_account])');
+  await inviteForm.locator('[name=username]').fill(job.member.username);
+  await inviteForm.locator('[name=password]').fill(job.credentials.password);
+  await inviteForm.getByRole('button', {name: '生成邀请（本人设置密码）'}).click();
   await page.waitForLoadState('load');
-  const notice = await page.locator('p.notice').first().textContent();
-  const token = (notice || '').split('：').pop().trim();
+  const invitation = page.locator('[data-one-time-invitation]').first();
+  await invitation.waitFor({timeout: 30000});
+  const invitationText = (await invitation.textContent()) || '';
+  const token = (invitationText.match(/token=([A-Za-z0-9_-]{16,})/) || [])[1] || '';
   check(token.length >= 20, 'invitation secret issued through the GUI', token.length);
 
   const memberContext = await context.browser().newContext({viewport: {width: 1100, height: 800}, acceptDownloads: true});
   const memberPage = await memberContext.newPage();
-  await memberPage.goto(job.admin_url + '/activate');
+  await memberPage.goto(job.admin_url + '/activate-account?token=' + token);
   await memberPage.locator('[name=token]').fill(token);
   await memberPage.locator('[name=password]').fill(job.member.password);
+  await memberPage.locator('[name=confirm]').fill(job.member.password);
   await memberPage.getByRole('button', {name: '激活账号'}).click();
   await login(memberPage, job.member);
+
+  async function matrixChange({grant}) {
+    await page.goto(job.admin_url + '/users');
+    const row = page.locator('tr[data-matrix-row]').filter({hasText: job.member.username}).first();
+    await row.waitFor({timeout: 30000});
+    // Explicit actions live inside a collapsed <details>; expand it like a user.
+    const expand = row.locator('details[data-matrix-expand]');
+    if (await expand.count()) await expand.evaluate(element => { element.open = true; });
+    // study.view is the visibility checkbox itself; the explicit-action list
+    // contains only the remaining actions (permissions.matrix_rows).
+    const visibility = row.locator('input[name=visibility]');
+    const upload = row.locator('input[name="action:build.upload"]');
+    if (grant) {
+      await visibility.check();
+      await upload.check();
+    } else {
+      await visibility.uncheck();
+      await upload.uncheck();
+    }
+    await row.getByRole('button', {name: '预览更改'}).click();
+    await page.waitForLoadState('load');
+    const confirm = page.locator('section[data-preview="matrix"]');
+    await confirm.locator('[name=password]').fill(job.credentials.password);
+    await confirm.getByRole('button', {name: /确认执行/}).click();
+    await page.waitForLoadState('load');
+  }
+
+  await matrixChange({grant: true});
   const memberDownload = await memberContext.request.get(job.admin_url + release_url);
   check(memberDownload.status() === 200, 'invited member with build scope downloads the artifact', memberDownload.status());
   const configMember = SIDECAR_MEMBERS.find(member => member.endsWith('connection.json')) || 'connection.json';
   const memberSidecar = await memberContext.request.get(`${job.admin_url}${release_url}/${configMember}`);
   check(memberSidecar.status() === 200, 'invited member downloads the sidecar', memberSidecar.status());
 
-  await page.goto(study_url);
-  await page.locator('form', {hasText: job.member.username}).first().getByRole('button', {name: '撤销研究权限'}).click();
-  await page.waitForLoadState('load');
+  await matrixChange({grant: false});
   const revokedDownload = await memberContext.request.get(job.admin_url + release_url);
   const revokedSidecar = await memberContext.request.get(`${job.admin_url}${release_url}/${configMember}`);
   check(revokedDownload.status() === 403, 'revoked member is denied the artifact', revokedDownload.status());
@@ -185,10 +225,12 @@ async function packageFlow(page, context) {
 }
 
 async function exportJsonl(page) {
-  await page.goto(job.study_url);
-  await page.getByRole('button', {name: '创建 JSONL 固定快照'}).click();
-  const [download] = await Promise.all([page.waitForEvent('download'),
-                                        page.getByRole('link', {name: '下载 JSONL'}).click()]);
+  // New GUI contract (P0307 module pages): exports live on the /exports module.
+  await page.goto(job.study_url + '/exports');
+  await page.locator('#export-form').getByRole('button', {name: '创建 JSONL 固定快照'}).click();
+  const exportLink = page.locator('#export-result').getByRole('link', {name: '下载 JSONL'});
+  await exportLink.waitFor({timeout: 30000});
+  const [download] = await Promise.all([page.waitForEvent('download'), exportLink.click()]);
   await download.saveAs(job.out);
   check(fs.statSync(job.out).size > 0, 'authorized JSONL export produced through the GUI', fs.statSync(job.out).size);
   return job.out;

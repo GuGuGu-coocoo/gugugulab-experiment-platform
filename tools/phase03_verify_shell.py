@@ -79,10 +79,13 @@ class LineReader:
 
 class Verify:
     def __init__(self, root: Path):
-        self.root = root
-        self.data = root / "data"
-        self.evidence = root / "evidence"
-        self.native_root = root / "native"
+        # Absolute paths only: the exported program is launched with a config
+        # path, and a relative evidence root would make it unreadable to the
+        # child process (which resolves its own working directory).
+        self.root = Path(root).resolve()
+        self.data = self.root / "data"
+        self.evidence = self.root / "evidence"
+        self.native_root = self.root / "native"
         self.db_path = self.data / "gep.sqlite3"
         self.owner_password = secrets.token_urlsafe(24)
         self.instance_id = str(uuid.uuid4())
@@ -181,8 +184,10 @@ class Verify:
             with os.fdopen(fd, "w") as stream:
                 stream.write(value)
 
-    def start_server(self):
-        self.port = self.free_port()
+    def start_server(self, port=None):
+        # An explicit port lets a prepared environment keep its frozen loopback
+        # endpoint (designer readiness); the default still picks a fresh >= 8040.
+        self.port = int(port) if port else self.free_port()
         log = open(self.root / "gunicorn.log", "w")
         self.server = subprocess.Popen(
             [str(ROOT / ".venv" / "bin" / "gunicorn"), "gep.wsgi:application", "--bind", f"127.0.0.1:{self.port}",
@@ -264,9 +269,9 @@ class Verify:
             raise VerificationError(f"native run timed out: {args}\n{reader.text()[-2000:]}")
         return code, reader.text()
 
-    def native_store(self, storage):
+    def native_store(self, storage, timeout=20):
         path = storage / "queue.sqlite"
-        deadline = time.time() + 20
+        deadline = time.time() + timeout
         while time.time() < deadline:
             try:
                 connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=20)
@@ -286,14 +291,22 @@ class Verify:
         instead of through an unflushed marker line.
         """
         deadline = time.time() + timeout
+        last_error = None
         while time.time() < deadline:
-            record = self.live_session(storage)
+            try:
+                record = self.live_session(storage)
+            except VerificationError as error:
+                # Godot may still be starting (extension load, slow disk); a not
+                # yet readable store is retried until the deadline, and the exact
+                # reason plus the program output is reported if it never appears.
+                last_error, record = error, None
             if record and record.get("checkpoint") and int(record["checkpoint"].get("next_trial", 0)) >= 1:
                 return record
             if proc.poll() is not None:
                 raise VerificationError(f"native program exited before the trial boundary (exit {proc.returncode}): {reader.text()[-1000:]}")
             time.sleep(0.4)
-        raise VerificationError(f"native trial boundary not observed within {timeout}s: {reader.text()[-1000:]}")
+        raise VerificationError(f"native trial boundary not observed within {timeout}s ({last_error}): "
+                                f"{reader.text()[-1000:]}")
 
     def native_partial(self, storage, config, args, timeout=90):
         proc, reader = self.native_launch(storage, config, args)
@@ -434,8 +447,14 @@ class Verify:
         proc, reader = self.native_launch(storage, config, args)
         try:
             deadline = time.time() + timeout
+            last_error = None
             while time.time() < deadline:
-                record = self.live_session(storage)
+                try:
+                    record = self.live_session(storage)
+                except VerificationError as error:
+                    # Slow first start under load must not be reported as a
+                    # missing store; retry until the deadline with the reason.
+                    last_error, record = error, None
                 if record and record.get("completion") and len(record.get("records", [])) == 4:
                     if require_pending:
                         if record.get("pending"):
@@ -445,7 +464,8 @@ class Verify:
                 if proc.poll() is not None:
                     raise VerificationError(f"native program exited before completion: {reader.text()[-2000:]}")
                 time.sleep(0.4)
-            raise VerificationError(f"native completion not observed within {timeout}s: {reader.text()[-2000:]}")
+            raise VerificationError(f"native completion not observed within {timeout}s ({last_error}): "
+                                    f"{reader.text()[-2000:]}")
         finally:
             proc.send_signal(signal.SIGTERM)
             try:

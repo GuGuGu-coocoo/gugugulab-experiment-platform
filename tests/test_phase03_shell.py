@@ -306,6 +306,31 @@ def test_public_config_endpoint_keeps_frozen_mode_after_policy_change():
     assert 'password_hash' not in serialized and 'roster' not in serialized and 'participant' not in serialized
 
 
+def test_verify_init_derives_every_path_from_the_resolved_root(tmp_path, monkeypatch):
+    """A relative evidence root must not leak into the child-facing paths.
+
+    Old behavior: ``Verify.__init__`` resolved ``self.root`` but built ``data`` /
+    ``evidence`` / ``native`` from the original argument, so a relative root made
+    the exported program's ``--config`` path unreadable (the P0308 shell
+    regression). Every derived path now comes from the resolved root.
+    """
+    import sys as _sys
+
+    if str(ROOT / "tools") not in _sys.path:
+        _sys.path.insert(0, str(ROOT / "tools"))
+    import phase03_verify_shell as shell_verify
+
+    monkeypatch.chdir(tmp_path)
+    verify = shell_verify.Verify(Path("relative-root"))
+    assert verify.root == (tmp_path / "relative-root").resolve()
+    assert verify.data == verify.root / "data"
+    assert verify.evidence == verify.root / "evidence"
+    assert verify.native_root == verify.root / "native"
+    assert verify.db_path == verify.root / "data" / "gep.sqlite3"
+    for path in (verify.data, verify.evidence, verify.native_root):
+        assert path.is_absolute()
+
+
 def test_headless_shell_contract_harness():
     """The real Control-based shell is driven through its own fields and buttons."""
     result = subprocess.run([_godot(), '--headless', '--path', str(ROOT / 'examples' / 'synthetic_experiment'),
