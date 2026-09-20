@@ -34,6 +34,18 @@ class Study(Identified):
     mode = models.CharField(max_length=16, default='anonymous')
     recruitment = models.CharField(max_length=16, default='paused')
     max_sessions = models.PositiveIntegerField(default=1)
+    # Explicit publication policy. Public listing is a separate researcher
+    # decision, never inferred from mode or recruitment, and the current release
+    # is nullable on purpose: legacy studies get no guessed release.
+    public = models.BooleanField(default=False)
+    public_summary = models.CharField(max_length=280, blank=True)
+    public_duration = models.CharField(max_length=80, blank=True)
+    public_device_requirements = models.CharField(max_length=160, blank=True)
+    show_closed_summary = models.BooleanField(default=False)
+    current_release = models.ForeignKey('Release', null=True, blank=True, on_delete=models.PROTECT, related_name='+')
+    # Publication revision: every explicit policy or current-release change bumps
+    # it, and a submission carrying a stale revision is refused.
+    revision = models.PositiveIntegerField(default=0)
 
 class Grant(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)

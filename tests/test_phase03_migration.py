@@ -77,6 +77,14 @@ def test_legacy_fixture_migration_is_additive_and_preserves_references():
     assert after['audit'] == before['audit'] and before['audit']['count'] == 1
     assert after['counts']['core_study'] == 1 and after['counts']['core_event'] == 1 and after['counts']['core_export'] == 1
 
+    # New 03C contract: publication columns are added private with a NULL current
+    # release, while the legacy release config bytes and session bindings survive.
+    assert before['publication'] is None
+    assert after['publication'] == [{'study': study.pk.hex, 'public': False,
+                                     'show_closed_summary': False, 'revision': 0, 'current_release': None}]
+    assert after['release_configs'] == before['release_configs']
+    assert after['session_bindings'] == before['session_bindings'] == {session.pk.hex: release.pk.hex}
+
     # Owner stays the authoritative pointer; nobody is promoted by the data migration.
     assert after['account']['instance'] == before['account']['instance'] == {'id': 1, 'instance_id': instance.instance_id.hex, 'owner_id': owner.pk}
     profiles = {row[0]: row[1:] for row in after['account']['profiles']}

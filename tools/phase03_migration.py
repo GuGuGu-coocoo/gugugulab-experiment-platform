@@ -2,9 +2,11 @@
 
 Reads a protected synthetic volume read-only, copies it with the SQLite backup
 API into a NEW task folder, copies the instance/secret privately, migrates only
-the copy, and proves the source hash, schema/content references, grant matrix
-and instance owner are unchanged. Refuses to overwrite any existing destination
-and never migrates or writes the source volume.
+the copy, and proves the source hash, schema/content references, grant matrix,
+legacy session/release bindings, release-config bytes and instance owner are
+unchanged. 03C studies must come out of the migration private with a NULL
+current release and no guessed release. Refuses to overwrite any existing
+destination and never migrates or writes the source volume.
 """
 import argparse
 import hashlib
@@ -18,7 +20,9 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SERVER_DIR = PROJECT_ROOT / 'server'
-REQUIRED_MIGRATION = ('core', '0004_account_governance')
+REQUIRED_MIGRATION = ('core', '0006_study_publication')
+PUBLICATION_COLUMNS = ('public', 'public_summary', 'public_duration', 'public_device_requirements',
+                       'show_closed_summary', 'current_release_id', 'revision')
 REFERENCE_TABLES = {
     'core_study': ['id', 'title', 'mode', 'recruitment', 'max_sessions'],
     'core_build': ['id', 'study_id', 'descriptor', 'digest', 'package_path'],
@@ -51,6 +55,40 @@ def connect_readonly(path):
 
 def table_exists(connection, name):
     return connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
+
+
+def column_names(connection, table):
+    if not table_exists(connection, table):
+        return set()
+    return {row[1] for row in connection.execute(f'PRAGMA table_info({table})')}
+
+
+def study_publication(connection, normalize=True):
+    """03C publication state per study, or None while the columns do not exist yet."""
+    if not set(PUBLICATION_COLUMNS) <= column_names(connection, 'core_study'):
+        return None
+    rows = []
+    for study_id, public, show_closed, revision, current_release in connection.execute(
+            'SELECT id, public, show_closed_summary, revision, current_release_id FROM core_study ORDER BY id'):
+        rows.append({'study': str(study_id), 'public': bool(public) if normalize else public,
+                     'show_closed_summary': bool(show_closed) if normalize else show_closed,
+                     'revision': revision, 'current_release': str(current_release) if current_release else None})
+    return rows
+
+
+def release_config_digests(connection):
+    """Release id -> SHA-256 of the stored config JSON text (byte structure)."""
+    if not table_exists(connection, 'core_release'):
+        return {}
+    return {str(row[0]): hashlib.sha256((row[1] or '').encode('utf-8')).hexdigest()
+            for row in connection.execute('SELECT id, config FROM core_release ORDER BY id')}
+
+
+def session_release_bindings(connection):
+    """Session id -> release id, the frozen legacy direct-URL binding."""
+    if not table_exists(connection, 'core_session'):
+        return {}
+    return {str(row[0]): str(row[1]) for row in connection.execute('SELECT id, release_id FROM core_session ORDER BY id')}
 
 
 def reference_digests(connection):
@@ -117,6 +155,9 @@ def inspect_sqlite(connection):
         'account': account_summary(connection),
         'audit': audit_summary(connection),
         'migrations': migrations(connection),
+        'publication': study_publication(connection),
+        'release_configs': release_config_digests(connection),
+        'session_bindings': session_release_bindings(connection),
     }
     data['events_exports'] = {
         'event_count': digests.get('core_event', {}).get('count', 0),
@@ -212,6 +253,13 @@ def rehearse(source, evidence_root, destination=None, label='rehearsal'):
     profiles_backfilled = (copy_after['account']['profiles'] and
                            len(copy_after['account']['profiles']) == copy_after['account']['user_count'] and
                            all(row[1] == 'user' for row in copy_after['account']['profiles']))
+    publication_added = copy_before['publication'] is None and copy_after['publication'] is not None
+    publication_unchanged = (copy_before['publication'] is not None
+                             and copy_before['publication'] == copy_after['publication'])
+    publication_defaults = bool(publication_added) and all(
+        row['public'] is False and row['current_release'] is None
+        and row['show_closed_summary'] is False and row['revision'] == 0
+        for row in copy_after['publication'])
     checks = {
         'source_hash_unchanged': source_digest_before == source_digest_after,
         'copy_matches_source': copy_matches_source,
@@ -222,6 +270,10 @@ def rehearse(source, evidence_root, destination=None, label='rehearsal'):
         'reference_digests_unchanged': digests_equal,
         'counts_unchanged': copy_before['counts'] == copy_after['counts'],
         'grants_unchanged': copy_before['grants'] == copy_after['grants'],
+        'release_configs_unchanged': copy_before['release_configs'] == copy_after['release_configs'],
+        'session_release_bindings_unchanged': copy_before['session_bindings'] == copy_after['session_bindings'],
+        'publication_added_or_unchanged': publication_added or publication_unchanged,
+        'publication_defaults_private_null': publication_defaults,
         'instance_owner_unchanged': (copy_before['account']['instance'] == copy_after['account']['instance']
                                      and copy_before['account']['users'] == copy_after['account']['users']),
         'ordinary_profiles_backfilled': bool(profiles_backfilled),
@@ -251,6 +303,9 @@ def rehearse(source, evidence_root, destination=None, label='rehearsal'):
     _write_json(destination / 'contradictions_after.json', copy_after['contradictions'])
     _write_json(destination / 'migrations_before.json', copy_before['migrations'])
     _write_json(destination / 'migrations_after.json', copy_after['migrations'])
+    _write_json(destination / 'publication_after.json', copy_after['publication'])
+    _write_json(destination / 'release_config_digests_after.json', copy_after['release_configs'])
+    _write_json(destination / 'session_release_bindings_after.json', copy_after['session_bindings'])
     return report
 
 
@@ -272,6 +327,7 @@ def main(argv=None):
     summary = {'verdict': report['verdict'], 'destination': report['rehearsal']['destination'],
                'source_digest_before': report['source_digest']['before'], 'source_digest_after': report['source_digest']['after'],
                'counts_after': report['after']['counts'], 'checks': report['checks'],
+               'publication_after': report['after']['publication'],
                'contradictions_before': report['contradictions_before'], 'contradictions_after': report['contradictions_after']}
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0 if report['verdict'] == 'ok' else 1

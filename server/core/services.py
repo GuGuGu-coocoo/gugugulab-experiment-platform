@@ -7,7 +7,7 @@ from django.contrib.auth.hashers import check_password
 from django.db import transaction, IntegrityError
 from django.utils import timezone
 from jsonschema import Draft202012Validator
-from .models import Instance, Participant, Session, Event
+from .models import Instance, Participant, Session, Event, Release, Study
 from .protocol import require, Rejected, uuid_text, equal, validate_tree, MAX_BATCH, MAX_EVENTS, PROTOCOL
 
 
@@ -24,39 +24,144 @@ def context(session):
     return {'protocol_version': PROTOCOL, 'instance_id': str(Instance.objects.get(pk=1).instance_id), 'study_id': str(release.study_id), 'release_id': str(release.id), 'build_id': str(release.build_id), 'session_id': str(session.id), 'participant_uuid': str(session.participant_id), 'participant_code': session.participant.code, 'config': release.config}
 
 
+def operation_binding(release, data):
+    """Canonical create-operation binding for a server-resolved release.
+
+    The release and build identity always come from the resolved release, so a
+    repeated stable-entry operation can be compared against its original stored
+    binding even after the study's current release moved. Explicit client
+    release/build/expected ids must agree with the resolved release.
+    """
+    binding = {'operation_id': data['operation_id'], 'instance_id': data['instance_id'],
+               'study_id': data['study_id'], 'release_id': str(release.id), 'build_id': str(release.build_id),
+               'participant_code': data.get('participant_code')}
+    require(binding['instance_id'] == str(Instance.objects.get(pk=1).instance_id), 'wrong_instance')
+    require(binding['study_id'] == str(release.study_id), 'wrong_binding')
+    require('release_id' not in data or data['release_id'] == str(release.id), 'wrong_binding')
+    require('build_id' not in data or data['build_id'] == str(release.build_id), 'wrong_binding')
+    require('expected_release_id' not in data or data['expected_release_id'] == str(release.id), 'wrong_binding')
+    return binding
+
+
 def admit(release, data):
+    """Admit one create operation for a server-resolved release.
+
+    Everything that decides admission -- the repeated-operation retry check, the
+    latest approval/recruitment state and the session write -- shares one
+    transaction, and the study row is locked while that state is read. A caller
+    that resolved or cached the release earlier therefore cannot admit under a
+    recruitment or approval state that a concurrent close already superseded.
+    """
     uuid_text(data['operation_id'])
     if 'expected_version' in data:
         require(data['expected_version']==release.build.descriptor.get('version'),'wrong_program_version')
     proof = data['proof']
     require(isinstance(proof, str) and 43 <= len(proof) <= 128, 'invalid_proof')
-    binding = {k: data[k] for k in ('operation_id', 'instance_id', 'study_id', 'release_id', 'build_id')}
-    binding['participant_code'] = data.get('participant_code')
-    require(binding['instance_id'] == str(Instance.objects.get(pk=1).instance_id), 'wrong_instance')
-    require(binding['study_id'] == str(release.study_id) and binding['release_id'] == str(release.id) and binding['build_id'] == str(release.build_id), 'wrong_binding')
+    binding = operation_binding(release, data)
     with transaction.atomic():
-        old = Session.objects.filter(operation=data['operation_id']).first()
-        if old:
-            require(hmac.compare_digest(old.proof_hash, digest(proof)) and equal(old.request, binding), 'operation_conflict', 409)
-            require(not old.revoked and old.expires_at > timezone.now(), 'session_inactive', 403)
-            return old, token_for(old)
-        study = release.study
-        require(release.approved and study.recruitment == 'open', 'admission_closed', 403)
-        if study.mode == 'anonymous':
-            require(data.get('participant_code') is None, 'unexpected_code')
-            participant = Participant.objects.create(study=study)
-        else:
-            participant = Participant.objects.filter(study=study, code=data.get('participant_code'), active=True).first()
-            require(participant is not None, 'admission_denied', 403)
-            require(participant.expires_at is None or participant.expires_at > timezone.now(), 'admission_denied', 403)
-            if study.mode == 'password':
-                require(check_password(data.get('password', ''), participant.password_hash), 'admission_denied', 403)
-            require(Session.objects.filter(participant=participant).count() < study.max_sessions, 'participation_limit', 403)
-        session = Session(participant=participant, release=release, operation=data['operation_id'], proof_hash=digest(proof), request=binding, expires_at=timezone.now()+timedelta(days=7))
-        token = token_for(session)
-        session.token_hash = digest(token)
-        session.save()
+        old = _operation_session(data['operation_id'])
+        if old is not None:
+            return _resume(old, data, proof)
+        return _create_session(release, data, binding, proof)
+
+
+def _operation_session(operation_id):
+    return Session.objects.select_related('release__build').filter(operation=operation_id).first()
+
+
+def _resume(old, data, proof):
+    """Repeated create operation: the original proof and binding win over any
+    newer current-release policy, and a retry never creates a second session."""
+    require(hmac.compare_digest(old.proof_hash, digest(proof)) and equal(old.request, operation_binding(old.release, data)), 'operation_conflict', 409)
+    require(not old.revoked and old.expires_at > timezone.now(), 'session_inactive', 403)
+    return old, token_for(old)
+
+
+def _create_session(release, data, binding, proof):
+    """Write the first session for an operation under the study row lock."""
+    study = Study.objects.select_for_update().get(pk=release.study_id)
+    release = Release.objects.select_related('build').get(pk=release.pk)
+    require(release.approved and study.recruitment == 'open', 'admission_closed', 403)
+    if study.mode == 'anonymous':
+        require(data.get('participant_code') is None, 'unexpected_code')
+        participant = Participant.objects.create(study=study)
+    else:
+        participant = Participant.objects.filter(study=study, code=data.get('participant_code'), active=True).first()
+        require(participant is not None, 'admission_denied', 403)
+        require(participant.expires_at is None or participant.expires_at > timezone.now(), 'admission_denied', 403)
+        if study.mode == 'password':
+            require(check_password(data.get('password', ''), participant.password_hash), 'admission_denied', 403)
+        require(Session.objects.filter(participant=participant).count() < study.max_sessions, 'participation_limit', 403)
+    session = Session(participant=participant, release=release, operation=data['operation_id'], proof_hash=digest(proof), request=binding, expires_at=timezone.now()+timedelta(days=7))
+    token = token_for(session)
+    session.token_hash = digest(token)
+    session.save()
     return session, token
+
+
+def _entry_fields(data):
+    """Validate the stable-entry fields and return the observed revision."""
+    require(all(key in data for key in ('study_id', 'expected_release_id', 'expected_revision')), 'entry_fields')
+    revision = data['expected_revision']
+    require(type(revision) in (int, float) and revision >= 0 and revision == int(revision), 'entry_fields')
+    return int(revision)
+
+
+def _entry_release(data, study, revision):
+    """Resolve the observed binding against a study row read in this transaction."""
+    release = study.current_release
+    require(release is not None, 'entry_closed', 409)
+    require(str(release.id) == str(data['expected_release_id']) and revision == study.revision, 'stale_entry', 409)
+    return release
+
+
+def current_entry_release(data):
+    """Resolve the study's explicit current release for a stable-entry request.
+
+    The client sends the release id and publication revision it observed when the
+    study entry page loaded. A mismatch fails closed with ``stale_entry`` so a
+    page loaded before a researcher switch is never silently retargeted; a study
+    without a current release does not open new participation through this path.
+    """
+    revision = _entry_fields(data)
+    with transaction.atomic():
+        study = Study.objects.select_for_update().select_related('current_release__build').get(pk=data['study_id'])
+        return _entry_release(data, study, revision)
+
+
+def admit_request(data):
+    """Resolve a new-session request and admit it in one atomic boundary.
+
+    Resolution precedence:
+
+    1. A repeated create operation is checked against its original proof and
+       binding *before* any current-release policy, so a retry after a switch
+       returns the original session (or ``operation_conflict``) instead of
+       creating a second session or failing stale.
+    2. A request carrying the stable-entry binding (``expected_release_id`` and
+       ``expected_revision``) is resolved against the study's current release and
+       publication revision inside this transaction, so a concurrent switch or a
+       close is serializable with the first admission. The binding takes
+       precedence over ``release_id`` because the platform bridge injects both
+       into the observed application context.
+    3. A request carrying only ``release_id`` uses the frozen legacy
+       direct-release admission contract; the release is never silently
+       redirected to the study's latest release.
+    """
+    uuid_text(data['operation_id'])
+    proof = data['proof']
+    require(isinstance(proof, str) and 43 <= len(proof) <= 128, 'invalid_proof')
+    with transaction.atomic():
+        old = _operation_session(data['operation_id'])
+        if old is not None:
+            return _resume(old, data, proof)
+        if 'release_id' in data and not ({'expected_release_id', 'expected_revision'} & set(data)):
+            release = Release.objects.select_related('study', 'build').get(pk=data['release_id'])
+        else:
+            revision = _entry_fields(data)
+            study = Study.objects.select_for_update().select_related('current_release__build').get(pk=data['study_id'])
+            release = _entry_release(data, study, revision)
+        return admit(release, data)
 
 
 def authorize_session(session, token):

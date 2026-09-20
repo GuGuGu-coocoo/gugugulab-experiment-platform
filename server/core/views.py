@@ -8,8 +8,8 @@ from django.views.decorators.csrf import csrf_exempt
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
 from .protocol import Rejected, require, parse
-from .models import Release, Session, Study, Event, Export
-from .services import admit, context, receive, finish, authorize_session, completion_status, recover
+from .models import Session, Study, Event, Export
+from .services import admit_request, context, receive, finish, authorize_session, completion_status, recover
 from .access import guard
 
 
@@ -42,8 +42,7 @@ def participant(request, session_id=None, action=None):
         data=parse(request.body)
         from .throttle import check
         check('admit:'+str(data.get('study_id'))+':'+str(data.get('participant_code',data.get('operation_id'))))
-        release=Release.objects.select_related('study','build').get(pk=data['release_id'])
-        session,token=admit(release,data)
+        session,token=admit_request(data)
         return JsonResponse(dict(context(session), token=token))
     if action=='recover':
         data=parse(request.body)

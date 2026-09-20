@@ -1,0 +1,135 @@
+"""Study publication policy and current-release selection (03C).
+
+Public listing and the current release are explicit researcher decisions:
+
+* a study is only listed when it is explicitly ``public``, recruiting is open
+  and the current release is approved and resource-located; mode and recruitment
+  never publish a study on their own;
+* the current release is only set to a same-study, approved release whose build
+  has a published package; the migration leaves it NULL and nothing guesses the
+  first or latest release;
+* every policy or current-release change runs in one transaction that locks the
+  study row, re-checks the actor's authority on the locked row, compares the
+  submitted publication revision, bumps it and writes a structured before/after
+  audit without secrets;
+* selecting a current release changes the target of *new* stable-entry sessions
+  only. Existing sessions, old run URLs, configs, exports and package bytes keep
+  their original binding and are never rewritten.
+"""
+from django.contrib.auth import get_user_model
+from django.db import transaction
+
+from .access import allowed, guard
+from .models import Audit, Release, Study
+from .protocol import require
+
+POLICY_FIELDS = ('public_summary', 'public_duration', 'public_device_requirements')
+POLICY_LIMITS = {'public_summary': 280, 'public_duration': 80, 'public_device_requirements': 160}
+POLICY_CHANGED = 'publication.policy_changed'
+RELEASE_CHANGED = 'publication.current_release_changed'
+SELECT_ACTIONS = ('study.configure', 'recruitment.manage')
+
+
+def _revision_matches(raw, current):
+    try:
+        return int(raw) == current
+    except (TypeError, ValueError):
+        return False
+
+
+def policy_state(study):
+    return {'public': study.public, 'public_summary': study.public_summary,
+            'public_duration': study.public_duration,
+            'public_device_requirements': study.public_device_requirements,
+            'show_closed_summary': study.show_closed_summary}
+
+
+def public_snapshot(study):
+    """Fields the public portal may render; never roster, history or policy ids."""
+    return {'title': study.title, 'summary': study.public_summary, 'duration': study.public_duration,
+            'device_requirements': study.public_device_requirements}
+
+
+def release_available(release):
+    """Approved release whose build carries a published package for a web start."""
+    return bool(release is not None and release.approved and release.build.package_path)
+
+
+def bound_release(study, release_id):
+    """The requested current release, validating same-study approval and resources.
+
+    An empty ``release_id`` clears the current release so the portal stops
+    offering a start without touching recruitment or existing sessions.
+    """
+    if not release_id:
+        return None
+    release = Release.objects.select_related('build').filter(pk=release_id, study=study).first()
+    require(release is not None, 'release_not_found', 404)
+    require(release.approved, 'release_unapproved', 409)
+    require(bool(release.build.package_path), 'release_unavailable', 409)
+    return release
+
+
+def _current_actor(actor):
+    """Re-read the acting account inside the write transaction.
+
+    A cached Python object's ``is_active`` (or a deleted row) must never be the
+    final authority for a policy change: the account can be deactivated between
+    the request that resolved it and the transaction that writes.
+    """
+    if not getattr(actor, 'pk', None):
+        return actor
+    return get_user_model().objects.filter(pk=actor.pk).first()
+
+
+def update_policy(actor, study, revision, values):
+    """Update explicit publication fields under the study publication revision."""
+    cleaned = {}
+    for field in POLICY_FIELDS:
+        value = str(values.get(field, '')).strip()
+        require(len(value) <= POLICY_LIMITS[field], 'policy_field')
+        cleaned[field] = value
+    public = bool(values.get('public'))
+    show_closed = bool(values.get('show_closed_summary'))
+    with transaction.atomic():
+        actor = _current_actor(actor)
+        guard(actor, study, 'study.configure')
+        locked = Study.objects.select_for_update().get(pk=study.pk)
+        guard(actor, locked, 'study.configure')
+        require(_revision_matches(revision, locked.revision), 'revision_conflict', 409)
+        before = policy_state(locked)
+        target = {'public': public, 'show_closed_summary': show_closed, **cleaned}
+        require(target != before, 'no_change', 409)
+        locked.public = public
+        locked.show_closed_summary = show_closed
+        for field, value in cleaned.items():
+            setattr(locked, field, value)
+        locked.revision += 1
+        locked.save(update_fields=['public', 'show_closed_summary', *POLICY_FIELDS, 'revision'])
+        Audit.objects.create(study=locked, actor=actor, action=POLICY_CHANGED, target=str(locked.id),
+                             before=before, after=policy_state(locked))
+    return {'revision': locked.revision, 'before': before, 'after': policy_state(locked)}
+
+
+def select_current_release(actor, study, revision, release_id):
+    """Bind (or clear) the current release for new stable-entry sessions.
+
+    Requires the study-configuration or recruitment authority, the current
+    publication revision, and an approved same-study release with a published
+    package. The previous release is not touched in any way.
+    """
+    with transaction.atomic():
+        actor = _current_actor(actor)
+        locked = Study.objects.select_for_update().get(pk=study.pk)
+        require(any(allowed(actor, locked, action) for action in SELECT_ACTIONS), 'forbidden', 403)
+        require(_revision_matches(revision, locked.revision), 'revision_conflict', 409)
+        target = bound_release(locked, release_id)
+        before = {'current_release': str(locked.current_release_id) if locked.current_release_id else None}
+        after = {'current_release': str(target.id) if target is not None else None}
+        require(before != after, 'no_change', 409)
+        locked.current_release = target
+        locked.revision += 1
+        locked.save(update_fields=['current_release', 'revision'])
+        Audit.objects.create(study=locked, actor=actor, action=RELEASE_CHANGED, target=str(locked.id),
+                             before=before, after=after)
+    return {'revision': locked.revision, 'before': before, 'after': after}
