@@ -1,12 +1,14 @@
 """Pinned official Godot 4.7.2 Windows x86_64 export template.
 
 The Windows release template is pinned by exact size and SHA-256 to the member
-``templates/windows_release_x86_64.exe`` of the official
-``Godot_v4.7.2-stable_export_templates.tpz`` release asset. The archive's
-published SHA-512 (``SHA512-SUMS.txt`` of the same release) was verified against
-the downloaded archive before this digest was recorded (2026-09-20; local
-evidence ``local_data/phase03_20260920/p0306wr/evidence/template_provenance.json``
-keeps the archive digest, the member digest and the installed-file comparison).
+``templates/windows_release_x86_64.exe`` of the official Godot 4.7.2 stable
+export-templates archive (``Godot_v4.7.2-stable_export_templates.tpz``, published
+by the Godot Engine project with its ``SHA512-SUMS.txt``). The digest can be
+re-verified from that public release asset: unpack the archive and hash the
+member; a name or a version directory alone never proves the bytes. The local
+preparation keeps its own download record and member comparison in the ignored
+``local_data/`` handoff area, which is intentionally not part of this public
+module.
 
 A file name or a version directory alone never proves official bytes: callers
 must resolve the template through :func:`find_windows_template`, which checks

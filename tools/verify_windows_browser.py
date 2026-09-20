@@ -70,7 +70,9 @@ class CDP:
 
 assert platform.system() == 'Windows'
 url = (root / 'run_url.txt').read_text().strip()
-assert url.startswith('http://experiment.localhost:8000/run/')
+# The isolated acceptance instance uses its own loopback port (>= 8040); the old
+# default 8000 is no longer assumed. The host rule keeps the request on loopback.
+assert url.startswith('http://experiment.localhost:') and '/run/' in url
 chrome = next(p for p in [Path(os.environ.get('PROGRAMFILES', 'C:/Program Files')) / 'Google/Chrome/Application/chrome.exe', Path(os.environ['LOCALAPPDATA']) / 'Google/Chrome/Application/chrome.exe'] if p.exists())
 with socket.socket() as probe:
     probe.settimeout(1)
@@ -135,8 +137,14 @@ try:
     })()""")
     assert result['rejected'] and result['unique'] == 64 and result['before'] == 0 and result['committed'] == 64
     assert result['partial_kind'] == 'session' and result['partial_pending'] == 32
-    assert result['final'] == {'id': result['id'], 'kind': 'cleaned', 'state': 'remote_acknowledged'}
-    report = {'date': '2026-09-12', 'os': platform.platform(), 'chrome': version, 'transport': 'LAN SSH tunnel to Windows loopback; earlier HTTPS physical-network evidence remains separate', 'run_url': url, 'layout_stable': True, 'trial2_and_local_finish_while_upload_held': True, 'session_id': records['id'], 'records': records['records'], 'buffer_test': result, 'independent_human_acceptance': False}
+    # P0305 tombstone contract: a cleaned tombstone carries the frozen instance and
+    # study binding; the privacy/cleanup strength is unchanged (no payload, no
+    # credential, no token or proof is retained).
+    context = client.evaluate('GEP_CONTEXT')
+    assert result['final'] == {'id': result['id'], 'kind': 'cleaned', 'state': 'remote_acknowledged',
+                               'instance_id': context['instance_id'], 'study_id': context['study_id']}
+    assert 'token' not in json.dumps(result['final']).lower() and 'proof' not in json.dumps(result['final']).lower()
+    report = {'date': '2026-09-12', 'os': platform.platform(), 'chrome': version, 'transport': 'LAN SSH tunnel to Windows loopback; earlier HTTPS physical-network evidence remains separate', 'run_url': url, 'layout_stable': True, 'trial2_and_local_finish_while_upload_held': True, 'session_id': records['id'], 'records': records['records'], 'buffer_test': result, 'tombstone_binding': {'instance_id': context['instance_id'], 'study_id': context['study_id']}, 'independent_human_acceptance': False, 'windows_native_status': 'EXTERNAL_NOT_RUN: this Windows Chrome run is a browser check; WN01-WN06 still require real native device evidence'}
     (root / 'report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
     print('WINDOWS_GODOT_LAYOUT_NONBLOCKING_AND_BACKPRESSURE_VERIFIED')
 finally:
