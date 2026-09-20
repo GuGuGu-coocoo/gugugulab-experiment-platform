@@ -44,3 +44,6 @@ node_modules/
 /playwright-report/
 
 .pnpm-store/
+
+# Local OpenCode phase plans, reports and execution state.
+/.agent/
