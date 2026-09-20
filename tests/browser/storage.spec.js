@@ -100,7 +100,7 @@ test('authorized recovery without task policy exports data without resuming tria
  await expect(page.evaluate(()=>client.recovery_export())).rejects.toThrow('recovery_export_unavailable');
  const admin=await context.newPage(),c=JSON.parse(fs.readFileSync('local_data/dev_credentials.json','utf8'));
  await admin.goto('http://admin.localhost:8000/login');await admin.locator('[name=username]').fill(c.username);await admin.locator('[name=password]').fill(c.password);await admin.getByRole('button',{name:'登录',exact:true}).click();
- await admin.goto('http://admin.localhost:8000/studies/'+config.study_id);await admin.locator('[name=session_id]').fill(id);await admin.getByRole('button',{name:'签发一次性恢复许可'}).click();
+ await admin.goto('http://admin.localhost:8000/studies/'+config.study_id+'/sessions');await admin.locator('[name=session_id]').fill(id);await admin.getByRole('button',{name:'签发一次性恢复许可'}).click();
  const permit=(await admin.locator('.notice').textContent()).split('许可：')[1].trim();
  await expect(page.evaluate(id=>client.recover(id,'invalid-synthetic-permit'),id)).rejects.toThrow();
  expect(await page.evaluate(async id=>(await client.get(id)).paused,id)).toBe(true);
@@ -124,7 +124,7 @@ test('expired finished Web queue reauthenticates for data only and cleans after 
  await expect(page.evaluate(()=>client.recovery_export())).rejects.toThrow('recovery_export_unavailable');
  const admin=await context.newPage(),c=JSON.parse(fs.readFileSync('local_data/dev_credentials.json','utf8'));
  await admin.goto('http://admin.localhost:8000/login');await admin.locator('[name=username]').fill(c.username);await admin.locator('[name=password]').fill(c.password);await admin.getByRole('button',{name:'登录',exact:true}).click();
- await admin.goto('http://admin.localhost:8000/studies/'+config.study_id);await admin.locator('[name=session_id]').fill(id);await admin.getByRole('button',{name:'签发一次性恢复许可'}).click();
+ await admin.goto('http://admin.localhost:8000/studies/'+config.study_id+'/sessions');await admin.locator('[name=session_id]').fill(id);await admin.getByRole('button',{name:'签发一次性恢复许可'}).click();
  const permit=(await admin.locator('.notice').textContent()).split('许可：')[1].trim();
  await expect(page.evaluate(id=>client.recover(id,'invalid-synthetic-permit'),id)).rejects.toThrow();
  expect(await page.evaluate(async id=>(await client.get(id)).paused,id)).toBe(true);

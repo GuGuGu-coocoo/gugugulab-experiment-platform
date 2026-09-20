@@ -1,0 +1,25 @@
+<section data-overview="1">
+<h2>{{ui.overview_title}}</h2>
+<ul class="cards">
+<li class="card"><h3>{{ui.home_card_sessions}}</h3><p data-overview-count="sessions">{{overview_counts.sessions}}</p></li>
+<li class="card"><h3>{{ui.home_card_participants}}</h3><p data-overview-count="participants">{{overview_counts.participants}}</p></li>
+<li class="card"><h3>{{ui.module_builds}}</h3><p data-overview-count="builds">{{overview_counts.builds}} · {{overview_counts.releases}}</p></li>
+<li class="card"><h3>{{ui.module_exports}}</h3><p data-overview-count="exports">{{overview_counts.exports}}</p></li>
+</ul>
+<h3>{{ui.overview_policy}}</h3>
+<p>{% if study.mode == "id" %}{{ui.participation_mode_id}}{% elif study.mode == "password" %}{{ui.participation_mode_password}}{% else %}{{ui.participation_mode_anonymous}}{% endif %} · {{ui.participation_max_sessions}}：{{study.max_sessions}}</p>
+<p class="muted">{% if overview_frozen %}{{ui.overview_frozen}}{% else %}{{ui.overview_not_frozen}}{% endif %}</p>
+<p>{% if module_available.participation %}<a href="{{module_links.participation}}" data-module-link="participation">{{ui.module_participation}}</a>{% endif %}</p>
+<h3>{{ui.overview_current_release}}</h3>
+<p data-current-release="{{current_release_id|default:''}}">{{ui.overview_current_release}}：{% if current_release_id %}{{current_release_id}}{% else %}{{ui.publication_current_none}}{% endif %}</p>
+<p class="muted">{{ui.overview_release_note}}</p>
+</section>
+<section data-overview-releases="1"><h2>{{ui.builds_releases}}</h2>
+{% for release in releases %}<p data-release-row="{{release.id}}"><strong>{{release.platform|default:"—"}} · {{release.version|default:"—"}}</strong> <small>{{release.id}}</small>
+{% if release.artifact_ready and can_upload %} · <a href="/releases/{{release.id}}/artifact" data-artifact="{{release.id}}">{{ui.builds_download_artifact}}</a>{% endif %}
+{% if can_configure %} · <a href="/releases/{{release.id}}/config">{{ui.builds_config_link}}</a>{% endif %}
+{% if release.approved and release.platform == "godot_web" and release.build.package_path %} · <a href="{{public_api_url}}/run/{{release.id}}/web/index.html" target="_blank" rel="noopener noreferrer">{{ui.builds_open_entry}}</a>{% endif %}
+</p>{% empty %}<p>{{ui.builds_releases_empty}}</p>{% endfor %}
+{% if module_available.builds %}<p><a href="{{module_links.builds}}" data-module-link="builds">{{ui.module_builds}}</a></p>{% endif %}
+{% if module_available.recruitment %}<p><a href="{{module_links.recruitment}}" data-module-link="recruitment">{{ui.module_recruitment}}</a></p>{% endif %}
+</section>

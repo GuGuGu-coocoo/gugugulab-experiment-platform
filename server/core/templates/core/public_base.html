@@ -1,10 +1,10 @@
-<!doctype html><html lang="{{lang|default:'zh'}}" data-theme="{{theme|default:'system'}}"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{% block title %}{{ui.app_title}}{% endblock %}</title><style>{% include 'core/theme_css.html' %}</style>
-<body data-lang="{{lang|default:'zh'}}" data-theme="{{theme|default:'system'}}">
-<a class="skip" href="#main">{{ui.skip_link|default:'跳到主要内容'}}</a>
-<header class="top"><span class="brand"><a href="/">{{ui.app_title}}</a></span><span class="note">{{ui.app_note}}</span>
+<!doctype html><html lang="{{lang|default:'zh'}}" data-theme="{{theme|default:'system'}}"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{% block title %}GuGuGu Lab{% endblock %}</title><style>{% include 'core/theme_css.html' %}</style>
+<body {% block body_attrs %}data-lang="{{lang|default:'zh'}}" data-theme="{{theme|default:'system'}}"{% endblock %}>
+<a class="skip" href="#main">{{ui.skip_link}}</a>
+<header class="top"><span class="brand">GuGuGu Lab · {{ui.portal_heading}}</span>
 <span class="prefs" data-preferences>
 <span class="group" data-lang-switch><span>{{ui.nav_language}}</span><a href="/prefs?lang=zh&amp;next={{ request.get_full_path|urlencode }}" hreflang="zh" data-pref-lang="zh" {% if lang == 'zh' %}aria-current="true"{% endif %}>中文</a><a href="/prefs?lang=en&amp;next={{ request.get_full_path|urlencode }}" hreflang="en" data-pref-lang="en" {% if lang == 'en' %}aria-current="true"{% endif %}>English</a></span>
 <span class="group" data-theme-switch><span>{{ui.nav_theme}}</span><a href="/prefs?theme=system&amp;next={{ request.get_full_path|urlencode }}" data-pref-theme="system" {% if theme == 'system' %}aria-current="true"{% endif %}>{{ui.nav_theme_system}}</a><a href="/prefs?theme=light&amp;next={{ request.get_full_path|urlencode }}" data-pref-theme="light" {% if theme == 'light' %}aria-current="true"{% endif %}>{{ui.nav_theme_light}}</a><a href="/prefs?theme=dark&amp;next={{ request.get_full_path|urlencode }}" data-pref-theme="dark" {% if theme == 'dark' %}aria-current="true"{% endif %}>{{ui.nav_theme_dark}}</a></span>
 </span></header>
-{% block body %}<main id="main" class="main">{% block content %}{% endblock %}</main>{% endblock %}
+<main id="main" class="main">{% block content %}{% endblock %}</main>
 </body></html>

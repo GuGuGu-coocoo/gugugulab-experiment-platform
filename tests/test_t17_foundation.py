@@ -37,12 +37,17 @@ def test_metadata_download_is_authorized_fixed_attachment(setup):
 @pytest.mark.parametrize('mode',['anonymous','id','password'])
 @pytest.mark.parametrize('state',['open','paused','closed'])
 def test_policy_and_recruitment_show_persisted_values(setup,mode,state):
+    # 03E GUI: the legacy page is the overview; the policy select lives on the
+    # participation module and the recruitment select on the recruitment module.
+    # Old expectation: one long page showed both selects (2 selected options).
     study=setup['study'];study.mode=mode;study.recruitment=state;study.save()
     client=client_for(setup,'study.view','study.configure','recruitment.manage')
-    page=client.get(f'/studies/{study.id}').content.decode()
-    assert f'<option value="{mode}" selected>' in page
-    assert f'<option value="{state}" selected>' in page
-    assert page.count('selected>')==2
+    policy=client.get(f'/studies/{study.id}/participation').content.decode()
+    assert f'<option value="{mode}" selected>' in policy
+    assert policy.count('selected>')==1
+    state_page=client.get(f'/studies/{study.id}/recruitment').content.decode()
+    assert f'<option value="{state}" selected>' in state_page
+    assert state_page.count('selected>')==1
 
 
 def test_only_approved_hosted_web_release_has_participation_link(setup):

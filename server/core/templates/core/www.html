@@ -1,3 +1,3 @@
-<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GuGuGu Lab</title><style>
-*{box-sizing:border-box}body{margin:0;background:#f4f5f7;color:#172536;font:16px/1.6 system-ui}header{background:#162c43;color:white;padding:36px 6%}main{max-width:720px;margin:40px auto;padding:0 24px}section{background:white;border:1px solid #dae0e6;border-radius:12px;padding:24px}a{color:#0d6478;font-weight:600}
-</style><body data-www="1"><header><h1>GuGuGu Lab</h1></header><main><section><p>个人网站只提供参加研究的链接。</p><p><a href="{{portal_url}}" data-portal-link="1">前往参与研究门户</a></p></section></main></html>
+{% extends 'core/public_base.html' %}{% block title %}GuGuGu Lab{% endblock %}{% block content %}
+<section data-www="1"><h1>GuGuGu Lab</h1><p><a href="{{portal_url}}">{{ui.portal_title}}</a></p></section>
+{% endblock %}

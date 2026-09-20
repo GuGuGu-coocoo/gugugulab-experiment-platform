@@ -674,7 +674,9 @@ def test_gui_publication_forms_and_authority():
     client = Client()
     client.force_login(owner)
     url = f'/studies/{study.id}'
-    page = client.get(url).content.decode()
+    # 03E GUI: the legacy route is the overview; publication/current-release
+    # forms live on the recruitment module (legacy POSTs below still work).
+    page = client.get(f'{url}/recruitment').content.decode()
     assert 'data-publication-form="1"' in page and 'data-current-release-form="1"' in page
     assert f'data-current-release=""' in page
 
@@ -686,7 +688,7 @@ def test_gui_publication_forms_and_authority():
     assert client.post(url, {'op': 'current_release', 'study_revision': '1', 'release_id': str(first.id)}).status_code == 302
     study.refresh_from_db()
     assert study.current_release_id == first.id and study.revision == 2
-    page = client.get(url).content.decode()
+    page = client.get(f'{url}/recruitment').content.decode()
     assert f'data-current-release="{first.id}"' in page and 'GUI 公开简介' in page
 
     # Stale revision renders an in-place error page without writing.

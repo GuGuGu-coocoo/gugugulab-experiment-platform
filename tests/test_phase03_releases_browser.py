@@ -67,7 +67,8 @@ try {
 
   // ---------- researcher: publish, select first release ----------
   await login(researcher,'synthetic_owner',process.env.GEP_OWNER_PASSWORD);
-  await researcher.goto(admin+'/studies/'+studyId);
+  // 03E GUI: publication and current-release forms live on the recruitment module.
+  await researcher.goto(admin+'/studies/'+studyId+'/recruitment');
   await expect(researcher.locator('[data-publication-form]')).toBeVisible();
   await researcher.locator('[data-publication-form] [name=public]').check();
   await researcher.locator('[data-publication-form] [name=public_summary]').fill('浏览器公开简介');
@@ -124,7 +125,7 @@ try {
   expect(uploadBefore.body.accepted.length).toBe(1);
 
   // ---------- researcher switches the current release ----------
-  await researcher.goto(admin+'/studies/'+studyId);
+  await researcher.goto(admin+'/studies/'+studyId+'/recruitment');
   await researcher.locator('[data-current-release-form] [data-release-option="'+second+'"]').check();
   await researcher.locator('[data-current-release-form]').getByRole('button',{name:'设为当前发行'}).click();
   await researcher.waitForLoadState('load');

@@ -22,7 +22,7 @@ from .protocol import require, parse, Rejected
 from .views import endpoint
 from .services import digest, completion_status, issue_recovery_code, SHELL_CAPABILITY
 from .packages import validate_package, descriptor_valid, native_program_valid, MAX_ARCHIVE, MAX_NATIVE_ARCHIVE, NATIVE_PLATFORMS
-from . import publication, artifacts
+from . import publication, artifacts, ui, workbench
 
 
 def _revision_ok(raw, current):
@@ -61,8 +61,31 @@ ACTION_LABELS = {
     'session.view': '会话查看：查看具体会话状态与对应名单',
 }
 
+ACTION_LABELS_EN = {
+    'study.view': 'Study visibility: view the study overview',
+    'study.configure': 'Configure study: change participation settings and roster',
+    'build.upload': 'Upload build: register experiment resources',
+    'build.preview': 'Preview build: open the isolated trial run',
+    'release.approve_pilot': 'Approve synthetic release: allow this version for synthetic participation',
+    'recruitment.manage': 'Recruitment: open, pause or close new participation',
+    'data.export_raw': 'Raw data export: download raw study records; grant with care',
+    'session.recover': 'Session recovery: issue same-device recovery permits',
+    'member.manage': 'Member management: invite or revoke study members',
+    'permission.delegate': 'Permission delegation: pass on delegable permissions; grant with care',
+    'audit.view': 'Audit: view administrative action records',
+    'identity_mapping.read': 'Identity mapping: view concrete roster identities and session links (no answers)',
+    'session.view': 'Session view: view concrete session states and their roster links',
+}
 
-def study_context(request, study, notice=''):
+
+def action_label(action, lang='zh'):
+    """Generic action label in the active language; the action code never changes."""
+    labels = ACTION_LABELS_EN if lang == 'en' else ACTION_LABELS
+    return labels.get(action, action)
+
+
+def study_context(request, study, notice='', module='overview'):
+    lang=ui.lang_of(request)
     permissions={action for action in ACTIONS if allowed(request.user,study,action)}
     can_manage={'member.manage','permission.delegate'} <= permissions
     releases=list(Release.objects.filter(study=study).select_related('build'))
@@ -70,18 +93,21 @@ def study_context(request, study, notice=''):
         release.artifact_ready=bool(release.approved and release.artifact_digest and release.artifact_path)
         release.program_bound=bool(release.build.package_path)
         release.artifact_config_member=artifacts.config_member(release.build.descriptor)
+        descriptor=release.build.descriptor if isinstance(release.build.descriptor,dict) else {}
+        release.platform=descriptor.get('platform') or ''
+        release.version=descriptor.get('version') or ''
     return {
         'study':study, 'notice':notice, 'public_api_url':public_api_url(),
         'native_platforms':NATIVE_PLATFORMS,
         'revision':Instance.objects.get(pk=1).governance_revision,
         'study_revision':study.revision,
         'current_release_id':study.current_release_id,
+        'current_release':study.current_release,
         'builds':Build.objects.filter(study=study),
         'releases':releases,
-        'sessions':[{'id':s.id,'state':completion_status(s)['state']} for s in Session.objects.filter(release__study=study)],
         'members':Grant.objects.filter(study=study,action='study.view').exclude(user_id=Instance.objects.get(pk=1).owner_id).select_related('user') if can_manage else [],
         'invitations':Invitation.objects.filter(study=study,consumed=False,revoked=False) if can_manage else [],
-        'actions':[{'code':a,'label':ACTION_LABELS[a]} for a in sorted(permissions & set(Grant.objects.filter(user=request.user,study=study,delegable=True).values_list('action',flat=True)))],
+        'actions':[{'code':a,'label':action_label(a,lang)} for a in sorted(permissions & set(Grant.objects.filter(user=request.user,study=study,delegable=True).values_list('action',flat=True)))],
         'can_configure':'study.configure' in permissions,
         'can_upload':'build.upload' in permissions,
         'can_preview':'build.preview' in permissions,
@@ -90,38 +116,37 @@ def study_context(request, study, notice=''):
         'can_export':'data.export_raw' in permissions,
         'can_recover':'session.recover' in permissions,
         'can_manage':can_manage,
+        'module':module,
+        'module_template':'core/modules/%s.html' % module,
+        'module_links':{name:workbench.module_url(study,name) for name in workbench.MODULES},
+        'module_available':{name:workbench.module_allowed(request,study,name) for name in workbench.MODULES},
+        'study_nav':workbench.nav_items(request,study),
+        'module_url':workbench.module_url(study,module),
+        'nav_current':'study',
+        'server_timezone':workbench.timezone_label(),
+        'lang':ui.lang_of(request),
     }
 
 
-def study_form_errors(fn):
-    @wraps(fn)
-    def wrapped(request, study_id):
-        try:
-            return fn(request, study_id)
-        except (Rejected, ObjectDoesNotExist, ValueError, KeyError, TypeError, csv.Error) as error:
-            if request.method!='POST' or 'text/html' not in request.headers.get('Accept',''):
-                raise
-            admin_host(request)
-            study=Study.objects.get(pk=study_id)
-            guard(request.user,study,'study.view')
-            context=study_context(request,study)
-            code=error.code if isinstance(error,Rejected) else 'invalid_request'
-            messages={
-                'policy_frozen_after_release':'已有批准发行，参与政策已冻结。请创建新研究以使用不同政策。',
-                'duplicate_or_invalid_code':'名单存在重复、已有或无效 ID；本次未导入任何行。',
-                'roster_columns':'名单列数不正确；密码模式请填写 ID 与密码两列。本次未导入任何行。',
-                'password_too_short':'密码长度不足，请检查后重新提交。',
-                'forbidden':'当前账号没有此操作权限，未执行更改。',
-                'revision_conflict':'研究发布版本已变化，请刷新页面后重试；未执行任何更改。',
-                'no_change':'目标状态没有变化，未写入任何更改。',
-                'policy_field':'公开信息超出长度上限，未写入任何更改。',
-                'release_not_found':'所选发行不存在或不属于本研究，未执行任何更改。',
-                'release_unapproved':'只能把已批准的发行设为当前发行。',
-                'release_unavailable':'该发行没有可用的已发布资源（Web 包或平台完整原生包），不能作为当前发行。',
-            }
-            context.update(error=messages.get(code,'操作未完成，请检查输入或权限后重试。'),error_code=code)
-            return render(request,'core/study.html',context,status=error.status if isinstance(error,Rejected) else 400)
-    return wrapped
+STUDY_MESSAGES = {
+    'policy_frozen_after_release':'已有批准发行，参与政策已冻结。请创建新研究以使用不同政策。',
+    'duplicate_or_invalid_code':'名单存在重复、已有或无效 ID；本次未导入任何行。',
+    'roster_columns':'名单列数不正确；密码模式请填写 ID 与密码两列。本次未导入任何行。',
+    'password_too_short':'密码长度不足，请检查后重新提交。',
+    'forbidden':'当前账号没有此操作权限，未执行更改。',
+    'revision_conflict':'研究发布版本已变化，请刷新页面后重试；未执行任何更改。',
+    'no_change':'目标状态没有变化，未写入任何更改。',
+    'policy_field':'公开信息超出长度上限，未写入任何更改。',
+    'release_not_found':'所选发行不存在或不属于本研究，未执行任何更改。',
+    'release_unapproved':'只能把已批准的发行设为当前发行。',
+    'release_unavailable':'该发行没有可用的已发布资源（Web 包或平台完整原生包），不能作为当前发行。',
+}
+
+
+def study_error_message(request, code):
+    """Chinese by default; known codes get their English translation."""
+    fallback = STUDY_MESSAGES.get(code, ui.tr(ui.lang_of(request), 'error_invalid_request'))
+    return ui.error_message(code, fallback, ui.lang_of(request))
 
 
 def connection_config(release):
@@ -159,8 +184,20 @@ def home(request):
             study=Study.objects.create(title=title)
             Grant.objects.bulk_create([Grant(user=request.user,study=study,action=action,delegable=True) for action in ACTIONS])
         return redirect('/studies/'+str(study.id))
-    studies=Study.objects.filter(grant__user=request.user,grant__action='study.view').distinct()
-    return render(request,'core/home.html',{'studies':studies,'can_create':Instance.objects.filter(owner=request.user).exists()})
+    lang=ui.lang_of(request)
+    studies=Study.objects.filter(grant__user=request.user,grant__action='study.view').distinct().order_by('title','id')
+    cards=[]
+    for study in studies:
+        cards.append({
+            'study':study,
+            'recruitment_label':ui.tr(lang,{'open':'home_recruit_open','paused':'home_recruit_paused','closed':'home_recruit_closed'}.get(study.recruitment,'home_recruit_paused')),
+            'mode_label':ui.tr(lang,{'anonymous':'home_mode_anonymous','id':'home_mode_id','password':'home_mode_password'}.get(study.mode,'home_mode_anonymous')),
+            'release_label':workbench.release_label(study.current_release) if study.current_release_id else ui.tr(lang,'home_card_none'),
+            'has_current':study.current_release_id is not None,
+            'sessions_total':Session.objects.filter(release__study=study).count(),
+            'participants_total':Participant.objects.filter(study=study).count(),
+        })
+    return render(request,'core/home.html',{'cards':cards,'can_create':Instance.objects.filter(owner=request.user).exists(),'nav_current':'home'})
 
 
 @endpoint
@@ -176,7 +213,7 @@ def signin(request):
             profile=AccountProfile.objects.filter(user_id=user.pk).first()
             request.session['gep_auth_version']=profile.auth_version if profile is not None else None
             return redirect('/')
-        message='登录失败，请核对凭据。'
+        message=ui.tr(ui.lang_of(request), 'login_failed')
     return render(request,'core/login.html',{'message':message})
 
 @endpoint
@@ -188,13 +225,20 @@ def signout(request):
 
 
 @endpoint
-@study_form_errors
-def study_page(request,study_id):
+def study_page(request,study_id,module='overview'):
     admin_host(request)
+    require(module in workbench.MODULES,'not_found',404)
     study=Study.objects.get(pk=study_id)
     guard(request.user,study,'study.view')
-    notice=request.session.pop('roster_notice:'+str(study.id),'')
-    if request.method=='POST':
+    lang=ui.lang_of(request)
+    stored_notice=request.session.pop('roster_notice:'+str(study.id),'')
+    if isinstance(stored_notice,dict):
+        notice=stored_notice.get(lang) or stored_notice.get('zh','')
+    else:
+        notice=stored_notice
+    try:
+      require(workbench.module_allowed(request,study,module),'forbidden',403)
+      if request.method=='POST':
         op=request.POST.get('op')
         audited=False
         with transaction.atomic():
@@ -223,7 +267,9 @@ def study_page(request,study_id):
                     seen.add(code)
                     require(study.mode!='password' or len(parts[1])>=12,'password_too_short')
                     Participant.objects.create(study=study,code=code,password_hash=make_password(parts[1]) if len(parts)==2 else '')
-                request.session['roster_notice:'+str(study.id)]=f'名单导入成功：新增 {len(rows)} 个 ID。'
+                request.session['roster_notice:'+str(study.id)]={
+                    'zh':f'名单导入成功：新增 {len(rows)} 个 ID。',
+                    'en':f'Roster imported: {len(rows)} new IDs.'}
             elif op=='native':
                 guard(request.user,study,'build.upload')
                 descriptor=parse(request.POST['descriptor'].encode());descriptor_valid(descriptor)
@@ -301,12 +347,14 @@ def study_page(request,study_id):
                 require(not session.revoked,'not_recoverable',409)
                 token=secrets.token_urlsafe(32)
                 RecoveryPermit.objects.create(session=session,issuer=request.user,token_hash=digest(token),expires_at=timezone.now()+timedelta(minutes=15))
-                notice='同设备恢复：会话 '+str(session.id)+'；15 分钟一次性许可：'+token
+                notice=ui.notice(lang, '同设备恢复：会话 '+str(session.id)+'；15 分钟一次性许可：'+token,
+                                 'Same-device recovery: session '+str(session.id)+'; one-time 15-minute permit: '+token)
             elif op=='recover_code':
                 guard(request.user,study,'session.recover')
                 session=Session.objects.get(pk=request.POST['session_id'],release__study=study)
                 issued=issue_recovery_code(request.user,session.id)
-                notice='同设备六位恢复码（5 分钟、最多 5 次尝试，仅本次有效）：'+issued['code']
+                notice=ui.notice(lang, '同设备六位恢复码（5 分钟、最多 5 次尝试，仅本次有效）：'+issued['code'],
+                                 'Same-device six-digit recovery code (5 minutes, at most 5 attempts, valid once): '+issued['code'])
             elif op=='invite':
                 guard(request.user,study,'member.manage');guard(request.user,study,'permission.delegate')
                 require(_revision_ok(request.POST.get('revision'),instance.governance_revision),'revision_conflict',409)
@@ -317,7 +365,8 @@ def study_page(request,study_id):
                 username=request.POST['username'];require(0<len(username)<=150,'username')
                 token=secrets.token_urlsafe(32)
                 Invitation.objects.create(study=study,issuer=request.user,username=username,actions=actions,token_hash=digest(token),expires_at=timezone.now()+timedelta(hours=24))
-                notice='邀请密钥（请通过可信渠道交付）：'+token
+                notice=ui.notice(lang, '邀请密钥（请通过可信渠道交付）：'+token,
+                                 'Invitation key (deliver through a trusted channel): '+token)
                 _bump(instance)
             elif op=='revoke_invite':
                 guard(request.user,study,'member.manage');guard(request.user,study,'permission.delegate')
@@ -339,8 +388,19 @@ def study_page(request,study_id):
                 raise Rejected('unknown_operation')
             if not audited:
                 Audit.objects.create(study=study,actor=request.user,action=op,target=str(study.id))
-        if not notice:return redirect('/studies/'+str(study.id))
-    return render(request,'core/study.html',study_context(request,study,notice))
+      context=study_context(request,study,notice,module)
+      context.update(workbench.module_context(request,study,module))
+      if request.method=='POST' and not notice:
+        return redirect(workbench.module_url(study,module))
+      return render(request,'core/study.html',context)
+    except (Rejected,ObjectDoesNotExist,ValueError,KeyError,TypeError,csv.Error) as error:
+      if 'text/html' not in request.headers.get('Accept',''):
+        raise
+      code=error.code if isinstance(error,Rejected) else 'invalid_request'
+      status=error.status if isinstance(error,Rejected) else 400
+      context=study_context(request,study,notice,module)
+      context.update(error=study_error_message(request,code),error_code=code,module_error=True)
+      return render(request,'core/study.html',context,status=status)
 
 @endpoint
 def config(request,release_id):

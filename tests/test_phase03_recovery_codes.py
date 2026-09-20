@@ -485,7 +485,9 @@ def test_gui_issues_codes_only_for_authorized_issuers(setup):
     client = Client()
     client.force_login(owner)
     url = f'/studies/{study.id}'
-    page = client.get(url).content.decode()
+    # 03E GUI: the legacy route is the overview; the recovery controls moved to
+    # the sessions module (the legacy POST contract below still works).
+    page = client.get(f'{url}/sessions').content.decode()
     assert 'value="recover_code"' in page and '签发六位恢复码' in page
 
     response = client.post(url, {'op': 'recover_code', 'session_id': str(session.id)})

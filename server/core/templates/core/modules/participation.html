@@ -1,0 +1,24 @@
+<section data-participation-policy="1"><h2>{{ui.participation_policy_title}}</h2>
+<p>{{ui.participation_current_mode}}：{% if study.mode == "id" %}{{ui.participation_mode_id}}{% elif study.mode == "password" %}{{ui.participation_mode_password}}{% else %}{{ui.participation_mode_anonymous}}{% endif %} · {{ui.participation_max_sessions}}：{{study.max_sessions}}</p>
+{% if can_configure %}<form method="post">{% csrf_token %}<input type="hidden" name="op" value="configure">
+<label>{{ui.participation_mode_label}} <select name="mode"><option value="anonymous" {% if study.mode == "anonymous" %}selected{% endif %}>{{ui.participation_mode_anonymous}}</option><option value="id" {% if study.mode == "id" %}selected{% endif %}>{{ui.participation_mode_id}}</option><option value="password" {% if study.mode == "password" %}selected{% endif %}>{{ui.participation_mode_password}}</option></select></label>
+<label>{{ui.participation_max_sessions}} <input type="number" name="max_sessions" value="{{study.max_sessions}}" min="1" max="100"></label>
+<button>{{ui.participation_save_policy}}</button></form>
+{% else %}<p class="muted">{{ui.overview_no_permission}}</p>{% endif %}
+</section>
+<section data-participation-roster-import="1"><h2>{{ui.participation_roster_import}}</h2><p class="muted">{{ui.participation_roster_hint}}</p>
+{% if can_configure %}<form method="post">{% csrf_token %}<input type="hidden" name="op" value="roster"><input type="hidden" name="roster_format" value="csv"><label>{{ui.participation_roster_textarea}} <textarea name="roster" autocomplete="off" required></textarea></label><button>{{ui.participation_import_submit}}</button></form>{% else %}<p class="muted">{{ui.overview_no_permission}}</p>{% endif %}
+<p class="muted">{{ui.participation_excel_link}} {% if can_manage %}<a href="/users">{{ui.nav_users}}</a>{% endif %}</p>
+</section>
+<section data-participation-roster="1"><h2>{{ui.participation_roster_title}}</h2>
+<p><span class="badge" data-roster-total="{{roster_total}}">{{ui.participation_roster_count}}：{{roster_total}}</span> <span class="badge">{{ui.participation_roster_active}}：{{roster_active}}</span> <span class="badge">{{ui.participation_roster_password}}：{{roster_password_entries}}</span></p>
+{% if roster_mapping_visible %}
+<form method="get" class="row" data-roster-search="1"><label>{{ui.participation_roster_search}} <input name="code" value="{{roster_code}}" autocomplete="off"></label><button>{{ui.common_search}}</button></form>
+<p class="muted">{{ui.participation_roster_search_note}}</p>
+{% if roster_rows %}<div class="table-wrap"><table><caption>{{ui.participation_roster_title}}</caption><thead><tr><th scope="col">{{ui.participation_roster_col_id}}</th><th scope="col">{{ui.participation_roster_col_state}}</th></tr></thead><tbody>
+{% for row in roster_rows %}<tr data-roster-row="{{row.id}}"><td>{{row.code}}</td><td data-roster-state="{% if row.active %}active{% else %}inactive{% endif %}">{% if row.active %}{{ui.participation_roster_active_value}}{% else %}{{ui.participation_roster_inactive_value}}{% endif %}</td></tr>{% endfor %}
+</tbody></table></div>
+{% if roster_page_links %}<nav class="pager" aria-label="{{ui.common_page}}" data-roster-pager="1">{% for link in roster_page_links %}{% if link.current %}<span aria-current="page">{{link.number}}</span>{% else %}<a href="{{link.url}}">{{link.number}}</a>{% endif %}{% endfor %}</nav>{% endif %}
+{% else %}<p data-roster-empty="1">{{ui.participation_roster_empty}}</p>{% endif %}
+{% else %}<p class="muted" data-roster-hidden="1">{{ui.participation_roster_hidden}}</p>{% endif %}
+</section>

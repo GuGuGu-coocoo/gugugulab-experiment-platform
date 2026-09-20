@@ -1,0 +1,512 @@
+"""Bilingual (zh/en) and three-theme (system/light/dark) presentation layer.
+
+The workbench and the public portal share one local string table, one pair of
+preference cookies and one switcher endpoint. Language and theme are generic UI
+settings only: scientific content, roster data, audit values and error codes
+stay data and are never translated or rewritten. Preference cookies carry no
+identity and are set host-only (`SESSION_COOKIE_DOMAIN` stays ``None``), so
+switching the public portal never transfers an admin cookie.
+"""
+from django.conf import settings
+from django.shortcuts import redirect
+
+LANG_COOKIE = 'gep_lang'
+THEME_COOKIE = 'gep_theme'
+LANGS = ('zh', 'en')
+THEMES = ('system', 'light', 'dark')
+DEFAULT_LANG = 'zh'
+DEFAULT_THEME = 'system'
+COOKIE_MAX_AGE = 365 * 24 * 3600
+
+STRINGS = {
+    # Shell / navigation.
+    'app_title': {'zh': 'GEP · 研究工作台', 'en': 'GEP · Research Workbench'},
+    'app_note': {'zh': '仅合成研究 · 工程验证版', 'en': 'Synthetic studies only · engineering preview'},
+    'nav_home': {'zh': '我的研究', 'en': 'My studies'},
+    'nav_users': {'zh': '账号与权限', 'en': 'Accounts & permissions'},
+    'nav_password': {'zh': '修改密码', 'en': 'Change password'},
+    'nav_logout': {'zh': '退出登录', 'en': 'Sign out'},
+    'nav_language': {'zh': '语言', 'en': 'Language'},
+    'nav_theme': {'zh': '主题', 'en': 'Theme'},
+    'nav_theme_system': {'zh': '跟随系统', 'en': 'System'},
+    'nav_theme_light': {'zh': '亮色', 'en': 'Light'},
+    'nav_theme_dark': {'zh': '暗色', 'en': 'Dark'},
+    'account_label': {'zh': '当前账号', 'en': 'Current account'},
+    'role_owner': {'zh': '实例 Owner', 'en': 'Instance Owner'},
+    'role_admin': {'zh': '管理员', 'en': 'Admin'},
+    'role_user': {'zh': '普通成员', 'en': 'Member'},
+    'study_modules': {'zh': '研究模块', 'en': 'Study modules'},
+    'back_to_studies': {'zh': '返回我的研究', 'en': 'Back to my studies'},
+    'common_status': {'zh': '状态', 'en': 'Status'},
+    'common_time': {'zh': '时间', 'en': 'Time'},
+    'common_page': {'zh': '页', 'en': 'Page'},
+    'common_prev': {'zh': '上一页', 'en': 'Previous'},
+    'common_next': {'zh': '下一页', 'en': 'Next'},
+    'common_search': {'zh': '搜索', 'en': 'Search'},
+    'common_filter': {'zh': '筛选', 'en': 'Filter'},
+    'common_all': {'zh': '全部', 'en': 'All'},
+    'common_none': {'zh': '无', 'en': 'None'},
+    'common_total': {'zh': '共', 'en': 'Total'},
+    # Dashboard.
+    'home_title': {'zh': '我的研究', 'en': 'My studies'},
+    'home_intro': {'zh': '创建研究、登记实验发行，并核对参与名单与会话状态。', 'en': 'Create studies, register releases and review participation.'},
+    'home_create_title': {'zh': '创建研究', 'en': 'Create study'},
+    'home_create_placeholder': {'zh': '研究名称', 'en': 'Study title'},
+    'home_create_submit': {'zh': '创建', 'en': 'Create'},
+    'home_empty': {'zh': '当前没有获授权研究。', 'en': 'No authorized studies yet.'},
+    'home_card_sessions': {'zh': '会话', 'en': 'Sessions'},
+    'home_card_participants': {'zh': '名单', 'en': 'Roster'},
+    'home_card_current': {'zh': '当前发行', 'en': 'Current release'},
+    'home_card_none': {'zh': '未设置', 'en': 'Not set'},
+    'home_card_link': {'zh': '打开研究', 'en': 'Open study'},
+    'home_recruit_open': {'zh': '开放招募', 'en': 'Recruiting'},
+    'home_recruit_paused': {'zh': '已暂停', 'en': 'Paused'},
+    'home_recruit_closed': {'zh': '已结束', 'en': 'Closed'},
+    'home_mode_anonymous': {'zh': '无需 ID', 'en': 'No ID'},
+    'home_mode_id': {'zh': '名单 ID', 'en': 'Roster ID'},
+    'home_mode_password': {'zh': '名单 ID 与密码', 'en': 'Roster ID + password'},
+    'home_create_owner_only': {'zh': '只有实例 Owner 可以创建研究。', 'en': 'Only the instance Owner can create studies.'},
+    'skip_link': {'zh': '跳到主要内容', 'en': 'Skip to main content'},
+    'login_title': {'zh': '登录研究工作台', 'en': 'Sign in to the research workbench'},
+    'login_submit': {'zh': '登录', 'en': 'Sign in'},
+    'login_invite': {'zh': '接受成员邀请', 'en': 'Accept a member invitation'},
+    'login_failed': {'zh': '登录失败，请核对凭据。', 'en': 'Sign-in failed; check the credentials.'},
+    'password_title': {'zh': '修改密码', 'en': 'Change password'},
+    'password_must_change': {'zh': '当前使用临时密码登录，必须设置新密码后才能继续使用后台。', 'en': 'You signed in with a temporary password; set a new password before continuing.'},
+    'password_current': {'zh': '当前密码（临时密码）', 'en': 'Current password (temporary)'},
+    'password_new': {'zh': '新密码（至少 16 字符）', 'en': 'New password (at least 16 characters)'},
+    'password_confirm': {'zh': '确认新密码', 'en': 'Confirm new password'},
+    'password_save': {'zh': '保存新密码', 'en': 'Save new password'},
+    'activate_title': {'zh': '接受成员邀请', 'en': 'Accept member invitation'},
+    'activate_token': {'zh': '邀请密钥', 'en': 'Invitation key'},
+    'activate_hint': {'zh': '新账号设置密码（至少 16 字符）；已有账号请先登录，不会修改密码', 'en': 'New accounts set a password (at least 16 characters); existing accounts sign in first and their password is never changed'},
+    'activate_submit': {'zh': '激活账号', 'en': 'Activate account'},
+    'account_activate_title': {'zh': '接受账号邀请', 'en': 'Accept account invitation'},
+    'account_activated': {'zh': '账号已激活，请登录。', 'en': 'The account is activated. Please sign in.'},
+    'account_activate_link': {'zh': '已有账号，直接登录', 'en': 'Already have an account? Sign in'},
+    # Modules.
+    'module_overview': {'zh': '概览', 'en': 'Overview'},
+    'module_participation': {'zh': '参与与名单', 'en': 'Participation & roster'},
+    'module_builds': {'zh': '构建与发行', 'en': 'Builds & releases'},
+    'module_recruitment': {'zh': '招募与门户', 'en': 'Recruitment & portal'},
+    'module_sessions': {'zh': '会话与恢复', 'en': 'Sessions & recovery'},
+    'module_exports': {'zh': '导出', 'en': 'Exports'},
+    # Overview.
+    'overview_title': {'zh': '研究概览', 'en': 'Study overview'},
+    'overview_study_id': {'zh': '研究 ID', 'en': 'Study ID'},
+    'overview_policy': {'zh': '参与政策', 'en': 'Participation policy'},
+    'overview_recruitment': {'zh': '招募状态', 'en': 'Recruitment'},
+    'overview_current_release': {'zh': '当前发行', 'en': 'Current release'},
+    'overview_module_links': {'zh': '模块入口', 'en': 'Modules'},
+    'overview_frozen': {'zh': '已有批准发行，参与政策已冻结；如需不同政策请创建新研究。', 'en': 'An approved release exists; the participation policy is frozen. Create a new study for a different policy.'},
+    'overview_not_frozen': {'zh': '尚无批准发行，可以在“参与与名单”修改参与政策。', 'en': 'No approved release yet; the participation policy can still change under Participation & roster.'},
+    'overview_release_note': {'zh': '当前发行只影响新参与；旧会话、旧链接、配置与已发布资源保持原发行。', 'en': 'The current release affects new participation only; old sessions, links, configs and published artifacts keep their release.'},
+    'overview_no_permission': {'zh': '当前账号看不到该模块的控件。', 'en': 'This account does not see the controls of that module.'},
+    # Participation.
+    'participation_title': {'zh': '参与与名单', 'en': 'Participation & roster'},
+    'participation_policy_title': {'zh': '参与政策', 'en': 'Participation policy'},
+    'participation_mode_anonymous': {'zh': '无需 ID', 'en': 'No ID'},
+    'participation_mode_id': {'zh': '名单 ID', 'en': 'Roster ID'},
+    'participation_mode_password': {'zh': '名单 ID 与密码', 'en': 'Roster ID + password'},
+    'participation_mode_label': {'zh': '参与模式', 'en': 'Participation mode'},
+    'participation_max_sessions': {'zh': '每个名单 ID 最多参与次数', 'en': 'Maximum participations per roster ID'},
+    'participation_save_policy': {'zh': '保存政策', 'en': 'Save policy'},
+    'participation_current_mode': {'zh': '当前模式', 'en': 'Current mode'},
+    'participation_roster_import': {'zh': '导入名单', 'en': 'Import roster'},
+    'participation_roster_hint': {'zh': '每行一个 ID；密码模式用英文逗号分隔 ID 与密码（至少 12 字符），含逗号的值用双引号括起。', 'en': 'One ID per line; in password mode separate ID and password with a comma (at least 12 characters); quote values containing commas.'},
+    'participation_roster_textarea': {'zh': '名单内容（文本）', 'en': 'Roster text'},
+    'participation_import_submit': {'zh': '导入名单', 'en': 'Import roster'},
+    'participation_roster_title': {'zh': '名单查询', 'en': 'Roster query'},
+    'participation_roster_count': {'zh': '名单条目', 'en': 'Roster entries'},
+    'participation_roster_active': {'zh': '有效', 'en': 'Active'},
+    'participation_roster_password': {'zh': '密码模式条目', 'en': 'Password-mode entries'},
+    'participation_roster_search': {'zh': '按名单 ID 精确搜索', 'en': 'Exact roster ID search'},
+    'participation_roster_search_note': {'zh': '前导零会保留，例如 001 只匹配 001。', 'en': 'Leading zeros are preserved: 001 matches exactly 001.'},
+    'participation_roster_hidden': {'zh': '查看具体名单身份需要 identity_mapping.read 权限；当前只显示数量。', 'en': 'Viewing concrete roster identities requires the identity_mapping.read permission; only counts are shown.'},
+    'participation_roster_empty': {'zh': '没有符合条件的名单条目。', 'en': 'No matching roster entries.'},
+    'participation_roster_col_id': {'zh': '名单 ID', 'en': 'Roster ID'},
+    'participation_roster_col_state': {'zh': '名单状态', 'en': 'Roster state'},
+    'participation_roster_active_value': {'zh': '有效', 'en': 'Active'},
+    'participation_roster_inactive_value': {'zh': '停用', 'en': 'Inactive'},
+    'participation_excel_link': {'zh': '账号与权限页提供 XLSX 模板预览导入（仅追加，失败零写入）。', 'en': 'The accounts page offers previewed XLSX roster import (append-only, zero writes on failure).'},
+    # Builds.
+    'builds_title': {'zh': '构建与发行', 'en': 'Builds & releases'},
+    'builds_list': {'zh': '已登记构建', 'en': 'Registered builds'},
+    'builds_empty': {'zh': '尚无已验证构建。', 'en': 'No verified builds yet.'},
+    'builds_register_native': {'zh': '登记独立原生构建', 'en': 'Register native build'},
+    'builds_register_native_hint': {'zh': '程序通过独立渠道分发。粘贴构建工具生成的描述，程序摘要不包含外置连接配置。', 'en': 'Programs are distributed out of band. Paste the builder descriptor; the program digest never covers the external connection config.'},
+    'builds_descriptor': {'zh': '构建描述 JSON', 'en': 'Build descriptor JSON'},
+    'builds_register_submit': {'zh': '登记不可变构建', 'en': 'Register immutable build'},
+    'builds_upload_native': {'zh': '上传完整原生程序包', 'en': 'Upload complete native program'},
+    'builds_upload_native_hint': {'zh': '把导出工具生成的平台程序 ZIP 绑定到已登记构建；路径穿越、链接、未声明的可执行文件与错误架构一律拒绝。失败不改变任何既有发行。', 'en': 'Bind the platform ZIP produced by the export tool to a registered build; path traversal, links, undeclared executables and wrong architectures are rejected. Failure changes no existing release.'},
+    'builds_upload_web': {'zh': '上传 Web 发行包', 'en': 'Upload Web release package'},
+    'builds_upload_web_hint': {'zh': 'ZIP 最大 128 MiB，展开最大 256 MiB / 256 个文件。失败后重新上传；旧发行保持原状。', 'en': 'ZIP up to 128 MiB, expanded up to 256 MiB / 256 files. A failed upload changes no existing release.'},
+    'builds_upload_submit': {'zh': '上传并验证', 'en': 'Upload and verify'},
+    'builds_uploading': {'zh': '正在上传…', 'en': 'Uploading…'},
+    'builds_verifying': {'zh': '上传完成，正在验证包…', 'en': 'Upload complete, verifying package…'},
+    'builds_upload_failed': {'zh': '上传或验证失败，旧发行未改变。请检查文件后重试。', 'en': 'Upload or verification failed; no release changed. Check the file and retry.'},
+    'builds_network_failed': {'zh': '网络中断，可重新上传；旧发行未改变。', 'en': 'Network interrupted; retry the upload. No release changed.'},
+    'builds_approve': {'zh': '批准合成发行', 'en': 'Approve synthetic release'},
+    'builds_preview': {'zh': '隔离预览（仅本地保存）', 'en': 'Isolated preview (local save only)'},
+    'builds_registered_only': {'zh': '描述登记（外部分发，无平台完整包下载）', 'en': 'Descriptor only (external distribution, no complete platform package)'},
+    'builds_bound_package': {'zh': '已绑定程序包', 'en': 'Bound program archive'},
+    'builds_releases': {'zh': '发行', 'en': 'Releases'},
+    'builds_releases_empty': {'zh': '尚无发行。', 'en': 'No releases yet.'},
+    'builds_release_unapproved': {'zh': '未批准', 'en': 'Not approved'},
+    'builds_release_native_complete': {'zh': '完整原生包，受控分发', 'en': 'Complete native package, controlled distribution'},
+    'builds_release_native_missing': {'zh': '描述登记，无平台完整包', 'en': 'Descriptor only, no complete platform package'},
+    'builds_release_no_web': {'zh': '无 Web 资源', 'en': 'No Web package'},
+    'builds_release_web': {'zh': 'Web 参与', 'en': 'Web participation'},
+    'builds_download_artifact': {'zh': '下载完整发行包', 'en': 'Download complete release package'},
+    'builds_manifest': {'zh': '清单', 'en': 'Manifest'},
+    'builds_config_link': {'zh': '导出连接配置（开发／兼容路径）', 'en': 'Export connection config (development/legacy path)'},
+    'builds_open_entry': {'zh': '打开参与入口', 'en': 'Open participation entry'},
+    # Recruitment.
+    'recruitment_title': {'zh': '招募与门户', 'en': 'Recruitment & portal'},
+    'recruitment_state_title': {'zh': '招募状态', 'en': 'Recruitment state'},
+    'recruitment_open': {'zh': '开放新参与', 'en': 'Open new participation'},
+    'recruitment_paused': {'zh': '暂停新参与', 'en': 'Pause new participation'},
+    'recruitment_closed': {'zh': '关闭新参与', 'en': 'Close new participation'},
+    'recruitment_state_label': {'zh': '招募状态', 'en': 'Recruitment state'},
+    'recruitment_note': {'zh': '选择后立即更新；暂停或关闭新参与均保留有效旧会话的上传。', 'en': 'Changes apply immediately; pausing or closing keeps valid existing sessions uploading.'},
+    'recruitment_update': {'zh': '更新招募', 'en': 'Update recruitment'},
+    'publication_title': {'zh': '公开门户与当前发行', 'en': 'Public portal & current release'},
+    'publication_intro': {'zh': '公开列表只对明确勾选“公开”的研究开放；当前发行只影响新参与，旧会话、旧链接、配置与导出保持原发行。', 'en': 'The portal lists only studies explicitly marked public; the current release affects new participation only. Old sessions, links, configs and exports keep their release.'},
+    'publication_public': {'zh': '公开到参与门户', 'en': 'List on the participation portal'},
+    'publication_summary': {'zh': '公开简介（最多 280 字符）', 'en': 'Public summary (max 280 characters)'},
+    'publication_duration': {'zh': '预计时长（最多 80 字符）', 'en': 'Expected duration (max 80 characters)'},
+    'publication_device': {'zh': '设备要求（最多 160 字符）', 'en': 'Device requirements (max 160 characters)'},
+    'publication_keep_closed': {'zh': '结束后保留公开简介（不显示开始按钮）', 'en': 'Keep the public summary after closing (no start button)'},
+    'publication_save': {'zh': '保存公开政策', 'en': 'Save public policy'},
+    'publication_portal_link': {'zh': '门户', 'en': 'Portal'},
+    'publication_stable_link': {'zh': '稳定入口', 'en': 'Stable entry'},
+    'publication_current': {'zh': '当前发行', 'en': 'Current release'},
+    'publication_current_none': {'zh': '未设置（门户不开放新参与）', 'en': 'Not set (the portal offers no new participation)'},
+    'publication_clear': {'zh': '不设置当前发行（不开放新参与入口）', 'en': 'No current release (no new participation entry)'},
+    'publication_select': {'zh': '设为当前发行', 'en': 'Set as current release'},
+    'publication_select_note': {'zh': '选择后立即只影响新参与；旧会话、待上传、恢复、下载与配置保持原发行。', 'en': 'Selection affects new participation only; old sessions, uploads, recovery, downloads and configs keep their release.'},
+    'study_revision': {'zh': '研究发布版本', 'en': 'Study publication revision'},
+    # Sessions.
+    'sessions_title': {'zh': '会话与恢复', 'en': 'Sessions & recovery'},
+    'sessions_timezone': {'zh': '服务器时区', 'en': 'Server timezone'},
+    'sessions_timezone_note': {'zh': '以下时间均按服务器时区显示。', 'en': 'All times below use the server timezone.'},
+    'sessions_search_label': {'zh': '按名单 ID 精确搜索', 'en': 'Exact roster ID search'},
+    'sessions_search_filter': {'zh': '筛选', 'en': 'Filter'},
+    'sessions_status_label': {'zh': '状态筛选', 'en': 'Status filter'},
+    'sessions_col_session': {'zh': '会话', 'en': 'Session'},
+    'sessions_col_participant': {'zh': '名单', 'en': 'Roster'},
+    'sessions_col_status': {'zh': '服务器状态', 'en': 'Server status'},
+    'sessions_col_created': {'zh': '创建时间', 'en': 'Created'},
+    'sessions_col_release': {'zh': '发行', 'en': 'Release'},
+    'sessions_col_recovery': {'zh': '恢复', 'en': 'Recovery'},
+    'sessions_status_not_started': {'zh': '未开始', 'en': 'Not started'},
+    'sessions_status_active': {'zh': '进行中', 'en': 'Active'},
+    'sessions_status_declared_pending': {'zh': '已声明待收齐', 'en': 'Declared, pending'},
+    'sessions_status_complete': {'zh': '服务器已收齐', 'en': 'Received by server'},
+    'sessions_status_revoked': {'zh': '已撤销', 'en': 'Revoked'},
+    'sessions_status_note': {'zh': '“服务器已收齐”只表示声明的记录已到达服务器，不代表科学验收通过。', 'en': '"Received by server" means the declared records arrived; it is not scientific acceptance.'},
+    'sessions_hidden': {'zh': '已隐藏（需要身份映射权限）', 'en': 'Hidden (needs identity mapping permission)'},
+    'sessions_counts': {'zh': '会话总数', 'en': 'Sessions'},
+    'sessions_participants': {'zh': '参与名单数', 'en': 'Distinct roster entries'},
+    'sessions_empty': {'zh': '没有符合条件的会话。', 'en': 'No matching sessions.'},
+    'sessions_page_of': {'zh': '第 {{page}} / {{pages}} 页', 'en': 'Page {{page}} / {{pages}}'},
+    'sessions_rows_note': {'zh': '同一个名单 ID 可以有多条会话；状态按会话分别计算。', 'en': 'One roster ID can have several sessions; statuses are per session.'},
+    'sessions_recover_issue': {'zh': '签发六位恢复码', 'en': 'Issue 6-digit recovery code'},
+    'sessions_permit_issue': {'zh': '签发一次性恢复许可', 'en': 'Issue one-time recovery permit'},
+    'sessions_recover_hint': {'zh': '仅同设备、原存储的完整 trial 边界。许可不赋予读取历史答案的权限。六位码 5 分钟内有效、最多失败 5 次，且同一会话新码会使旧码失效。', 'en': 'Same device and original store only, at complete trial boundaries. A permit grants no access to past answers. The six-digit code is valid for 5 minutes, allows at most 5 failures, and a newer code for the same session invalidates the old one.'},
+    'sessions_recover_uuid_label': {'zh': '目标会话 UUID', 'en': 'Target session UUID'},
+    'sessions_recover_heading': {'zh': '受控恢复', 'en': 'Controlled recovery'},
+    'sessions_recovery_denied': {'zh': '没有查看会话行的权限时，只能按 UUID 签发恢复；恢复权限不会带来原始数据导出或身份映射权限。', 'en': 'Without session-row visibility, recovery can only be issued by UUID; recovery never grants raw export or identity mapping.'},
+    'sessions_invalid_uuid': {'zh': '会话 UUID 格式不正确。', 'en': 'The session UUID is not valid.'},
+    'sessions_query_forbidden': {'zh': '当前账号没有查看会话行的权限，无法使用该查询或分页。', 'en': 'This account cannot view session rows, so that query or page is refused.'},
+    # Exports.
+    'exports_title': {'zh': '导出', 'en': 'Exports'},
+    'exports_intro': {'zh': '固定快照在创建时完成；下载时重新授权。撤权后旧链接同样拒绝。', 'en': 'A fixed snapshot is built at creation; every download re-authorizes. Old links are refused after a grant is removed.'},
+    'exports_create': {'zh': '创建 JSONL 固定快照', 'en': 'Create fixed JSONL snapshot'},
+    'exports_created': {'zh': '快照已固定。', 'en': 'Snapshot fixed.'},
+    'exports_list': {'zh': '已有快照', 'en': 'Existing snapshots'},
+    'exports_empty': {'zh': '尚无导出快照。', 'en': 'No export snapshots yet.'},
+    'exports_col_created': {'zh': '创建时间', 'en': 'Created'},
+    'exports_col_formats': {'zh': '下载格式', 'en': 'Formats'},
+    'exports_download': {'zh': '下载 JSONL', 'en': 'Download JSONL'},
+    # Portal.
+    'portal_title': {'zh': 'GuGuGu Lab · 参与研究', 'en': 'GuGuGu Lab · Studies'},
+    'portal_heading': {'zh': '参与研究', 'en': 'Participating studies'},
+    'portal_recruiting': {'zh': '正在招募', 'en': 'Now recruiting'},
+    'portal_closed': {'zh': '已结束', 'en': 'Completed'},
+    'portal_empty': {'zh': '当前没有正在招募的公开研究。', 'en': 'No public study is recruiting right now.'},
+    'portal_duration': {'zh': '预计时长', 'en': 'Duration'},
+    'portal_device': {'zh': '设备要求', 'en': 'Device requirements'},
+    'portal_join': {'zh': '参加研究', 'en': 'Join study'},
+    'portal_details': {'zh': '查看参与说明', 'en': 'View participation details'},
+    'portal_closed_note': {'zh': '该研究已结束，不再招募。', 'en': 'This study has ended and is no longer recruiting.'},
+    'portal_native_note': {'zh': '本研究当前以独立程序（Windows x64 或 macOS arm64）参与。程序由研究者在授权范围内受控分发：门户不提供公开下载，也不通过浏览器启动；请联系研究者获取参与方式。', 'en': 'This study currently uses a standalone program (Windows x64 or macOS arm64), distributed in a controlled way. The portal offers no public download and no browser start; contact the researcher.'},
+    'entry_heading': {'zh': '参与研究', 'en': 'Study participation'},
+    'entry_start': {'zh': '开始参与', 'en': 'Start participation'},
+    'entry_opening': {'zh': '正在打开当前参与版本…', 'en': 'Opening the current participation version…'},
+    'entry_duration': {'zh': '预计时长', 'en': 'Duration'},
+    'entry_device': {'zh': '设备要求', 'en': 'Device requirements'},
+    'entry_closed': {'zh': '该研究已结束，不再开放新参与。', 'en': 'This study has ended; new participation is closed.'},
+    'entry_paused': {'zh': '该研究当前暂停新参与。', 'en': 'This study is currently paused for new participation.'},
+    'entry_no_current': {'zh': '该研究尚未设置当前发行，暂不开放新参与。', 'en': 'This study has no current release yet, so new participation is not open.'},
+    'entry_not_open': {'zh': '当前没有开放的新参与。', 'en': 'New participation is not open right now.'},
+    'entry_native_note': {'zh': '本研究的当前参与版本是独立程序（Windows x64 或 macOS arm64）。程序由研究者在授权范围内受控分发，门户不提供公开下载，也不通过浏览器启动；请联系研究者获取参与方式。', 'en': 'The current version is a standalone program (Windows x64 or macOS arm64) distributed in a controlled way. The portal offers no public download and no browser start; contact the researcher.'},
+    'entry_native_unavailable': {'zh': '本研究的当前参与版本暂不可用（完整程序包缺失或校验失败），没有开放新参与。请联系研究者。', 'en': 'The current version is unavailable (missing or tampered complete package); new participation is closed. Contact the researcher.'},
+    # Accounts page additions.
+    'users_title': {'zh': '账号与实例治理', 'en': 'Accounts & instance governance'},
+    'users_intro': {'zh': 'Owner 由实例指针唯一决定；Admin 由 Owner 任命或降级。Owner 行即使对 Owner 本人也受保护：账号管理不能修改 Owner 行，Owner 改密码请使用“修改我的密码”。普通 Admin 只能授予自己“有效且可委派”的动作，且目标账号必须在可支配范围内；角色任命与降级始终仅限 Owner。矩阵先显示研究可见性，再展开显式动作；取消可见性会同时清除子权限，服务端拒绝“不可见却保留子权限”的矛盾提交。所有授权变更都需要先预览，再用本人密码一次性确认。',
+                   'en': 'The Owner comes from the instance pointer only; Admins are appointed or demoted by the Owner. The Owner row is protected even from the Owner: account management cannot change it, so the Owner changes the password under “Change password”. An ordinary Admin can only grant actions they hold as effective and delegable, and only within studies they dominate; appointing or demoting roles is Owner-only. The matrix shows study visibility first, then the explicit actions; clearing visibility also clears child permissions, and the server rejects the contradictory submission. Every authorization change is previewed first and confirmed once with your own password.'},
+    'users_secret_note': {'zh': '一次性临时密码（只显示这一次，绝不写入审计或导出）。账号：', 'en': 'One-time temporary password (shown once; never written to the audit log or exports). Account:'},
+    'users_invitation_note': {'zh': '账号邀请（24 小时内一次性有效，只显示这一次）。账号：', 'en': 'Account invitation (single use within 24 hours, shown once). Account:'},
+    'users_import_invitation_note': {'zh': '导入邀请（只显示这一次）。账号：', 'en': 'Imported invitation (shown once). Account:'},
+    'users_preview_heading': {'zh': '更改预览（未执行）', 'en': 'Change preview (not executed)'},
+    'users_preview_joiner': {'zh': '、', 'en': ', '},
+    'users_preview_none_actions': {'zh': '无显式动作', 'en': 'No explicit actions'},
+    'users_choice': {'zh': '处理方式', 'en': 'Resolution'},
+    'users_choice_grant_view': {'zh': '显式补 study.view', 'en': 'Explicitly add study.view'},
+    'users_choice_remove_conflicting': {'zh': '移除冲突子权限', 'en': 'Remove conflicting child actions'},
+    'users_conflict_actions': {'zh': '无 view 的子权限', 'en': 'Child actions without view'},
+    'users_preview_reconcile_note': {'zh': '提交时会重新核对同一批账号/研究/动作，任何变化都会整体拒绝。', 'en': 'The commit re-checks the same accounts, studies and actions; any change rejects the whole batch.'},
+    'users_conflicts_note': {'zh': '收敛也必须先预览：提交时会重新核对同一批账号、研究与动作，旧写入者未更新治理版本也会被拒绝。', 'en': 'Resolution is also previewed: the commit re-checks the same accounts, studies and actions, and a stale governance revision is rejected.'},
+    'users_conflicts_empty': {'zh': '没有缺少 study.view 的授权子权限。', 'en': 'No child action is missing study.view.'},
+    'users_invitations_empty': {'zh': '没有待接受邀请。', 'en': 'No pending invitations.'},
+    'users_row_errors': {'zh': '逐行错误（整批不会执行）', 'en': 'Row errors (the whole batch will not run)'},
+    'users_confirm_password': {'zh': '你的密码（确认时重新认证）', 'en': 'Your password (re-authenticated on confirm)'},
+    'users_visibility_label': {'zh': '研究可见：查看研究概况', 'en': 'Study visibility: view study overview'},
+    'users_explicit_actions': {'zh': '显式动作（点击展开）', 'en': 'Explicit actions (expand)'},
+    'users_delegable': {'zh': '可委派', 'en': 'Delegable'},
+    'users_import_help': {'zh': '模板不含任何已有密码或哈希。导入永不重置已有密码：新账号默认发出一次性邀请；已有账号必须写明操作与当前账号版本，不会按显示名猜测或覆盖。公式、宏、外部链接、数字形式的 ID 会被整体拒绝；上限 2 MiB、展开 10 MiB、1000 行、32 列。',
+                           'en': 'The template contains no existing passwords or hashes. Imports never reset existing passwords: new accounts receive a one-time invitation; existing accounts must carry the operation and their current revision, and display names are never guessed or overwritten. Formulas, macros, external links and numeric IDs are rejected as a whole; limits are 2 MiB compressed, 10 MiB expanded, 1000 rows and 32 columns.'},
+    'users_import_users_label': {'zh': '用户与权限模板', 'en': 'User & permission template'},
+    'users_import_roster_label': {'zh': '名单模板', 'en': 'Roster template'},
+    'users_import_target_study': {'zh': '目标研究', 'en': 'Target study'},
+    'users_import_col_row': {'zh': '行', 'en': 'Row'},
+    'users_import_col_operation': {'zh': '操作', 'en': 'Operation'},
+    'users_import_col_username': {'zh': '用户名', 'en': 'Username'},
+    'users_import_col_study': {'zh': '研究', 'en': 'Study'},
+    'users_import_col_actions': {'zh': '动作', 'en': 'Actions'},
+    'users_error_col_code': {'zh': '代码', 'en': 'Code'},
+    'users_error_col_message': {'zh': '说明', 'en': 'Message'},
+    'users_matrix_scope_note': {'zh': '实例内所有账号的授权都可以查看；超出当前账号“有效且可委派”范围的条目为只读，不能编辑或继续委派。只读查看不会授予研究数据、会话、名单身份或任何其他访问权。',
+                                'en': 'Every account grant in the instance is visible; entries outside this account’s effective and delegable authority are read-only and cannot be edited or delegated further. Read-only inspection grants no study-data, session, identity-mapping or other access.'},
+
+    'users_accounts': {'zh': '账号', 'en': 'Accounts'},
+    'users_accounts_note': {'zh': '账号列表与权限矩阵共用用户名搜索与分页；每次请求只加载当前页账号。',
+                            'en': 'The account list shares the username search and paging of the permission matrix; only the current page of accounts is loaded per request.'},
+    'users_account_pager': {'zh': '账号分页', 'en': 'Account pages'},
+    'users_conflicts_total': {'zh': '授权矛盾组', 'en': 'Conflict groups'},
+    'users_conflicts_pager': {'zh': '授权矛盾分页', 'en': 'Conflict pages'},
+    'users_conflicts_paged_note': {'zh': '每页只显示 20 组矛盾；预览与确认仍会核对全部矛盾，不会只处理当前页。',
+                                   'en': 'Only 20 conflict groups are shown per page; preview and confirmation still check every conflict, not just this page.'},
+    'users_study_search': {'zh': '按研究名称搜索可配置研究', 'en': 'Search configurable studies by title'},
+    'users_study_clear': {'zh': '清除研究搜索', 'en': 'Clear study search'},
+    'users_study_total': {'zh': '匹配研究', 'en': 'Matching studies'},
+    'users_study_limited': {'zh': '匹配研究较多，仅显示前 50 个；请用搜索缩小范围，全部可配置研究仍可检索。',
+                            'en': 'Many studies match, so only the first 50 are shown; refine the search — every configurable study stays reachable.'},
+    'users_matrix': {'zh': '实例权限矩阵', 'en': 'Instance permission matrix'},
+    'users_matrix_search': {'zh': '按用户名搜索账号', 'en': 'Search accounts by username'},
+    'users_matrix_clear': {'zh': '清除搜索', 'en': 'Clear search'},
+    'users_matrix_total': {'zh': '匹配账号', 'en': 'Matching accounts'},
+    'users_matrix_empty': {'zh': '没有匹配的账号。', 'en': 'No account matches the search.'},
+    'users_matrix_pager': {'zh': '权限矩阵分页', 'en': 'Permission matrix pages'},
+    'users_matrix_column': {'zh': '可见性与显式动作', 'en': 'Visibility & explicit actions'},
+    'users_matrix_help': {'zh': '研究可见性是显式动作的前提；先勾选“研究可见”，再展开子权限。可委派标记决定该账号能否把同一动作继续转授。Owner 行对所有账号（包括 Owner）只读；Admin 可只读查看实例内全部账号授权，可编辑范围仍限于自己有效且可委派的动作。账号多时可按用户名搜索并分页；账号列固定，便于横向查看。',
+                          'en': 'Study visibility is the prerequisite for explicit actions: check visibility first, then expand the sub-permissions. The delegable flag decides whether that account may pass the same action on. The Owner row is read-only for every account, including the Owner; an Admin can inspect every account grant read-only, while edits stay limited to that Admin’s effective and delegable actions. With many accounts, search by username and page through them; the account column stays frozen while scrolling.'},
+    'common_study': {'zh': '研究', 'en': 'Study'},
+    'users_import': {'zh': 'Excel 批量导入（先预览，再用本人密码确认）', 'en': 'Excel batch import (preview first, confirm with your password)'},
+    'users_new': {'zh': '新增账号', 'en': 'New account'},
+    'users_invitations': {'zh': '待接受邀请', 'en': 'Pending invitations'},
+    'users_conflicts': {'zh': '授权矛盾预览（缺少 study.view）', 'en': 'Authorization conflicts (missing study.view)'},
+    'common_username': {'zh': '用户名', 'en': 'Username'},
+    'common_role': {'zh': '角色', 'en': 'Role'},
+    'common_password': {'zh': '密码', 'en': 'Password'},
+    'common_actions': {'zh': '操作', 'en': 'Actions'},
+    'common_submit': {'zh': '提交', 'en': 'Submit'},
+    'users_state_active': {'zh': '启用', 'en': 'Enabled'},
+    'users_state_disabled': {'zh': '停用', 'en': 'Disabled'},
+    'users_password_change': {'zh': '需修改', 'en': 'Must change'},
+    'users_password_normal': {'zh': '正常', 'en': 'Normal'},
+    'users_owner_readonly': {'zh': 'Owner 账号只读', 'en': 'Owner account is read-only'},
+    'users_readonly': {'zh': '只读', 'en': 'read-only'},
+    'users_reset_password': {'zh': '重置临时密码', 'en': 'Reset temporary password'},
+    'users_save_role': {'zh': '保存角色', 'en': 'Save role'},
+    'users_disable': {'zh': '停用', 'en': 'Disable'},
+    'users_enable': {'zh': '启用', 'en': 'Enable'},
+    'users_revoke': {'zh': '撤销', 'en': 'Revoke'},
+    'users_preview_matrix': {'zh': '预览更改', 'en': 'Preview change'},
+    'users_confirm_commit': {'zh': '确认执行', 'en': 'Confirm'},
+    'users_confirm_expiry': {'zh': '前一次性有效', 'en': 'valid once before'},
+    'users_preview_users_import': {'zh': '预览用户与权限导入', 'en': 'Preview user & permission import'},
+    'users_preview_roster_import': {'zh': '预览名单导入（仅追加）', 'en': 'Preview roster import (append-only)'},
+    'users_create_invite': {'zh': '生成邀请（本人设置密码）', 'en': 'Create invitation (self-set password)'},
+    'users_create_temp': {'zh': '创建临时密码账号', 'en': 'Create temporary-password account'},
+    'users_preview_reconcile': {'zh': '预览收敛', 'en': 'Preview resolution'},
+    'users_your_password': {'zh': '你的密码', 'en': 'Your password'},
+    'users_your_password_reauth': {'zh': '你的密码（重新认证）', 'en': 'Your password (re-authentication)'},
+    'users_template_users': {'zh': '下载用户与权限模板（.xlsx）', 'en': 'Download user & permission template (.xlsx)'},
+    'users_template_roster': {'zh': '下载名单模板', 'en': 'Download roster template'},
+    # Errors (generic, translated server-side when the language is English).
+    'error_forbidden': {'zh': '当前账号没有此操作权限，未执行更改。', 'en': 'This account lacks the required permission; nothing was changed.'},
+    'error_invalid_request': {'zh': '操作未完成，请检查输入或权限后重试。', 'en': 'The action was not completed. Check the input or permissions and retry.'},
+    'error_policy_frozen_after_release': {'zh': '已有批准发行，参与政策已冻结。请创建新研究以使用不同政策。', 'en': 'An approved release exists, so the participation policy is frozen. Create a new study for a different policy.'},
+    'error_duplicate_or_invalid_code': {'zh': '名单存在重复、已有或无效 ID；本次未导入任何行。', 'en': 'The roster contains duplicate, existing or invalid IDs; no row was imported.'},
+    'error_roster_columns': {'zh': '名单列数不正确；密码模式请填写 ID 与密码两列。本次未导入任何行。', 'en': 'Wrong roster column count; password mode needs ID and password columns. No row was imported.'},
+    'error_password_too_short': {'zh': '密码长度不足，请检查后重新提交。', 'en': 'The password is too short; correct it and submit again.'},
+    'error_revision_conflict': {'zh': '研究发布版本已变化，请刷新页面后重试；未执行任何更改。', 'en': 'The publication revision changed; refresh and retry. Nothing was changed.'},
+    'error_no_change': {'zh': '目标状态没有变化，未写入任何更改。', 'en': 'The target already has that state; nothing was written.'},
+    'error_policy_field': {'zh': '公开信息超出长度上限，未写入任何更改。', 'en': 'A public field exceeds its length limit; nothing was written.'},
+    'error_release_not_found': {'zh': '所选发行不存在或不属于本研究，未执行任何更改。', 'en': 'The selected release does not exist or belongs to another study; nothing changed.'},
+    'error_release_unapproved': {'zh': '只能把已批准的发行设为当前发行。', 'en': 'Only approved releases can become the current release.'},
+    'error_release_unavailable': {'zh': '该发行没有可用的已发布资源（Web 包或平台完整原生包），不能作为当前发行。', 'en': 'The release has no published resource (Web package or complete native package) and cannot be current.'},
+    'error_account_missing': {'zh': '目标账号不存在。', 'en': 'The target account does not exist.'},
+    'error_auth_required': {'zh': '请先登录。', 'en': 'Sign in first.'},
+    'error_rate_limited': {'zh': '请求过于频繁，请稍后再试。', 'en': 'Too many requests; try again later.'},
+    'error_method': {'zh': '请求方法不正确。', 'en': 'Wrong request method.'},
+    'error_wrong_host': {'zh': '访问的主机名不正确。', 'en': 'Wrong host name.'},
+}
+
+
+def tr(lang, key):
+    entry = STRINGS.get(key)
+    if entry is None:
+        return key
+    return entry.get(lang) or entry[DEFAULT_LANG]
+
+
+def notice(lang, zh_text, en_text):
+    """One generic status message, already interpolated, in the active language."""
+    return en_text if lang == 'en' else zh_text
+
+
+ERRORS_EN = {
+    'unknown_operation': 'Unknown operation.',
+    'reauth_failed': 'Re-authentication failed: the actor password is wrong; nothing was changed.',
+    'revision_conflict': 'The governance revision changed; refresh and retry. Nothing was changed.',
+    'auth_required': 'Sign in first.',
+    'forbidden': 'This account lacks the required instance-governance permission.',
+    'owner_protected': 'The Owner account cannot be changed through account management.',
+    'admin_appointment_owner_only': 'Only the Owner can appoint or demote an Admin.',
+    'owner_only': 'Only the Owner can perform this action.',
+    'self_target': 'This action cannot target your own account; use Change password instead.',
+    'higher_privilege_target': 'The target holds study privileges this actor cannot dominate, so its password, active state and permissions are out of reach.',
+    'password_change_required': 'The temporary password must be changed before account governance actions.',
+    'password_reused': 'The new password must differ from the current password.',
+    'role': 'Invalid role.',
+    'username': 'Invalid username.',
+    'account_exists': 'The account already exists, or an active invitation with that name does.',
+    'invitation_active': 'This account already has an unused invitation; revoke it or wait for expiry.',
+    'account_missing': 'The target account does not exist.',
+    'no_change': 'The target already has that state.',
+    'no_conflicts': 'There is no authorization conflict to resolve.',
+    'choice': 'Choose how to resolve the conflict.',
+    'current_password_wrong': 'The current password is wrong.',
+    'password_too_short': 'The password needs at least 16 characters.',
+    'password_mismatch': 'The two passwords do not match.',
+    'invitation_inactive': 'The invitation was used, revoked or expired.',
+    'activation_failed': 'Activation failed: the invitation is invalid, used, revoked or expired.',
+    'rate_limited': 'Too many requests; try again later.',
+    'preview_required': 'A preview identity is missing; preview again before committing.',
+    'preview_invalid': 'The preview does not exist, expired, or belongs to another account; preview again.',
+    'preview_expired': 'The preview expired; preview again. Nothing was changed.',
+    'preview_stale': 'The accounts, study or permissions moved after the preview; preview again. Nothing was changed.',
+    'preview_errors': 'The preview still has row errors; the whole batch was not executed. Fix the rows and retry.',
+    'visibility_children_contradiction': 'Removing study visibility cannot keep child permissions; nothing was changed.',
+    'delegation_forbidden': 'The submission includes actions this actor cannot delegate, or the target study is out of scope; nothing was changed.',
+    'file_required': 'Choose an XLSX file to upload.',
+    'file_too_large': 'The file exceeds the 2 MiB compressed limit; no row was imported.',
+    'expanded_too_large': 'The expanded file exceeds the 10 MiB limit; no row was imported.',
+    'invalid_xlsx': 'The file is not a valid .xlsx workbook; no row was imported.',
+    'macro_rejected': 'The file contains macros and was rejected as a whole; no row was imported.',
+    'external_link_rejected': 'The file contains formulas or external links and was rejected as a whole; no row was imported.',
+    'formula_rejected': 'The file contains formulas and was rejected as a whole; no row was imported.',
+    'template_headers': 'The header row does not match the template; download the current template.',
+    'column_limit': 'The file exceeds the 32-column limit.',
+    'row_limit': 'The file exceeds the 1000-row limit.',
+    'sheet_cells': 'The worksheet exceeds the cell limit and was rejected as a whole.',
+    'numeric_cell': 'That cell must be text, not a number or date.',
+    'numeric_identifier': 'Identifiers must be text; numeric IDs are rejected because leading zeros cannot be guessed.',
+    'duplicate_identifier': 'The same identifier appears twice in the import.',
+    'existing_identifier': 'The roster already contains that ID; append imports never overwrite.',
+    'revision': 'update / disable / enable must carry the target account revision (an integer).',
+    'revision_mismatch': 'The target account revision changed; refresh and retry. Nothing was executed.',
+    'study_id': 'update must carry the study UUID.',
+    'study_missing': 'The study does not exist or is unavailable.',
+    'actions': 'actions must be a semicolon-separated list of known action codes.',
+    'visibility_required': 'Explicit actions must include study.view.',
+    'operation': 'operation must be create / update / disable / enable.',
+    'password': 'The password column must be text.',
+    'id': 'Invalid ID.',
+    'invalid_request': 'The action was not completed. Check the input or permissions and retry.',
+    'method': 'Wrong request method.',
+    'wrong_host': 'Wrong host name.',
+}
+
+
+def error_message(code, fallback, lang=DEFAULT_LANG):
+    if lang != 'en':
+        return fallback
+    key = 'error_' + (code or '')
+    if key in STRINGS:
+        return STRINGS[key]['en']
+    if code in ERRORS_EN:
+        return ERRORS_EN[code]
+    return fallback
+
+
+def strings(lang):
+    return {key: value.get(lang) or value[DEFAULT_LANG] for key, value in STRINGS.items()}
+
+
+def lang_of(request):
+    value = (request.COOKIES.get(LANG_COOKIE) or '').strip()
+    return value if value in LANGS else DEFAULT_LANG
+
+
+def theme_of(request):
+    value = (request.COOKIES.get(THEME_COOKIE) or '').strip()
+    return value if value in THEMES else DEFAULT_THEME
+
+
+def safe_next(raw):
+    """Only same-origin absolute paths are accepted as a return target."""
+    if not isinstance(raw, str):
+        return '/'
+    raw = raw.strip()
+    if not raw.startswith('/') or raw.startswith('//') or len(raw) > 512:
+        return '/'
+    if '\r' in raw or '\n' in raw or '\\' in raw or ':' in raw.split('?')[0]:
+        return '/'
+    return raw
+
+
+def context(request):
+    user = getattr(request, 'user', None)
+    authenticated = bool(getattr(user, 'is_authenticated', False))
+    from .access import effective_role, is_account_administrator, is_instance_owner
+    return {
+        'ui': strings(lang_of(request)),
+        'lang': lang_of(request),
+        'theme': theme_of(request),
+        'is_administrator': authenticated and is_account_administrator(user),
+        'account_role': (effective_role(user) if authenticated else 'user'),
+        'is_owner': authenticated and is_instance_owner(user),
+    }
+
+
+def preferences(request):
+    """Set one preference cookie and return to the same-origin page."""
+    if request.method != 'GET':
+        from .protocol import require
+        require(False, 'method', 405)
+    response = redirect(safe_next(request.GET.get('next', '/')))
+    secure = getattr(request, 'is_secure', lambda: False)()
+    lang = (request.GET.get('lang') or '').strip()
+    theme = (request.GET.get('theme') or '').strip()
+    if lang in LANGS:
+        response.set_cookie(LANG_COOKIE, lang, max_age=COOKIE_MAX_AGE, samesite='Lax',
+                            path='/', secure=secure, httponly=False)
+    if theme in THEMES:
+        response.set_cookie(THEME_COOKIE, theme, max_age=COOKIE_MAX_AGE, samesite='Lax',
+                            path='/', secure=secure, httponly=False)
+    response['Cache-Control'] = 'no-store'
+    return response

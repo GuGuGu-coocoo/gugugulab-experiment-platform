@@ -1,1 +1,12 @@
-{% extends 'core/base.html' %}{% block content %}<h1>我的研究</h1><p>创建研究、登记实验、批准合成发行，并核对采集状态。</p>{% for study in studies %}<article><h2><a href="/studies/{{study.id}}">{{study.title}}</a></h2><small>{{study.recruitment}} · {{study.mode}}</small></article>{% empty %}<p>当前没有获授权研究。</p>{% endfor %}{% if can_create %}<section><h2>创建研究</h2><form method="post">{% csrf_token %}<input name="title" placeholder="研究名称" maxlength="160" required><button>创建</button></form></section>{% endif %}<form action="/logout" method="post">{% csrf_token %}<button>退出登录</button></form>{% endblock %}
+{% extends 'core/workbench.html' %}{% block content %}
+<h1>{{ui.home_title}}</h1><p class="muted">{{ui.home_intro}}</p>
+{% if cards %}<ul class="cards">
+{% for card in cards %}<li class="card" data-study-card="{{card.study.id}}">
+<h2><a href="/studies/{{card.study.id}}">{{card.study.title}}</a></h2>
+<div class="badges"><span class="badge" data-card-recruitment="{{card.study.recruitment}}">{{card.recruitment_label}}</span><span class="badge" data-card-mode="{{card.study.mode}}">{{card.mode_label}}</span><span class="badge">{{ui.home_card_sessions}}：{{card.sessions_total}}</span><span class="badge">{{ui.home_card_participants}}：{{card.participants_total}}</span></div>
+<p class="muted">{{ui.home_card_current}}：{% if card.has_current %}{{card.release_label}}{% else %}{{ui.home_card_none}}{% endif %}</p>
+<p><a href="/studies/{{card.study.id}}" data-card-link="1">{{ui.home_card_link}}</a></p>
+</li>{% endfor %}</ul>
+{% else %}<p data-empty-studies="1">{{ui.home_empty}}</p>{% endif %}
+<section><h2>{{ui.home_create_title}}</h2>{% if can_create %}<form method="post">{% csrf_token %}<label>{{ui.home_create_placeholder}} <input name="title" maxlength="160" required></label><button>{{ui.home_create_submit}}</button></form>{% else %}<p class="muted">{{ui.home_create_owner_only}}</p>{% endif %}</section>
+{% endblock %}

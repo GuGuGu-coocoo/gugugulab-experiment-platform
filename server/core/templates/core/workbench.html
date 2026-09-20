@@ -1,0 +1,17 @@
+{% extends 'core/base.html' %}
+{% block body %}<div class="app">
+<nav class="side" data-nav="1" aria-label="{{ui.study_modules}}">
+{% if request.user.is_authenticated %}<p class="who" data-current-account="1"><strong>{{request.user.username}}</strong>{% if is_owner %}{{ui.role_owner}}{% elif account_role == 'admin' %}{{ui.role_admin}}{% else %}{{ui.role_user}}{% endif %}</p>{% endif %}
+<h2>{{ui.nav_home}}</h2>
+<ul><li><a href="/" data-nav-link="home" {% if nav_current == 'home' %}aria-current="page"{% endif %}>{{ui.nav_home}}</a></li></ul>
+{% if study %}<h2>{{ui.study_modules}}</h2>
+<ul>{% for item in study_nav %}<li><a href="{{item.url}}" data-nav-link="{{item.key}}" {% if item.key == module %}aria-current="page"{% endif %}>{{item.label}}</a></li>{% endfor %}</ul>{% endif %}
+<h2>{{ui.nav_users}}</h2>
+<ul>
+{% if is_administrator %}<li><a href="/users" data-nav-link="users" {% if nav_current == 'users' %}aria-current="page"{% endif %}>{{ui.nav_users}}</a></li>{% endif %}
+<li><a href="/account/password" data-nav-link="password" {% if nav_current == 'password' %}aria-current="page"{% endif %}>{{ui.nav_password}}</a></li>
+</ul>
+<form action="/logout" method="post">{% csrf_token %}<button class="secondary" data-nav-link="logout">{{ui.nav_logout}}</button></form>
+</nav>
+<main id="main" class="main" {% if module %}data-module="{{module}}"{% endif %}>{% block content %}{% endblock %}</main>
+</div>{% endblock %}

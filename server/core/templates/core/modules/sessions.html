@@ -1,0 +1,29 @@
+<section data-sessions="1">
+<h2>{{ui.sessions_title}}</h2>
+<p class="muted" data-timezone="{{sessions_timezone}}">{{ui.sessions_timezone}}：{{sessions_timezone}}。{{ui.sessions_timezone_note}}</p>
+<p><span class="badge" data-sessions-total="{{sessions_total}}">{{ui.sessions_counts}}：{{sessions_total}}</span> <span class="badge">{{ui.sessions_participants}}：{{sessions_participants_total}}</span></p>
+<p class="muted">{{ui.sessions_rows_note}}</p>
+{% if sessions_rows_visible %}
+<form method="get" class="row" data-sessions-filter="1">
+{% if sessions_mapping_visible %}<label>{{ui.sessions_search_label}} <input name="code" value="{{sessions_code}}" autocomplete="off"></label>{% endif %}
+<label>{{ui.sessions_status_label}} <select name="status"><option value="">{{ui.common_all}}</option>{% for option in sessions_status_choices %}<option value="{{option.value}}" {% if sessions_status == option.value %}selected{% endif %}>{{option.label}}（{{option.count}}）</option>{% endfor %}</select></label>
+<button>{{ui.common_filter}}</button></form>
+{% if sessions_rows %}<div class="table-wrap"><table><caption>{{ui.sessions_title}}</caption><thead><tr><th scope="col">{{ui.sessions_col_session}}</th><th scope="col">{{ui.sessions_col_participant}}</th><th scope="col">{{ui.sessions_col_status}}</th><th scope="col">{{ui.sessions_col_created}}</th><th scope="col">{{ui.sessions_col_release}}</th><th scope="col">{{ui.sessions_col_recovery}}</th></tr></thead><tbody>
+{% for row in sessions_rows %}<tr data-session-row="{{row.id}}" data-status="{{row.state}}">
+<td><code>{{row.id}}</code></td>
+<td>{% if row.participant_visible %}<span data-participant="{{row.participant_code}}">{{row.participant_code}}</span>{% else %}<span class="muted" data-participant-hidden="1">{{ui.sessions_hidden}}</span>{% endif %}</td>
+<td data-status-label="{{row.state}}">{{row.state_label}}</td>
+<td data-local-time="{{row.created_local}}">{{row.created_local}}</td>
+<td>{{row.release_label}}</td>
+<td>{% if sessions_recover_allowed and row.state != "revoked" %}<form method="post" class="inline-form">{% csrf_token %}<input type="hidden" name="op" value="recover_code"><input type="hidden" name="session_id" value="{{row.id}}"><button>{{ui.sessions_recover_issue}}</button></form><form method="post" class="inline-form">{% csrf_token %}<input type="hidden" name="op" value="recover"><input type="hidden" name="session_id" value="{{row.id}}"><button class="secondary">{{ui.sessions_permit_issue}}</button></form>{% endif %}</td>
+</tr>{% endfor %}</tbody></table></div>
+{% if sessions_page_links %}<nav class="pager" aria-label="{{ui.common_page}}" data-sessions-pager="1"><span>{{ui.common_page}} {{sessions_page}} / {{sessions_pages}}</span>{% for link in sessions_page_links %}{% if link.current %}<span aria-current="page">{{link.number}}</span>{% else %}<a href="{{link.url}}">{{link.number}}</a>{% endif %}{% endfor %}</nav>{% endif %}
+{% else %}<p data-sessions-empty="1">{{ui.sessions_empty}}</p>{% endif %}
+<p class="muted">{{ui.sessions_status_note}}</p>
+{% else %}
+<p class="muted" data-sessions-hidden="1">{{ui.sessions_recovery_denied}}</p>
+{% endif %}
+{% if sessions_recover_allowed %}<h3>{{ui.sessions_recover_heading}}</h3><p class="muted">{{ui.sessions_recover_hint}}</p>
+<form method="post" data-recover-uuid-form="1">{% csrf_token %}<label>{{ui.sessions_recover_uuid_label}} <input name="session_id" placeholder="UUID" required></label><button name="op" value="recover_code">{{ui.sessions_recover_issue}}</button> <button name="op" value="recover" class="secondary">{{ui.sessions_permit_issue}}</button></form>
+<p class="muted">{{ui.sessions_recovery_denied}}</p>{% endif %}
+</section>

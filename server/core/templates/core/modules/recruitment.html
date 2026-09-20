@@ -1,0 +1,26 @@
+<section data-recruitment-state="1"><h2>{{ui.recruitment_state_title}}</h2>
+<p>{{ui.publication_current}}：<span class="badge" data-recruitment-value="{{study.recruitment}}">{% if study.recruitment == "open" %}{{ui.home_recruit_open}}{% elif study.recruitment == "closed" %}{{ui.home_recruit_closed}}{% else %}{{ui.home_recruit_paused}}{% endif %}</span></p>
+{% if can_recruit %}<p class="muted">{{ui.recruitment_note}}</p>
+<form method="post">{% csrf_token %}<input type="hidden" name="op" value="recruitment"><label>{{ui.recruitment_state_label}} <select name="state" aria-label="{{ui.recruitment_state_label}}" onchange="this.form.requestSubmit()"><option value="open" {% if study.recruitment == "open" %}selected{% endif %}>{{ui.recruitment_open}}</option><option value="paused" {% if study.recruitment == "paused" %}selected{% endif %}>{{ui.recruitment_paused}}</option><option value="closed" {% if study.recruitment == "closed" %}selected{% endif %}>{{ui.recruitment_closed}}</option></select></label><noscript><button>{{ui.recruitment_update}}</button></noscript></form>
+{% else %}<p class="muted">{{ui.overview_no_permission}}</p>{% endif %}
+</section>
+<section data-publication="1"><h2>{{ui.publication_title}}</h2><p class="muted">{{ui.publication_intro}}</p>
+{% if can_configure %}<form method="post" data-publication-form="1">{% csrf_token %}<input type="hidden" name="op" value="publication"><input type="hidden" name="study_revision" value="{{study_revision}}">
+<label class="inline"><input type="checkbox" name="public" value="1" {% if study.public %}checked{% endif %}> {{ui.publication_public}}</label>
+<label>{{ui.publication_summary}} <textarea name="public_summary" maxlength="280" autocomplete="off">{{study.public_summary}}</textarea></label>
+<label>{{ui.publication_duration}} <input name="public_duration" maxlength="80" value="{{study.public_duration}}"></label>
+<label>{{ui.publication_device}} <input name="public_device_requirements" maxlength="160" value="{{study.public_device_requirements}}"></label>
+<label class="inline"><input type="checkbox" name="show_closed_summary" value="1" {% if study.show_closed_summary %}checked{% endif %}> {{ui.publication_keep_closed}}</label>
+<button>{{ui.publication_save}}</button></form>
+{% if study.public %}<p>{{ui.publication_portal_link}}：<a href="{{public_api_url}}/" target="_blank" rel="noopener noreferrer">{{public_api_url}}/</a> · {{ui.publication_stable_link}}：<code>{{public_api_url}}/join/{{study.id}}</code></p>{% endif %}
+{% else %}<p class="muted">{{ui.overview_no_permission}}</p>{% endif %}
+</section>
+<section data-current-release-section="1"><h2>{{ui.publication_current}}</h2>
+<p data-current-release="{{current_release_id|default:''}}">{% if current_release_id %}<code>{{current_release_id}}</code>{% else %}{{ui.publication_current_none}}{% endif %}</p>
+{% if can_configure or can_recruit %}<form method="post" data-current-release-form="1">{% csrf_token %}<input type="hidden" name="op" value="current_release"><input type="hidden" name="study_revision" value="{{study_revision}}">
+<label class="inline"><input type="radio" name="release_id" value="" data-release-option="clear" {% if not current_release_id %}checked{% endif %}> {{ui.publication_clear}}</label>
+{% for release in releases %}<label class="inline"><input type="radio" name="release_id" value="{{release.id}}" data-release-option="{{release.id}}" {% if release.id == current_release_id %}checked{% endif %}> {{release.platform|default:"—"}} · {{release.version|default:"—"}} · <code>{{release.id}}</code> {% if not release.approved %}（{{ui.builds_release_unapproved}}）{% elif release.platform in native_platforms %}{% if release.artifact_ready %}（{{ui.builds_release_native_complete}}）{% else %}（{{ui.builds_release_native_missing}}）{% endif %}{% elif not release.build.package_path %}（{{ui.builds_release_no_web}}）{% else %}（{{ui.builds_release_web}}）{% endif %}</label>{% endfor %}
+<button>{{ui.publication_select}}</button></form>
+<p class="muted">{{ui.publication_select_note}}</p>
+{% else %}<p class="muted">{{ui.overview_no_permission}}</p>{% endif %}
+</section>

@@ -15,6 +15,8 @@ MIDDLEWARE = ['core.limits.RequestLimits', 'django.middleware.security.SecurityM
 DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': DATA_DIR / 'gep.sqlite3', 'OPTIONS': {'timeout': 20, 'transaction_mode': 'IMMEDIATE'}}}
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 USE_TZ = True
+# Server timezone for every rendered timestamp; pages label it explicitly.
+TIME_ZONE = os.environ.get('GEP_TIME_ZONE', 'UTC')
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Strict'
 SESSION_COOKIE_NAME = 'gep_admin'
@@ -23,4 +25,4 @@ SESSION_COOKIE_DOMAIN = None
 CSRF_COOKIE_DOMAIN = None
 CSRF_COOKIE_SECURE = SESSION_COOKIE_SECURE
 DATA_UPLOAD_MAX_MEMORY_SIZE = 268435456
-TEMPLATES = [{'BACKEND': 'django.template.backends.django.DjangoTemplates', 'APP_DIRS': True, 'OPTIONS': {'context_processors': ['django.template.context_processors.request']}}]
+TEMPLATES = [{'BACKEND': 'django.template.backends.django.DjangoTemplates', 'APP_DIRS': True, 'OPTIONS': {'context_processors': ['django.template.context_processors.request', 'core.ui.context']}}]
