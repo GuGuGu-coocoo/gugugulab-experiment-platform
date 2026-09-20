@@ -1,8 +1,20 @@
+import os
 import uuid
 import pytest
 from django.contrib.auth import get_user_model
 from core.models import Instance, Study, Build, Release
 from core.services import admit
+
+@pytest.fixture(scope='session')
+def django_db_modify_db_settings():
+    """In-memory by default (matching pytest-django); the isolated concurrency
+    probe subprocess sets GEP_TEST_DB_FILE so concurrent writers use a real file
+    database with the configured busy timeout instead of shared-cache table locks."""
+    override = os.environ.get('GEP_TEST_DB_FILE')
+    if not override:
+        return
+    from django.conf import settings
+    settings.DATABASES['default'].setdefault('TEST', {})['NAME'] = override
 
 @pytest.fixture
 def setup(db):

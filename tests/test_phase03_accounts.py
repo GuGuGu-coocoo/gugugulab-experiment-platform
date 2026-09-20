@@ -23,6 +23,7 @@ THIRD_PASSWORD = 'synthetic-third-password-2026'
 SECRET_RE = re.compile(r'data-one-time-secret="1".*?<code>(.*?)</code>', re.S)
 INVITE_RE = re.compile(r'data-one-time-invitation="1".*?<code>/activate-account\?token=(.*?)</code>', re.S)
 ACTIVATION_FAILED = '激活失败：邀请无效、已使用、已撤销或已过期。'
+PREVIEW_RE = re.compile(r'data-preview-id="([0-9a-fA-F-]{36})"')
 
 
 def csrf_token(client, path='/login'):
@@ -81,7 +82,9 @@ def test_owner_governance_and_missing_profile_is_ordinary(setup):
     assert page.status_code == 200
     body = page.content.decode()
     assert 'data-owner-row="1"' in body and 'Owner 账号只读' in body
-    assert '研究可见' not in body  # capability labels belong to study grants, not instance roles
+    # New 03B GUI contract: capability labels now belong to the study permission
+    # matrix (visibility + explicit actions) on /users, not to instance roles.
+    assert '实例权限矩阵' in body and '研究可见' in body
 
     # A user without a profile is ordinary: no instance governance, no study access.
     user = get_user_model().objects.create_user('synthetic_no_profile', password=NEW_PASSWORD)
@@ -565,7 +568,13 @@ def test_study_view_is_prerequisite_and_owner_reconciliation_is_previewed(setup)
     assert admin.post('/users', {**base, 'op': 'reconcile', 'choice': 'grant_view'}).status_code == 403
     assert not Grant.objects.filter(user=user, study=setup['study'], action='study.view').exists()
 
-    governance(owner, 'reconcile', choice='grant_view')
+    # Old contract: one POST applied the reconciliation. New contract: the Owner
+    # must preview, then confirm with the one-time preview identity.
+    response = governance(owner, 'reconcile', choice='grant_view')
+    preview = PREVIEW_RE.search(response.content.decode())
+    assert preview, 'reconcile now renders a bound preview'
+    assert not Grant.objects.filter(user=user, study=setup['study'], action='study.view').exists()
+    governance(owner, 'reconcile_commit', preview_id=preview.group(1))
     grant = Grant.objects.get(user=user, study=setup['study'], action='study.view')
     assert grant.delegable is False
     assert allowed(user, setup['study'], 'build.upload')
@@ -575,7 +584,10 @@ def test_study_view_is_prerequisite_and_owner_reconciliation_is_previewed(setup)
 
     other = Study.objects.create(title='Synthetic conflict B')
     Grant.objects.create(user=user, study=other, action='data.export_raw')
-    governance(owner, 'reconcile', choice='remove_conflicting')
+    response = governance(owner, 'reconcile', choice='remove_conflicting')
+    preview = PREVIEW_RE.search(response.content.decode())
+    assert preview, 'reconcile now renders a bound preview'
+    governance(owner, 'reconcile_commit', preview_id=preview.group(1))
     assert not Grant.objects.filter(user=user, study=other).exists()
     assert Audit.objects.filter(action='access.conflict_resolved').count() == 2
 

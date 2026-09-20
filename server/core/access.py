@@ -1,8 +1,12 @@
-from .models import AccountProfile, Grant, Instance
+from .models import AccountProfile, Grant, Instance, Study
 from .protocol import require
 
-ACTIONS = {'study.view','study.configure','build.upload','build.preview','release.approve_pilot','recruitment.manage','data.export_raw','session.recover','member.manage','permission.delegate','audit.view'}
+ACTIONS = {'study.view','study.configure','build.upload','build.preview','release.approve_pilot','recruitment.manage','data.export_raw','session.recover','member.manage','permission.delegate','audit.view','identity_mapping.read','session.view'}
 ROLES = {'admin','user'}
+# New in 03B: explicit identity/session visibility actions. They are never
+# backfilled into existing grants; only explicit assignment (or a newly created
+# study for its creator) can add them.
+NEW_ACTIONS = {'identity_mapping.read','session.view'}
 
 
 def profile_of(user):
@@ -83,6 +87,27 @@ def conflicts():
     for user_id, study_id, action in Grant.objects.values_list('user_id', 'study_id', 'action'):
         grouped.setdefault((user_id, study_id), set()).add(action)
     return sorted((user_id, study_id, sorted(actions - {'study.view'})) for (user_id, study_id), actions in grouped.items() if actions - {'study.view'} and 'study.view' not in actions)
+
+
+def authority_actions(user, study):
+    """Actions the actor may assign on this study: effective AND delegable.
+
+    The same explicit-action and visibility prerequisites that govern use also
+    govern delegation, so an Admin can never grant more than they hold.
+    """
+    return {action for study_id, action in delegable_authority(user) if study_id == study.pk}
+
+
+def manageable_actions(actor, study):
+    """Owner may assign any catalog action; Admin is limited to delegable_authority."""
+    if is_instance_owner(actor):
+        return set(ACTIONS)
+    return authority_actions(actor, study)
+
+
+def visible_studies(user):
+    """Studies where the user holds at least one explicit grant (matrix scope)."""
+    return Study.objects.filter(grant__user=user).distinct()
 
 
 def guard(user, study, action):

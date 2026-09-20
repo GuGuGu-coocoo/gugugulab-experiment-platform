@@ -123,3 +123,25 @@ class Throttle(models.Model):
     key = models.CharField(max_length=64,primary_key=True)
     window = models.BigIntegerField()
     count = models.PositiveIntegerField(default=0)
+
+class PermissionPreview(models.Model):
+    """Single-use, expiring commit identity for preview-bound governance changes.
+
+    ``summary`` is the redacted preview, ``staged`` holds the private normalized
+    intent (roster password hashes stay here only) and ``binding`` is the digest
+    of intended operations plus the observed target state, so a commit is
+    refused with zero partial mutations when anything moved after the preview.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    kind = models.CharField(max_length=24)
+    scope = models.CharField(max_length=64, blank=True)
+    summary = models.JSONField(default=dict)
+    errors = models.JSONField(default=list)
+    binding = models.CharField(max_length=64)
+    base_revision = models.PositiveIntegerField(default=0)
+    staged = models.JSONField(null=True, blank=True)
+    expires_at = models.DateTimeField()
+    consumed = models.BooleanField(default=False)
+    result = models.JSONField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)

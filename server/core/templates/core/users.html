@@ -1,11 +1,20 @@
 {% extends 'core/base.html' %}{% block content %}
 <h1>账号与实例治理</h1>
-<p>Owner 由实例指针唯一决定；Admin 由 Owner 任命或降级。Admin 可以管理非 Owner 账号（含其他 Admin 的改密与启停），但不能任命或降级 Admin，也不能重置、停用或启用拥有操作者无法支配研究权限的账号。Owner 与 Admin 角色都不隐含研究 RAW 数据权限。当前治理版本 {{revision}}。</p>
+<p>Owner 由实例指针唯一决定；Admin 由 Owner 任命或降级。Owner 行即使对 Owner 本人也受保护：账号管理不能修改 Owner 行，Owner 改密码请使用“修改我的密码”。普通 Admin 只能授予自己“有效且可委派”的动作，且目标账号必须在可支配范围内；角色任命与降级始终仅限 Owner。矩阵先显示研究可见性，再展开显式动作；取消可见性会同时清除子权限，服务端拒绝“不可见却保留子权限”的矛盾提交。所有授权变更都需要先预览，再用本人密码一次性确认。</p>
 <p><a href="/">返回我的研究</a> · <a href="/account/password">修改我的密码</a></p>
 {% if notice %}<div class="notice">{{notice}}</div>{% endif %}
 {% if secret %}<div class="notice" data-one-time-secret="1">一次性临时密码（{{secret_username}}，只显示这一次，绝不写入审计或导出）：<code>{{secret}}</code></div>{% endif %}
 {% if invitation_token %}<div class="notice" data-one-time-invitation="1">账号邀请（{{invitation_username}}，24 小时内一次性有效，只显示这一次）：<code>/activate-account?token={{invitation_token}}</code></div>{% endif %}
+{% for invite in invitation_tokens %}<div class="notice" data-one-time-invitation="1">导入邀请（{{invite.username}}，只显示这一次）：<code>/activate-account?token={{invite.token}}</code></div>{% endfor %}
 {% if error %}<div class="error" role="alert">{{error}}</div>{% endif %}
+{% if preview %}<section data-preview="{{preview.preview_kind}}" data-preview-id="{{preview.preview_id}}"><h2>更改预览（未执行）</h2>
+{% if preview.preview_kind == 'matrix' %}<p>账号 {{preview.preview_summary.username}} · 研究 {{preview.preview_summary.study}}：新增 {{preview.preview_summary.add|join:"、"|default:"无"}}；移除 {{preview.preview_summary.remove|join:"、"|default:"无"}}；委派标记变化 {{preview.preview_summary.delegable_changed|join:"、"|default:"无"}}。变更后动作：{{preview.preview_summary.target|join:"、"|default:"无显式动作"}}。</p>{% endif %}
+{% if preview.preview_kind == 'reconcile' %}<table><tr><th>账号</th><th>研究</th><th>冲突子权限</th></tr>{% for row in preview.preview_summary.rows %}<tr><td>{{row.username}}</td><td>{{row.study}}</td><td>{{row.actions|join:"、"}}</td></tr>{% endfor %}</table><p>处理方式：{{preview.preview_summary.choice}}。提交时会重新核对同一批账号/研究/动作，任何变化都会整体拒绝。</p>{% endif %}
+{% if preview.preview_kind == 'users_import' %}<p>共读取 {{preview.preview_summary.rows}} 行，可执行 {{preview.preview_summary.operations|length}} 项；将发出邀请：{{preview.preview_summary.invitations|join:"、"|default:"无"}}。已有密码永不被导入重置。</p><table><tr><th>行</th><th>操作</th><th>用户名</th><th>研究</th><th>动作</th></tr>{% for row in preview.preview_summary.operations %}<tr><td>{{row.row}}</td><td>{{row.operation}}</td><td>{{row.username}}</td><td>{{row.study_id|default:"—"}}</td><td>{{row.actions|join:"、"|default:"—"}}</td></tr>{% endfor %}</table>{% endif %}
+{% if preview.preview_kind == 'roster_import' %}<p>研究 {{preview.preview_summary.study}}（模式 {{preview.preview_summary.mode}}）：读取 {{preview.preview_summary.rows}} 行，追加 {{preview.preview_summary.new_ids}} 个新 ID；{% if preview.preview_summary.passwords_set %}密码已立即哈希到私密暂存，预览、会话、日志与导出都不含明文。{% else %}本模式不读取密码列。{% endif %}</p>{% endif %}
+{% if preview.preview_errors %}<h3>逐行错误（整批不会执行）</h3><table><tr><th>行</th><th>代码</th><th>说明</th></tr>{% for item in preview.preview_errors %}<tr><td>{{item.row}}</td><td>{{item.code}}</td><td>{{item.message}}</td></tr>{% endfor %}</table>{% else %}
+<form method="post">{% csrf_token %}<input type="hidden" name="op" value="{{commit_op}}"><input type="hidden" name="preview_id" value="{{preview.preview_id}}">
+<label>你的密码（确认时重新认证）<input type="password" name="password" required></label><button>确认执行（{{preview.preview_expires_at|date:"H:i"}} 前一次性有效）</button></form>{% endif %}</section>{% endif %}
 <section><h2>账号</h2>
 <table><tr><th>用户名</th><th>角色</th><th>状态</th><th>密码</th><th>操作</th></tr>
 {% for row in rows %}<tr data-account-row="{{row.id}}" data-owner-row="{{row.is_owner|yesno:'1,0'}}" data-account-role="{{row.role}}">
@@ -16,6 +25,19 @@
 {% if is_owner %}<form method="post">{% csrf_token %}<input type="hidden" name="op" value="set_role"><input type="hidden" name="username" value="{{row.username}}"><input type="hidden" name="revision" value="{{revision}}"><select name="role"><option value="user"{% if row.role == 'user' %} selected{% endif %}>user</option><option value="admin"{% if row.role == 'admin' %} selected{% endif %}>admin</option></select><input type="password" name="password" placeholder="你的密码" required><button>保存角色</button></form>{% endif %}
 {% if row.is_active %}<form method="post">{% csrf_token %}<input type="hidden" name="op" value="disable"><input type="hidden" name="username" value="{{row.username}}"><input type="hidden" name="revision" value="{{revision}}"><input type="password" name="password" placeholder="你的密码" required><button>停用</button></form>{% else %}<form method="post">{% csrf_token %}<input type="hidden" name="op" value="enable"><input type="hidden" name="username" value="{{row.username}}"><input type="hidden" name="revision" value="{{revision}}"><input type="password" name="password" placeholder="你的密码" required><button>启用</button></form>{% endif %}
 {% endif %}</td></tr>{% endfor %}</table></section>
+<section data-permission-matrix><h2>实例权限矩阵</h2><p>研究可见性是显式动作的前提；先勾选“研究可见”，再展开子权限。可委派标记决定该账号能否把同一动作继续转授。Owner 行对所有账号（包括 Owner）只读。</p>
+<table><tr><th>账号</th><th>研究</th><th>可见性与显式动作</th></tr>
+{% for row in matrix %}{% for entry in row.studies %}<tr data-matrix-row="{{row.id}}-{{entry.study.id}}">
+<td>{{row.username}}{% if row.is_owner %} <small>Owner</small>{% endif %}</td><td>{{entry.study.title}}</td><td>
+{% if entry.editable %}<form method="post" data-visibility-form>{% csrf_token %}
+<input type="hidden" name="op" value="matrix_preview"><input type="hidden" name="user_id" value="{{row.id}}"><input type="hidden" name="study_id" value="{{entry.study.id}}">
+<label><input type="checkbox" name="visibility" value="1" {% if entry.visibility %}checked{% endif %}> 研究可见：查看研究概况 <small>study.view</small></label>
+<details><summary>显式动作（点击展开）</summary>{% for check in entry.checks %}
+<label><input type="checkbox" name="action:{{check.action}}" value="1" data-child="1" {% if check.checked %}checked{% endif %}> {{check.label}} <small>{{check.action}}</small></label>
+<label><input type="checkbox" name="delegable:{{check.action}}" value="1" {% if check.delegable %}checked{% endif %}> 可委派</label>{% endfor %}</details>
+<button>预览更改</button></form>
+{% else %}{{entry.summary}}{% if row.is_owner or row.id == request.user.id %} <small>只读</small>{% endif %}{% endif %}
+</td></tr>{% endfor %}{% empty %}<tr><td colspan="3">当前没有可显示的研究权限行。</td></tr>{% endfor %}</table></section>
 <section><h2>新增账号</h2>
 <form method="post">{% csrf_token %}<input type="hidden" name="op" value="invite_account"><input type="hidden" name="revision" value="{{revision}}">
 <label>用户名 <input name="username" maxlength="150" required></label>
@@ -27,8 +49,11 @@
 <section><h2>待接受邀请</h2>{% for invite in invitations %}<form method="post">{% csrf_token %}<input type="hidden" name="op" value="revoke_invitation"><input type="hidden" name="invitation_id" value="{{invite.id}}"><input type="hidden" name="revision" value="{{revision}}">{{invite.username}}（角色 {{invite.role}}）<input type="password" name="password" placeholder="你的密码" required><button>撤销</button></form>{% empty %}<p>没有待接受邀请。</p>{% endfor %}</section>
 {% if is_owner %}<section><h2>授权矛盾预览（缺少 study.view）</h2>
 {% if conflicts %}<table><tr><th>账号</th><th>研究</th><th>无 view 的子权限</th></tr>{% for row in conflicts %}<tr><td>{{row.username}}</td><td>{{row.study}}</td><td>{{row.actions}}</td></tr>{% endfor %}</table>
-<form method="post">{% csrf_token %}<input type="hidden" name="op" value="reconcile"><input type="hidden" name="revision" value="{{revision}}">
-<label>处理方式 <select name="choice"><option value="grant_view">显式补 study.view</option><option value="remove_conflicting">移除冲突子权限</option></select></label>
-<label>你的密码（重新认证）<input type="password" name="password" required></label><button>执行收敛</button></form>
+<p>收敛也必须先预览：提交时会重新核对同一批账号、研究与动作，旧写入者未更新治理版本也会被拒绝。</p>
+<form method="post">{% csrf_token %}<input type="hidden" name="op" value="reconcile_preview">
+<label>处理方式 <select name="choice"><option value="grant_view">显式补 study.view</option><option value="remove_conflicting">移除冲突子权限</option></select></label><button>预览收敛</button></form>
 {% else %}<p>没有缺少 study.view 的授权子权限。</p>{% endif %}</section>{% endif %}
+<script>
+document.querySelectorAll('[data-visibility-form]').forEach(form=>{const box=form.querySelector('[name=visibility]');if(!box)return;box.addEventListener('change',()=>{if(!box.checked){form.querySelectorAll('[data-child]').forEach(child=>{child.checked=false})}})});
+</script>
 {% endblock %}

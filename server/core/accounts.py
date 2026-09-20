@@ -13,7 +13,7 @@ from django.contrib.auth.hashers import check_password
 from django.db import transaction
 from django.utils import timezone
 
-from .access import ROLES, conflicts, dominates, effective_role, is_instance_owner
+from .access import ROLES, dominates, effective_role, is_instance_owner
 from .models import AccountInvitation, AccountProfile, Audit, Grant, Instance
 from .protocol import Rejected, require
 from .services import digest
@@ -142,25 +142,30 @@ def reset_temporary_password(actor, password, expected_revision, target_id):
     return {'username': target.username, 'temporary_password': temporary}
 
 
-def set_account_active(actor, password, expected_revision, target_id, active):
+def apply_account_active(actor, target, profile, active):
+    """Apply an activity transition on locked rows; caller owns the transaction."""
     active = bool(active)
+    require(target.is_active != active, 'no_change', 409)
+    before = _account_state(target, profile)
+    target.is_active = active
+    target.save(update_fields=['is_active'])
+    if not active:
+        profile.auth_version += 1
+    profile.revision += 1
+    profile.save(update_fields=['auth_version', 'revision'])
+    audit(actor, 'account.enabled' if active else 'account.disabled', target.pk, before=before, after=_account_state(target, profile))
+
+
+def set_account_active(actor, password, expected_revision, target_id, active):
     with transaction.atomic():
         instance, actor, _ = _reauth(actor, password, expected_revision)
         target = get_user_model().objects.select_for_update().get(pk=target_id)
         # Reactivation restores privileged access too, so the takeover guard always applies.
         _mutable_target(actor, target, takeover=True)
         profile = _profile_locked(target)
-        require(target.is_active != active, 'no_change', 409)
-        before = _account_state(target, profile)
-        target.is_active = active
-        target.save(update_fields=['is_active'])
-        if not active:
-            profile.auth_version += 1
-        profile.revision += 1
-        profile.save(update_fields=['auth_version', 'revision'])
-        audit(actor, 'account.enabled' if active else 'account.disabled', target.pk, before=before, after=_account_state(target, profile))
+        apply_account_active(actor, target, profile, active)
         _bump(instance)
-    return {'username': target.username, 'is_active': active}
+    return {'username': target.username, 'is_active': bool(active)}
 
 
 def set_account_role(actor, password, expected_revision, target_id, role):
@@ -248,22 +253,22 @@ def revoke_invitation(actor, password, expected_revision, invitation_id):
     return {'username': invitation.username}
 
 
-def reconcile_conflicts(actor, password, expected_revision, choice):
-    """Owner-only resolution of view-less grants; the explicit choice is audited."""
+def apply_reconcile(actor, choice, rows):
+    """Apply an Owner-confirmed reconciliation of view-less grants on locked rows.
+
+    ``rows`` is the conflict snapshot bound by the preview; the caller owns the
+    transaction and has already verified the binding digest. Each row is audited
+    with its explicit before/after actions and the choice.
+    """
     require(choice in ('grant_view', 'remove_conflicting'), 'choice')
-    with transaction.atomic():
-        instance, actor, _ = _reauth(actor, password, expected_revision)
-        require(is_instance_owner(actor), 'owner_only', 403)
-        rows = conflicts()
-        require(bool(rows), 'no_conflicts', 409)
-        resolved = []
-        for user_id, study_id, actions in rows:
-            if choice == 'grant_view':
-                Grant.objects.get_or_create(user_id=user_id, study_id=study_id, action='study.view', defaults={'delegable': False})
-            else:
-                Grant.objects.filter(user_id=user_id, study_id=study_id).exclude(action='study.view').delete()
-            after = sorted(Grant.objects.filter(user_id=user_id, study_id=study_id).values_list('action', flat=True))
-            audit(actor, 'access.conflict_resolved', f'{user_id}:{study_id}', before={'actions': actions, 'choice': choice}, after={'actions': after})
-            resolved.append({'user_id': str(user_id), 'study_id': str(study_id), 'actions': after})
-        _bump(instance)
+    resolved = []
+    for entry in rows:
+        user_id, study_id, actions = entry['user'], entry['study'], entry['actions']
+        if choice == 'grant_view':
+            Grant.objects.get_or_create(user_id=user_id, study_id=study_id, action='study.view', defaults={'delegable': False})
+        else:
+            Grant.objects.filter(user_id=user_id, study_id=study_id).exclude(action='study.view').delete()
+        after = sorted(Grant.objects.filter(user_id=user_id, study_id=study_id).values_list('action', flat=True))
+        audit(actor, 'access.conflict_resolved', f'{user_id}:{study_id}', before={'actions': actions, 'choice': choice}, after={'actions': after})
+        resolved.append({'user_id': str(user_id), 'study_id': str(study_id), 'actions': after})
     return resolved

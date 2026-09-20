@@ -17,11 +17,23 @@ from django.http import JsonResponse, HttpResponse, FileResponse
 from django.shortcuts import render, redirect
 from django.utils import timezone
 from .models import Study, Grant, Instance, Participant, Build, Release, Session, Audit, Invitation, Export, RecoveryPermit, AccountProfile
-from .access import guard, allowed, ACTIONS
+from .access import guard, allowed, ACTIONS, authority_actions
 from .protocol import require, parse, Rejected
 from .views import endpoint
 from .services import digest, completion_status
 from .packages import validate_package, descriptor_valid, MAX_ARCHIVE
+
+
+def _revision_ok(raw, current):
+    try:
+        return int(raw) == current
+    except (TypeError, ValueError):
+        return False
+
+
+def _bump(instance):
+    instance.governance_revision += 1
+    instance.save(update_fields=['governance_revision'])
 
 
 def admin_host(request):
@@ -44,6 +56,8 @@ ACTION_LABELS = {
     'member.manage': '成员管理：邀请或撤销研究成员',
     'permission.delegate': '权限委派：可转授已获准委派的权限，请谨慎授予',
     'audit.view': '审计查看：查看管理操作记录',
+    'identity_mapping.read': '身份映射查看：可查看具体名单身份与会话对应关系（不包含答案）',
+    'session.view': '会话查看：查看具体会话状态与对应名单',
 }
 
 
@@ -52,6 +66,7 @@ def study_context(request, study, notice=''):
     can_manage={'member.manage','permission.delegate'} <= permissions
     return {
         'study':study, 'notice':notice, 'public_api_url':public_api_url(),
+        'revision':Instance.objects.get(pk=1).governance_revision,
         'builds':Build.objects.filter(study=study),
         'releases':Release.objects.filter(study=study).select_related('build'),
         'sessions':[{'id':s.id,'state':completion_status(s)['state']} for s in Session.objects.filter(release__study=study)],
@@ -149,6 +164,7 @@ def study_page(request,study_id):
     if request.method=='POST':
         op=request.POST.get('op')
         with transaction.atomic():
+            instance=Instance.objects.select_for_update().get(pk=1)
             study=Study.objects.get(pk=study_id)
             if op=='configure':
                 guard(request.user,study,'study.configure')
@@ -222,26 +238,32 @@ def study_page(request,study_id):
                 notice='同设备恢复：会话 '+str(session.id)+'；15 分钟一次性许可：'+token
             elif op=='invite':
                 guard(request.user,study,'member.manage');guard(request.user,study,'permission.delegate')
+                require(_revision_ok(request.POST.get('revision'),instance.governance_revision),'revision_conflict',409)
                 actions=request.POST.getlist('actions')
                 require(bool(actions) and set(actions)<=ACTIONS,'actions')
-                require(set(actions)<=set(Grant.objects.filter(user=request.user,study=study,delegable=True).values_list('action',flat=True)),'delegation_forbidden',403)
+                require('study.view' in actions,'visibility_required',409)
+                require(set(actions)<=authority_actions(request.user,study),'delegation_forbidden',403)
                 username=request.POST['username'];require(0<len(username)<=150,'username')
                 token=secrets.token_urlsafe(32)
                 Invitation.objects.create(study=study,issuer=request.user,username=username,actions=actions,token_hash=digest(token),expires_at=timezone.now()+timedelta(hours=24))
                 notice='邀请密钥（请通过可信渠道交付）：'+token
+                _bump(instance)
             elif op=='revoke_invite':
                 guard(request.user,study,'member.manage');guard(request.user,study,'permission.delegate')
+                require(_revision_ok(request.POST.get('revision'),instance.governance_revision),'revision_conflict',409)
                 invitation=Invitation.objects.get(pk=request.POST['invitation_id'],study=study)
-                require(set(invitation.actions)<=set(Grant.objects.filter(user=request.user,study=study,delegable=True).values_list('action',flat=True)),'delegation_forbidden',403)
+                require(set(invitation.actions)<=authority_actions(request.user,study),'delegation_forbidden',403)
                 invitation.revoked=True;invitation.save(update_fields=['revoked'])
+                _bump(instance)
             elif op=='revoke_member':
                 guard(request.user,study,'member.manage');guard(request.user,study,'permission.delegate')
+                require(_revision_ok(request.POST.get('revision'),instance.governance_revision),'revision_conflict',409)
                 require(not Instance.objects.filter(owner_id=request.POST['user_id']).exists(),'owner_protected',403)
                 grants=Grant.objects.filter(study=study,user_id=request.POST['user_id'])
-                mine=set(Grant.objects.filter(user=request.user,study=study,delegable=True).values_list('action',flat=True))
-                require(set(grants.values_list('action',flat=True))<=mine,'higher_privilege_target',403)
+                require(set(grants.values_list('action',flat=True))<=authority_actions(request.user,study),'higher_privilege_target',403)
                 require(str(request.user.id)!=request.POST['user_id'],'self_revoke_use_other_owner',409)
                 grants.delete()
+                _bump(instance)
             else:
                 raise Rejected('unknown_operation')
             Audit.objects.create(study=study,actor=request.user,action=op,target=str(study.id))
@@ -265,7 +287,8 @@ def activate(request):
             invite=Invitation.objects.get(token_hash=digest(request.POST['token']))
             require(not invite.consumed and not invite.revoked and invite.expires_at>timezone.now(),'invitation_inactive',403)
             guard(invite.issuer,invite.study,'member.manage');guard(invite.issuer,invite.study,'permission.delegate')
-            require(set(invite.actions)<=set(Grant.objects.filter(user=invite.issuer,study=invite.study,delegable=True).values_list('action',flat=True)),'delegation_changed',403)
+            require('study.view' in invite.actions,'delegation_changed',403)
+            require(set(invite.actions)<=authority_actions(invite.issuer,invite.study),'delegation_changed',403)
             user=get_user_model().objects.filter(username=invite.username).first()
             if user:
                 require(request.user.is_authenticated and request.user.pk==user.pk and user.is_active,'existing_account_login_required',403)

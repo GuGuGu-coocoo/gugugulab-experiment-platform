@@ -5,7 +5,7 @@ import zipfile
 from pathlib import Path
 import pytest
 from django.test import Client
-from core.models import Grant, Study, Release, Invitation
+from core.models import Grant, Instance, Study, Release, Invitation
 from core.packages import validate_package
 from core.protocol import Rejected
 
@@ -61,14 +61,14 @@ def test_gui_real_object_authority_and_invitation(setup):
     assert c.get(url).status_code==200
     assert c.post(url,{'op':'configure','mode':'password','max_sessions':'2'}).status_code==302
     assert c.post(url,{'op':'roster','roster':'001\tsynthetic-password'}).status_code==302
-    response=c.post(url,{'op':'invite','username':'synthetic_reader','actions':['study.view']})
+    response=c.post(url,{'op':'invite','username':'synthetic_reader','actions':['study.view'],'revision':str(Instance.objects.get(pk=1).governance_revision)})
     assert response.status_code==200
     invite=Invitation.objects.get(study=study)
     assert invite.actions==['study.view']
     other=Study.objects.create(title='No grant')
     assert c.get(f'/studies/{other.id}').status_code==403
     Grant.objects.filter(user=setup['owner'],study=study,action='permission.delegate').delete()
-    assert c.post(url,{'op':'invite','username':'blocked','actions':['study.view']}).status_code==403
+    assert c.post(url,{'op':'invite','username':'blocked','actions':['study.view'],'revision':str(Instance.objects.get(pk=1).governance_revision)}).status_code==403
 
 def test_existing_account_invite_never_resets_password(setup):
     from django.contrib.auth import get_user_model
@@ -114,8 +114,9 @@ def test_limited_admin_cannot_delegate_export_or_remove_higher_grants(setup):
         Grant.objects.create(user=user,study=setup['study'],action=action,delegable=True)
     protected=Grant.objects.create(user=setup['owner'],study=setup['study'],action='data.export_raw',delegable=True)
     c=Client();c.force_login(user);url='/studies/'+str(setup['study'].id)
-    assert c.post(url,{'op':'invite','username':'unapproved_reader','actions':['data.export_raw']}).status_code==403
-    assert c.post(url,{'op':'revoke_member','user_id':setup['owner'].id}).status_code==403
+    revision=str(Instance.objects.get(pk=1).governance_revision)
+    assert c.post(url,{'op':'invite','username':'unapproved_reader','actions':['study.view','data.export_raw'],'revision':revision}).status_code==403
+    assert c.post(url,{'op':'revoke_member','user_id':setup['owner'].id,'revision':revision}).status_code==403
     assert Grant.objects.filter(pk=protected.pk).exists()
     assert not Invitation.objects.filter(study=setup['study']).exists()
 

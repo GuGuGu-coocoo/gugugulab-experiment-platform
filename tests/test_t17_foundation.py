@@ -2,7 +2,7 @@ import json
 
 import pytest
 from django.test import Client
-from core.models import Build, Export, Grant, Release
+from core.models import Build, Export, Grant, Instance, Release
 
 
 def client_for(setup, *actions):
@@ -103,7 +103,7 @@ def test_owner_cannot_be_removed_by_equal_delegable_grants(setup):
     client=Client();client.force_login(user)
     url=f'/studies/{setup["study"].id}'
     before=Grant.objects.filter(user=setup['owner']).count()
-    response=client.post(url,{'op':'revoke_member','user_id':setup['owner'].id})
+    response=client.post(url,{'op':'revoke_member','user_id':setup['owner'].id,'revision':str(Instance.objects.get(pk=1).governance_revision)})
     assert response.status_code==403
     assert response.json()['code']=='owner_protected'
     assert Grant.objects.filter(user=setup['owner']).count()==before
