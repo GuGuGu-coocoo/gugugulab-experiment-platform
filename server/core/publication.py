@@ -28,7 +28,7 @@ POLICY_LIMITS = {'public_summary': 280, 'public_duration': 80, 'public_device_re
 POLICY_CHANGED = 'publication.policy_changed'
 RELEASE_CHANGED = 'publication.current_release_changed'
 SELECT_ACTIONS = ('study.configure', 'recruitment.manage')
-NATIVE_PLATFORM = 'macos_arm64'
+NATIVE_PLATFORMS = ('macos_arm64', 'windows_x64')
 
 
 def _revision_matches(raw, current):
@@ -62,13 +62,13 @@ def release_kind(release):
     """What kind of current release this is: ``web``, ``native`` or ``None``.
 
     A Web release keeps the 03C contract: approved with a stored Web package.
-    A native macOS release is only usable through its frozen complete artifact;
-    a descriptor-only native registration stays an external distribution record
-    and never pretends to be a runnable Web package.
+    A native release (macOS or Windows) is only usable through its frozen
+    complete artifact; a descriptor-only native registration stays an external
+    distribution record and never pretends to be a runnable Web package.
     """
     if release is None or not release.approved:
         return None
-    if release_platform(release) == NATIVE_PLATFORM:
+    if release_platform(release) in NATIVE_PLATFORMS:
         return 'native' if (bool(release.artifact_path) and bool(release.artifact_digest)) else None
     return 'web' if release.build.package_path else None
 
@@ -103,7 +103,7 @@ def entry_state(study):
         return {'kind': '', 'available': False}
     kind = release_kind(release)
     if kind is None:
-        kind = 'native' if release_platform(release) == NATIVE_PLATFORM else ''
+        kind = 'native' if release_platform(release) in NATIVE_PLATFORMS else ''
         return {'kind': kind, 'available': False}
     return {'kind': kind, 'available': release_available(release)}
 

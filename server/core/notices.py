@@ -1,7 +1,8 @@
 """Frozen third-party notices for the complete native distribution (03D).
 
-The platform accepts exactly one native contract (``macos_arm64`` with
-``host_version`` 4.7.2), so every complete package it assembles bundles the
+The platform accepts two native contracts (``macos_arm64`` and
+``windows_x64``, both with ``host_version`` 4.7.2), so every complete package it
+assembles bundles the
 official Godot 4.7.2 export template and the godot-sqlite GDExtension. Those
 components require their own license and copyright notices, which the exported
 ``.app`` does not carry: the platform materializes them from the sources kept

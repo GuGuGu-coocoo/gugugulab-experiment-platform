@@ -21,7 +21,7 @@ from .access import guard, allowed, ACTIONS, authority_actions
 from .protocol import require, parse, Rejected
 from .views import endpoint
 from .services import digest, completion_status, issue_recovery_code, SHELL_CAPABILITY
-from .packages import validate_package, descriptor_valid, native_program_valid, MAX_ARCHIVE, MAX_NATIVE_ARCHIVE
+from .packages import validate_package, descriptor_valid, native_program_valid, MAX_ARCHIVE, MAX_NATIVE_ARCHIVE, NATIVE_PLATFORMS
 from . import publication, artifacts
 
 
@@ -69,8 +69,10 @@ def study_context(request, study, notice=''):
     for release in releases:
         release.artifact_ready=bool(release.approved and release.artifact_digest and release.artifact_path)
         release.program_bound=bool(release.build.package_path)
+        release.artifact_config_member=artifacts.config_member(release.build.descriptor)
     return {
         'study':study, 'notice':notice, 'public_api_url':public_api_url(),
+        'native_platforms':NATIVE_PLATFORMS,
         'revision':Instance.objects.get(pk=1).governance_revision,
         'study_revision':study.revision,
         'current_release_id':study.current_release_id,
@@ -225,14 +227,14 @@ def study_page(request,study_id):
             elif op=='native':
                 guard(request.user,study,'build.upload')
                 descriptor=parse(request.POST['descriptor'].encode());descriptor_valid(descriptor)
-                require(descriptor['platform']=='macos_arm64','native_platform')
+                require(descriptor['platform'] in NATIVE_PLATFORMS,'native_platform')
                 require(not Build.objects.filter(study=study,descriptor__version=descriptor['version'],descriptor__platform=descriptor['platform']).exclude(digest=descriptor['program_sha256']).exists(),'version_content_conflict',409)
                 build,_=Build.objects.get_or_create(study=study,digest=descriptor['program_sha256'],defaults={'descriptor':descriptor})
                 require(build.descriptor==descriptor,'build_conflict',409)
             elif op=='native_archive':
                 guard(request.user,study,'build.upload')
                 build=Build.objects.get(pk=request.POST['build_id'],study=study)
-                require(build.descriptor.get('platform')=='macos_arm64','native_platform')
+                require(build.descriptor.get('platform') in NATIVE_PLATFORMS,'native_platform')
                 upload=request.FILES['package'];require(upload.size<=MAX_NATIVE_ARCHIVE,'archive_limit',413)
                 raw=upload.read(MAX_NATIVE_ARCHIVE+1)
                 summary=native_program_valid(raw,build.descriptor)
@@ -265,7 +267,7 @@ def study_page(request,study_id):
                 guard(request.user,study,'release.approve_pilot')
                 build=Build.objects.get(pk=request.POST['build_id'],study=study)
                 config={'purpose':'synthetic','mode':study.mode,'max_sessions':study.max_sessions,'offline_policy':'continue_local','recovery':'trial_boundary_v1'}
-                if build.descriptor.get('platform')=='macos_arm64' and build.package_path:
+                if build.descriptor.get('platform') in NATIVE_PLATFORMS and build.package_path:
                     release=Release.objects.create(study=study,build=build,approved=False,
                                                    config={**config,'artifact_format_version':artifacts.ARTIFACT_FORMAT_VERSION})
                     artifacts.publish_complete_artifact(release,actor=request.user)

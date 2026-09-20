@@ -6,12 +6,20 @@ project license, the bundled third-party notices and a manifest of member
 hashes). The heavy pieces never leave memory in one
 piece: every member is streamed in bounded chunks while it is hashed.
 
+Two native platforms share this lifecycle: ``macos_arm64`` keeps the ``.app``
+bundle contract and carries the frozen configuration beside the bundle, while
+``windows_x64`` packages one program root directory whose declared entry and
+dependencies were validated as real x86-64 images, with the frozen configuration
+inside that directory next to the executable (the place the program reads it
+from). The platform is always taken from the registered descriptor; an unknown
+platform fails closed and never reuses another platform's layout.
+
 The lifecycle is fixed by the design:
 
 * the release id is preallocated, then the *public* configuration is frozen
   (never a credential or roster value);
 * the program bytes and executable modes are copied unchanged -- nothing inside
-  the ``.app`` is rewritten, so the exported signature stays valid;
+  the bundle or program root is rewritten, so the exported signature stays valid;
 * the member manifest is part of the artifact, the outer SHA-256 of the finished
   file is stored in the database only, so the manifest can never reference
   itself;
@@ -36,6 +44,7 @@ from django.conf import settings
 
 from .models import Audit
 from .notices import THIRD_PARTY_NOTICES_MEMBER, third_party_notices
+from .packages import NATIVE_PLATFORMS, PACKAGE_FIELDS, config_member_path, frozen_conflict, frozen_member_names
 from .protocol import Rejected, require
 
 ARTIFACT_FORMAT_VERSION = 'gep-artifact/v1'
@@ -119,12 +128,12 @@ def _license_bytes():
     return path.read_bytes()
 
 
-def _generated_members(release, config_bytes):
+def _generated_members(release, config_bytes, config_member_name):
     """Frozen public configuration plus the platform metadata members."""
     descriptor = release.build.descriptor
     schemas = descriptor.get('schemas') if isinstance(descriptor, dict) else None
     require(isinstance(schemas, dict) and schemas, 'schema_missing', 409)
-    members = {CONFIG_MEMBER: (0o644, config_bytes)}
+    members = {config_member_name: (0o644, config_bytes)}
     for key in sorted(schemas):
         require(isinstance(key, str) and 0 < len(key) <= 64 and all(c.isalnum() or c in '._-' for c in key), 'schema_name', 409)
         definition = schemas[key]
@@ -137,11 +146,15 @@ def _generated_members(release, config_bytes):
     # The GEP license alone does not cover the bundled engine and its addon: the
     # complete package always carries the frozen third-party notices too.
     members[THIRD_PARTY_NOTICES_MEMBER] = (0o644, third_party_notices())
+    # The names are the shared contract with the intake validator (which refuses a
+    # program archive that already carries one of them); a divergence would make
+    # that refusal wrong, so the freeze fails closed instead.
+    require(set(members) == frozen_member_names(descriptor), 'invalid_freeze_layout', 409)
     return members
 
 
 def _program_members(archive):
-    """Stored program members with their modes; the app root and entry binary."""
+    """Stored macOS program members with their modes; the app root and entry binary."""
     items = {}
     for item in archive.infolist():
         if item.filename.endswith('/'):
@@ -159,13 +172,56 @@ def _program_members(archive):
     return items, next(iter(roots)), entry[0]
 
 
+def config_member(descriptor):
+    """Where the frozen public configuration is stored inside the artifact.
+
+    A macOS bundle is a directory next to the configuration; the Windows program
+    root directory contains the executable, so its configuration lives inside
+    that directory, exactly where the program looks for it. The value follows
+    from the registered descriptor alone (``core.packages`` owns the derivation
+    shared with the intake validator) and is recorded in the artifact manifest.
+    """
+    path = config_member_path(descriptor)
+    require(path is not None, 'package_metadata', 409)
+    return path
+
+
+def _windows_program_members(archive, descriptor):
+    """Stored Windows program members; the program root and the declared entry.
+
+    The intake validator already proved the declared entry, dependencies and
+    extension manifest exist and are real x86-64 images; here the same
+    declaration is re-checked against the stored program bytes so the frozen
+    manifest can never point at an entry the program archive does not contain.
+    """
+    package = descriptor.get('package')
+    require(isinstance(package, dict) and set(package) == set(PACKAGE_FIELDS), 'package_metadata', 409)
+    items = {}
+    for item in archive.infolist():
+        if item.filename.endswith('/'):
+            continue
+        path = PurePosixPath(item.filename)
+        require(len(path.parts) >= 2 and not path.is_absolute() and '..' not in path.parts, 'invalid_program', 409)
+        items[item.filename] = item
+    require(items, 'invalid_program', 409)
+    roots = {PurePosixPath(name).parts[0] for name in items}
+    require(roots == {package['root']}, 'multiple_bundles', 409)
+    root = package['root']
+    entry = f'{root}/{package["entry"]}'
+    require(entry in items, 'missing_entry', 409)
+    for dependency in package['dependencies']:
+        require(f'{root}/{dependency}' in items, 'missing_dependencies', 409)
+    require(f'{root}/{package["extension"]}' in items, 'missing_extension', 409)
+    return items, root, entry
+
+
 def _freeze_config(release):
     """The release's public configuration, exactly as the download endpoint serves it."""
     from .gui import connection_config
     return connection_config(release)
 
 
-def manifest_for(release, members, app, entry, config_bytes):
+def manifest_for(release, members, app, entry, config_bytes, config_member_name, extra):
     descriptor = release.build.descriptor
     schemas = {}
     for key in sorted(descriptor['schemas']):
@@ -173,10 +229,10 @@ def manifest_for(release, members, app, entry, config_bytes):
         schemas[key] = {'id': definition['id'], 'version': definition['version'], 'path': f'{SCHEMA_DIR}/{key}.json'}
     return {
         'artifact_format_version': ARTIFACT_FORMAT_VERSION,
-        'platform': 'macos_arm64',
+        'platform': descriptor['platform'],
         'app': app,
         'entry': entry,
-        'config_member': CONFIG_MEMBER,
+        'config_member': config_member_name,
         'config_sha256': digest_bytes(config_bytes),
         'program_sha256': descriptor['program_sha256'],
         'study_id': str(release.study_id),
@@ -185,19 +241,39 @@ def manifest_for(release, members, app, entry, config_bytes):
         'descriptor': {'version': descriptor['version'], 'platform': descriptor['platform'],
                        'host_version': descriptor['host_version'], 'sdk_version': descriptor['sdk_version'],
                        'protocol_version': descriptor['protocol_version'], 'schemas': schemas},
+        **extra,
         'members': members,
     }
 
 
 def assemble_artifact(target, release, config_bytes):
-    """Write one complete artifact to ``target``; returns its member manifest."""
+    """Write one complete artifact to ``target``; returns its member manifest.
+
+    The platform contract comes from the registered descriptor: an unknown
+    platform is rejected before any member is read.
+    """
+    descriptor = release.build.descriptor
+    platform = descriptor.get('platform') if isinstance(descriptor, dict) else None
+    require(platform in NATIVE_PLATFORMS, 'native_platform', 409)
     program_path = programs_root() / release.build.package_path
     require(program_path.is_file(), 'native_program_missing', 409)
     stored_digest, _size = digest_file(program_path)
-    require(stored_digest == release.build.descriptor.get('program_sha256'), 'program_digest_mismatch', 409)
+    require(stored_digest == descriptor.get('program_sha256'), 'program_digest_mismatch', 409)
     with zipfile.ZipFile(program_path) as source:
-        items, app, entry = _program_members(source)
-        generated = _generated_members(release, config_bytes)
+        if platform == 'macos_arm64':
+            items, app, entry = _program_members(source)
+            extra = {}
+        else:
+            items, app, entry = _windows_program_members(source, descriptor)
+            package = descriptor['package']
+            extra = {'dependencies': [f'{app}/{name}' for name in package['dependencies']],
+                     'extension': f'{app}/{package["extension"]}'}
+        member_name = config_member(descriptor)
+        generated = _generated_members(release, config_bytes, member_name)
+        # A program member that collides with a generated member is refused before
+        # a single byte is written, so the freeze can never replace program bytes
+        # with the configuration, schema, codebook, license or notices.
+        require(not frozen_conflict(set(items), descriptor), 'frozen_path_conflict', 409)
         members = []
         with zipfile.ZipFile(target, 'w', compression=zipfile.ZIP_DEFLATED) as out:
             for name in sorted(set(items) | set(generated)):
@@ -208,7 +284,7 @@ def assemble_artifact(target, release, config_bytes):
                     item = items[name]
                     mode = (item.external_attr >> 16) & 0o7777 or 0o644
                     members.append(_write_streamed(out, name, mode, _stream_member(source, item)))
-            manifest = manifest_for(release, members, app, entry, config_bytes)
+            manifest = manifest_for(release, members, app, entry, config_bytes, member_name, extra)
             _write_bytes(out, ARTIFACT_MANIFEST, 0o644, canonical_json(manifest))
     return manifest
 
@@ -316,7 +392,7 @@ def publish_complete_artifact(release, actor=None):
     """
     require(not release.artifact_digest and not release.artifact_path, 'artifact_conflict', 409)
     descriptor = release.build.descriptor
-    require(isinstance(descriptor, dict) and descriptor.get('platform') == 'macos_arm64', 'native_platform', 409)
+    require(isinstance(descriptor, dict) and descriptor.get('platform') in NATIVE_PLATFORMS, 'native_platform', 409)
     require(bool(release.build.package_path), 'native_program_missing', 409)
     config_bytes = canonical_json(_freeze_config(release))
     root = artifacts_root()
@@ -392,17 +468,27 @@ def read_manifest(release):
     path = artifact_file(release)
     require(stored_artifact_intact(release), 'artifact_tampered', 409)
     manifest = load_manifest(_read_member(path, ARTIFACT_MANIFEST))
-    require(manifest.get('platform') == 'macos_arm64' and isinstance(manifest.get('app'), str), 'invalid_artifact')
+    require(manifest.get('platform') in NATIVE_PLATFORMS and isinstance(manifest.get('app'), str), 'invalid_artifact')
     return manifest, path
 
 
 def sidecar_members(manifest):
-    """Artifact members outside the program bundle; the bundle stays whole."""
+    """Artifact members outside the program bundle; the bundle stays whole.
+
+    The frozen public configuration is always a sidecar even when the platform
+    stores it inside the program directory (Windows): it is platform metadata
+    generated by the assembly, not a program byte, and the download endpoint
+    still serves no file of the program itself.
+    """
     app = manifest.get('app') if isinstance(manifest, dict) else None
+    configured = manifest.get('config_member') if isinstance(manifest, dict) else None
     sidecars = {}
     for entry in manifest.get('members', []):
         path = entry.get('path') if isinstance(entry, dict) else None
         if not isinstance(path, str) or path == ARTIFACT_MANIFEST:
+            continue
+        if path == configured:
+            sidecars[path] = entry
             continue
         if isinstance(app, str) and app and (path == app or path.startswith(app + '/')):
             continue
