@@ -27,8 +27,68 @@ export class GEC {
   async get(id){return (await this.all()).find(s=>s.id===id);}
   async request(config,path,body,token) {
     const response=await fetch(config.api_url+path,{method:body===undefined?'GET':'POST',headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},body:body===undefined?undefined:JSON.stringify(body),credentials:'omit',redirect:'error',signal:AbortSignal.timeout(10000)});
-    if(!response.ok) {const e=new Error('http_'+response.status);e.status=response.status;const wait=response.headers.get('Retry-After');e.retryAfter=wait&&/^\d+$/.test(wait)?Number(wait)*1000:0;throw e;}
+    if(!response.ok) {const e=new Error('http_'+response.status);e.status=response.status;try{const body=await response.json();if(body&&typeof body.code==='string')e.code=body.code;}catch{}const wait=response.headers.get('Retry-After');e.retryAfter=wait&&/^\d+$/.test(wait)?Number(wait)*1000:0;throw e;}
     return response.json();
+  }
+  /* Local candidate discovery. The shell never asks the participant for a public
+     session UUID: it searches the device's own durable store and only reports a
+     redacted summary (no proof, token, identity or payload). */
+  async candidates() {
+    return (await this.all()).filter(s=>['session','cleaned'].includes(s.kind)&&s.config?.instance_id===this.config.instance_id&&s.config?.study_id===this.config.study_id)
+      .map(s=>({id:s.id,kind:s.kind,participant_code:s.context?.participant_code??null,front_locked:!!s.front_locked,unfinished:s.completion===null,checkpoint_next:s.checkpoint?.next_trial??null,checkpoint_strategy:s.checkpoint?.strategy??null}));
+  }
+  resumable(s) {
+    return !s.completion&&!!s.checkpoint&&s.checkpoint.version===1&&s.checkpoint.strategy==='trial_boundary_v1'&&s.config?.purpose==='synthetic';
+  }
+  async recovery_request(target,capability,extra) {
+    return this.request(target.config,'/v1/participant/recovery',{capability,proof:target.proof,instance_id:target.config.instance_id,study_id:target.config.study_id,release_id:target.config.release_id,build_id:target.config.build_id,...extra});
+  }
+  /* Six-digit researcher code: search local proofs privately and redeem against
+     the server. Returns a pending candidate that must be explicitly continued. */
+  async recover_code(code) {
+    if(this.state!=='ready')fail('not_ready');
+    if(!/^\d{6}$/.test(String(code)))fail('invalid_code');
+    const list=(await this.all()).filter(s=>s.kind==='session'&&s.proof&&s.config?.instance_id===this.config.instance_id&&s.config?.study_id===this.config.study_id);
+    if(!list.length)fail('not_recoverable');
+    let last;
+    for(const s of list.slice(0,3)){
+      try {
+        const response=await this.recovery_request(s,'recovery_code/v1',{code:String(code)});
+        return {state:'confirm',session_id:s.id,token:response.token,can_resume:this.resumable(s)&&!response.task_finished,task_finished:!!response.task_finished};
+      } catch(error) { if(error.status!==403)throw error; last=error; }
+    }
+    throw last;
+  }
+  /* Named same-device continuation for frozen id/password releases.
+     A declared completion only limits what may be adopted; it never stands for a
+     received receipt or a cleaned session, so a candidate with ``completion`` is
+     still verified against the server and then continued as data only. The
+     neutral "already uploaded" hint needs a cleaned tombstone that belongs to this
+     study on this device; a tombstone from another study or participant is never
+     treated as evidence about the named candidate. */
+  async recover_named(participant_code,password) {
+    if(this.state!=='ready')fail('not_ready');
+    const all=await this.all();
+    const scoped=all.filter(s=>s.config?.instance_id===this.config.instance_id&&s.config?.study_id===this.config.study_id);
+    const matching=scoped.filter(s=>s.kind==='session'&&(s.context?.participant_code??null)===participant_code);
+    if(!matching.length)return {state:scoped.some(s=>s.kind==='cleaned')?'cleaned':'none'};
+    const live=matching.filter(s=>!s.completion);
+    // Several unfinished sessions, or several finished ones, need a researcher:
+    // the client never picks one and never lists the others.
+    if(live.length>1||(live.length===0&&matching.length>1))return {state:'ambiguous'};
+    const target=live.length?live[0]:matching[0];
+    // The persisted foreground lock blocks continuing trials, not a verified
+    // data-only recovery of a session that already declared completion.
+    if(!target.completion&&target.front_locked)return {state:'front_locked'};
+    const response=await this.recovery_request(target,'recovery_named/v1',{participant_code,password});
+    return {state:'confirm',session_id:target.id,token:response.token,can_resume:this.resumable(target)&&!response.task_finished,task_finished:!!response.task_finished};
+  }
+  /* Explicit continue: only this call adopts a redeemed credential locally. */
+  async confirm_recovery(session_id,token,can_resume) {
+    const s=await this.get(session_id);if(!s||s.kind!=='session')fail('not_recoverable');
+    await this.mutate(store=>{const r=store.get(session_id);r.onsuccess=()=>{const fresh=r.result;fresh.context.token=token;fresh.front_locked=false;fresh.paused=false;fresh.attempts=0;fresh.retryAt=0;if(can_resume&&!fresh.segments.includes(this.segment))fresh.segments.push(this.segment);store.put(fresh);};});
+    this.id=session_id;this.config=s.config;this.state=can_resume?'active':'data_only';
+    return {state:this.state,checkpoint:can_resume?copy(s.checkpoint):null};
   }
   async begin(credentials={}) {
     if(this.state!=='ready')fail('not_ready');
@@ -90,7 +150,7 @@ export class GEC {
     }} finally {this.busy=false;}
     if(firstError)throw firstError;
   }
-  async cleanup(id){await this.mutate(store=>{const r=store.get(id);r.onsuccess=()=>{const s=r.result;if(s.complete_ack&&!s.pending.length&&!s.checkpoint)store.put({id,kind:'cleaned',state:'remote_acknowledged'});};});if(id===this.id){this.state='remote_acknowledged';this.error=null;}}
+  async cleanup(id){await this.mutate(store=>{const r=store.get(id);r.onsuccess=()=>{const s=r.result;if(s.complete_ack&&!s.pending.length&&!s.checkpoint)store.put({id,kind:'cleaned',state:'remote_acknowledged',instance_id:s.config?.instance_id??null,study_id:s.config?.study_id??null});};});if(id===this.id){this.state='remote_acknowledged';this.error=null;}}
   async recover(id,permit){
     if(this.state!=='ready')fail('not_ready');
     const s=await this.get(id);if(!s||s.kind!=='session')fail('not_recoverable');
@@ -105,6 +165,10 @@ export class GEC {
     return {format_version:1,session_id:s.id,binding,records:copy(s.records),checkpoint:copy(s.checkpoint),pending:copy(s.pending),completion:copy(s.completion)};
   }
   status(){return {state:this.state,error:this.error,buffered:this.buffer.length};}
+  async summary(){
+    const s=this.id?await this.get(this.id):null;
+    return {state:this.state,error:this.error,buffered:this.buffer.length,records:s?.records?.length??0,pending:s?.pending?.length??0,kind:s?.kind??null,checkpoint_next:s?.checkpoint?.next_trial??null};
+  }
   report(error){this.error=error.message;}
   close(){clearInterval(this.timer);this.stopped=true;this.db?.close();this.unlock?.();}
 }

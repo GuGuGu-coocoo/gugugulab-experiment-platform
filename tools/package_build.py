@@ -17,7 +17,7 @@ if sys.argv[1]=='native':
             target.chmod((entry.external_attr>>16)&0o777 or 0o644)
 else:
     # Package only known synthetic runtime outputs, never acceptance URLs or reports.
-    names=['index.html','index.js','index.wasm','index.pck','index.png','index.audio.worklet.js','index.audio.position.worklet.js','gec/sdk.js','gec/bridge.js','gec/inputs.js']
+    names=['index.html','index.js','index.wasm','index.pck','index.png','index.audio.worklet.js','index.audio.position.worklet.js','gec/sdk.js','gec/bridge.js','gec/inputs.js','gec/shell.js']
     files=sorted(root/'build/web'/name for name in names)
     assert all(p.is_file() for p in files),'Missing Web runtime output'
     h=hashlib.sha256()

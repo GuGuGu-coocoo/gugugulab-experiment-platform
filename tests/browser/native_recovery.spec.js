@@ -20,7 +20,7 @@ test('exported native process kill and authorized checkpoint recovery',async({pa
  await page.locator('[name=session_id]').fill(saved.id);await page.getByRole('button',{name:'签发一次性恢复许可'}).click();
  const notice=await page.locator('.notice').textContent();const permit=notice.split('许可：')[1].trim();
  const resumed=launch(storage,['--recover='+saved.id,'--permit='+permit]);await until(resumed,'SYNTHETIC_DONE');await new Promise(r=>resumed.once('exit',r));
- expect(snapshot(storage)).toEqual([{id:saved.id,kind:'cleaned',state:'remote_acknowledged'}]);
+ expect(snapshot(storage)).toEqual([{id:saved.id,kind:'cleaned',state:'remote_acknowledged',instance_id:saved.config.instance_id,study_id:saved.config.study_id}]);
  await page.goto(fs.readFileSync('build/native/study_url.txt','utf8'));await page.getByRole('button',{name:'创建 JSONL 固定快照'}).click();
  const [download]=await Promise.all([page.waitForEvent('download'),page.getByRole('link',{name:'下载 JSONL'}).click()]);
  const stream=await download.createReadStream();let text='';for await(const chunk of stream)text+=chunk;

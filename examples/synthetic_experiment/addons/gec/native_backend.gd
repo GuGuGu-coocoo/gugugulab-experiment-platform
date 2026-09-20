@@ -128,7 +128,11 @@ func http(target: Dictionary, path: String, body: Dictionary, token: String = ""
 		request.queue_free();return {"error":"network_start"}
 	var result = await request.request_completed
 	request.queue_free()
-	if result[0] != HTTPRequest.RESULT_SUCCESS or result[1] != 200: return {"error":"http_"+str(result[1])}
+	if result[0] != HTTPRequest.RESULT_SUCCESS or result[1] != 200:
+		var failure := {"error":"http_"+str(result[1])}
+		var rejected = JSON.parse_string(result[3].get_string_from_utf8())
+		if rejected is Dictionary and rejected.get("code") is String: failure["code"] = rejected.code
+		return failure
 	var parsed = JSON.parse_string(result[3].get_string_from_utf8())
 	return parsed if parsed is Dictionary else {"error":"invalid_response"}
 func record(kind: String, payload: Dictionary, schema: Dictionary, observed: Dictionary = {}) -> Dictionary:
@@ -179,7 +183,7 @@ func flush() -> void:
 	for s in rows():
 		if s.get("kind") != "session" or s.get("paused",false) or s.get("retry_at",0) > Time.get_unix_time_from_system(): continue
 		if s.get("complete_ack") != null and s.pending.is_empty() and s.checkpoint == null:
-			save({"id":s.id,"kind":"cleaned","state":"remote_acknowledged"})
+			save(_tombstone(s))
 			continue
 		if s.pending.size() > 0:
 			var events: Array = s.records.filter(func(e):return s.pending.has(e.event_id)).slice(0,32)
@@ -195,7 +199,7 @@ func flush() -> void:
 			var ack = await http(s.config,"/v1/participant/sessions/"+s.id+"/completion",s.completion,s.context.token)
 			if ack.get("state") == "complete" and ack.get("protocol_version") == "gep/1" and ack.get("instance_id") == s.config.instance_id and ack.get("session_id") == s.id and same_set(ack.declaration.event_ids,s.completion.event_ids) and same_set(ack.declaration.segment_ids,s.completion.segment_ids) and ack.get("missing",[1]).is_empty() and s.pending.is_empty():
 				s.complete_ack = ack;s.checkpoint = null
-				if save(s) and save({"id":s.id,"kind":"cleaned","state":"remote_acknowledged"}):
+				if save(s) and save(_tombstone(s)):
 					if s.id == session_id: current = {"state":"remote_acknowledged"}
 	sending = false
 func recovery_export() -> Dictionary:
@@ -205,6 +209,96 @@ func recovery_export() -> Dictionary:
 	for key in ["instance_id","study_id","release_id","build_id","protocol_version"]:
 		if s.get("config",{}).has(key): binding[key] = s.config[key]
 	return {"format_version":1,"session_id":s.id,"binding":binding,"records":s.records,"checkpoint":s.checkpoint,"pending":s.pending,"completion":s.completion}
+func summary() -> Dictionary:
+	var s: Dictionary = read_session(session_id) if not session_id.is_empty() else {}
+	var records: Array = s.get("records",[])
+	var pending: Array = s.get("pending",[])
+	var checkpoint = s.get("checkpoint")
+	return {"state":current.get("state","unprepared"),"error":current.get("error",""),"kind":s.get("kind",""),"records":records.size(),"pending":pending.size(),"checkpoint_next":checkpoint.get("next_trial") if checkpoint is Dictionary else null}
+func _study_sessions() -> Array:
+	## Newest first; only sessions of the configured instance/study are candidates.
+	var out: Array = []
+	for s in rows():
+		if s.get("kind") != "session": continue
+		if s.get("config",{}).get("instance_id") != config.get("instance_id"): continue
+		if s.get("config",{}).get("study_id") != config.get("study_id"): continue
+		out.append(s)
+	out.reverse()
+	return out
+func _tombstone(s: Dictionary) -> Dictionary:
+	## Cleaned tombstone: no payload, credential, checkpoint or participant identity
+	## is kept, but the instance/study binding stays so a neutral "already uploaded"
+	## hint can be attributed to this study instead of any tombstone on the device.
+	return {"id":s.id,"kind":"cleaned","state":"remote_acknowledged","instance_id":str(s.get("config",{}).get("instance_id","")),"study_id":str(s.get("config",{}).get("study_id",""))}
+func candidates() -> Array:
+	var out: Array = []
+	for s in _study_sessions():
+		var checkpoint = s.get("checkpoint")
+		out.append({"id":s.id,"kind":s.kind,"participant_code":s.get("context",{}).get("participant_code"),"front_locked":s.get("front_locked",false),"unfinished":s.get("completion") == null,"checkpoint_next":checkpoint.get("next_trial") if checkpoint is Dictionary else null})
+	return out
+func _resumable(s: Dictionary) -> bool:
+	var checkpoint = s.get("checkpoint")
+	return s.get("completion") == null and checkpoint is Dictionary and checkpoint.get("version") == 1 and checkpoint.get("strategy") == "trial_boundary_v1" and s.get("config",{}).get("purpose") == "synthetic"
+func _recovery_binding(s: Dictionary) -> Dictionary:
+	var binding: Dictionary = s.get("config",{})
+	return {"instance_id":str(binding.get("instance_id","")),"study_id":str(binding.get("study_id","")),"release_id":str(binding.get("release_id","")),"build_id":str(binding.get("build_id",""))}
+func recover_code(code: String) -> Dictionary:
+	## Six-digit researcher code: the local proof search stays on this device and
+	## the returned candidate is only adopted after an explicit continuation.
+	if not code.is_valid_int() or code.length() != 6: return {"error":"invalid_code"}
+	if config.get("config_version") != "1" or config.get("protocol_version") != "gep/1" or config.get("purpose") != "synthetic": return {"error":"invalid_configuration"}
+	var candidates_list: Array = _study_sessions()
+	if candidates_list.is_empty(): return {"error":"not_recoverable"}
+	var last_error := ""
+	for s in candidates_list.slice(0,3):
+		var body: Dictionary = _recovery_binding(s)
+		body.merge({"capability":"recovery_code/v1","code":code,"proof":s.proof})
+		var response = await http(s.config,"/v1/participant/recovery",body)
+		if response.has("error"):
+			if response.error == "http_403":
+				last_error = "recovery_denied"
+				continue
+			return response
+		var can_resume: bool = _resumable(s) and not response.get("task_finished",false)
+		return {"state":"confirm","session_id":s.id,"token":response.get("token",""),"can_resume":can_resume,"task_finished":response.get("task_finished",false)}
+	return {"error":last_error if not last_error.is_empty() else "not_recoverable"}
+func recover_named(participant_code: String, password_value: String) -> Dictionary:
+	## Named same-device continuation for frozen id/password releases. A declared
+	## completion limits the adoption to data only; it is never treated as a
+	## received receipt or a cleaned session. The neutral "already uploaded" hint
+	## needs a cleaned tombstone bound to this instance and study, so a tombstone
+	## from another study or participant cannot answer for this candidate.
+	if config.get("config_version") != "1" or config.get("protocol_version") != "gep/1" or config.get("purpose") != "synthetic": return {"error":"invalid_configuration"}
+	var matching: Array = []
+	for s in _study_sessions():
+		if str(s.get("context",{}).get("participant_code","")) == participant_code: matching.append(s)
+	if matching.is_empty():
+		var tombstone: bool = rows().any(func(s): return s.get("kind") == "cleaned" and str(s.get("instance_id","")) == str(config.get("instance_id","")) and str(s.get("study_id","")) == str(config.get("study_id","")))
+		return {"state":"cleaned" if tombstone else "none"}
+	var unfinished: Array = matching.filter(func(s): return s.get("completion") == null)
+	if unfinished.size() > 1 or (unfinished.is_empty() and matching.size() > 1): return {"state":"ambiguous"}
+	var target: Dictionary
+	if unfinished.is_empty(): target = matching[0]
+	else: target = unfinished[0]
+	if target.get("completion") == null and target.get("front_locked",false): return {"state":"front_locked"}
+	var body: Dictionary = _recovery_binding(target)
+	body.merge({"capability":"recovery_named/v1","participant_code":participant_code,"password":password_value,"proof":target.proof,"front_locked":false})
+	var response = await http(target.config,"/v1/participant/recovery",body)
+	if response.has("error"): return response
+	var can_resume: bool = _resumable(target) and not response.get("task_finished",false)
+	return {"state":"confirm","session_id":target.id,"token":response.get("token",""),"can_resume":can_resume,"task_finished":response.get("task_finished",false)}
+func confirm_recovery(session_id_value: String, token: String, can_resume: bool) -> Dictionary:
+	var s = read_session(session_id_value)
+	if s.is_empty() or s.get("kind") != "session": return {"error":"not_recoverable"}
+	s.context.token = token
+	s.front_locked = false
+	s.paused = false;s.attempts = 0;s.retry_at = 0
+	if can_resume and not s.segments.has(segment): s.segments.append(segment)
+	if not save(s): return {"error":"local_commit"}
+	session_id = s.id;config = s.config
+	current = {"state":"active" if can_resume else "data_only","checkpoint":s.checkpoint if can_resume else null}
+	start_uploader()
+	return current
 func status() -> Dictionary:
 	return current
 func _exit_tree() -> void:

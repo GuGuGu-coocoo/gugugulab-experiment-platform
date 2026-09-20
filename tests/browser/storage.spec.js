@@ -31,7 +31,7 @@ test('IndexedDB atomic abort, offline reload, lost ACK, active retention and cle
  expect(await page.evaluate(async session=>{const s=await client.get(session);return s.records[0].event_id},session)).toBe(id);
  await page.evaluate(()=>client.flush());
  const tombstone=await page.evaluate(session=>client.get(session),session);
- expect(tombstone).toEqual({id:session,kind:'cleaned',state:'remote_acknowledged'});
+ expect(tombstone).toEqual({id:session,kind:'cleaned',state:'remote_acknowledged',instance_id:config.instance_id,study_id:config.study_id});
  await page.evaluate(()=>client.close());
 });
 test('single writer and shared-device new participation locks old front recovery',async({page,context})=>{
@@ -57,7 +57,7 @@ test('ACK persistence failure retains raw and interrupted cleanup resumes',async
  expect(await page.evaluate(async()=>{const s=await client.get(client.id);return [!!s.complete_ack,s.records.length,s.pending.length]})).toEqual([true,1,0]);
  await page.evaluate(()=>client.close());await page.reload();
  await page.evaluate(async config=>{const {GEC}=await import('/sdk.js');window.client=new GEC(config);await client.prepare();clearInterval(client.timer);await client.flush()},config);
- expect(await page.evaluate(id=>client.get(id),id)).toEqual({id,kind:'cleaned',state:'remote_acknowledged'});
+ expect(await page.evaluate(id=>client.get(id),id)).toEqual({id,kind:'cleaned',state:'remote_acknowledged',instance_id:config.instance_id,study_id:config.study_id});
  await page.evaluate(()=>client.close());
 });
 test('configuration replacement cannot retarget pending records',async({page})=>{
@@ -131,7 +131,7 @@ test('expired finished Web queue reauthenticates for data only and cleans after 
  const result=await page.evaluate(async({id,permit})=>{const recovered=await client.recover(id,permit);return {recovered,data:await client.recovery_export()}},{id,permit});
  expect(result.recovered).toEqual({state:'data_only',checkpoint:null});
  await page.evaluate(()=>client.flush());
- expect(await page.evaluate(id=>client.get(id),id)).toEqual({id,kind:'cleaned',state:'remote_acknowledged'});
+ expect(await page.evaluate(id=>client.get(id),id)).toEqual({id,kind:'cleaned',state:'remote_acknowledged',instance_id:config.instance_id,study_id:config.study_id});
  expect(result.data.records).toHaveLength(1);expect(result.data.records[0].payload).toEqual(payload);
  expect(Object.keys(result.data).sort()).toEqual(['binding','checkpoint','completion','format_version','pending','records','session_id']);
  await expect(page.evaluate(payload=>client.record('exp.rt',payload,{id:'rt',version:'1'}),payload)).rejects.toThrow('not_recording');
@@ -147,7 +147,7 @@ test('bounded buffer rejects overflow and new participation preserves cleaned to
   await client.commit();await client.finish();await client.flush();await client.flush();
   return {id:client.id,ids,rejected,before,tombstone:await client.get(client.id)};
  },payload);
- expect(saved.rejected).toBe(true);expect(saved.before).toBe(0);expect(new Set(saved.ids).size).toBe(64);expect(saved.tombstone).toEqual({id:saved.id,kind:'cleaned',state:'remote_acknowledged'});
+ expect(saved.rejected).toBe(true);expect(saved.before).toBe(0);expect(new Set(saved.ids).size).toBe(64);expect(saved.tombstone).toEqual({id:saved.id,kind:'cleaned',state:'remote_acknowledged',instance_id:config.instance_id,study_id:config.study_id});
  await page.evaluate(()=>client.close());await page.reload();
  await page.evaluate(async config=>{const {GEC}=await import('/sdk.js');window.client=new GEC(config);await client.prepare();clearInterval(client.timer);await client.begin()},config);
  expect(await page.evaluate(id=>client.get(id),saved.id)).toEqual(saved.tombstone);

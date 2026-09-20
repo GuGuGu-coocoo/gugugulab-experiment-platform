@@ -27,7 +27,7 @@ func run() -> void:
 	assert(not (await backend.finish()).has("error"))
 	await backend.flush(); await backend.flush()
 	var tombstone = backend.read_session(new_id)
-	assert(tombstone == {"id":new_id,"kind":"cleaned","state":"remote_acknowledged"})
+	assert(tombstone == {"id":new_id,"kind":"cleaned","state":"remote_acknowledged","instance_id":backend.config["instance_id"],"study_id":backend.config["study_id"]})
 	assert(backend.read_session(old_id).records == old_records)
 	assert(backend.read_session(old_id).checkpoint != null)
 	assert(not (await backend.prepare({"expected_version":"synthetic-1"})).has("error"))

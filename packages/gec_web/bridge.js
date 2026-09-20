@@ -1,14 +1,24 @@
 import {GEC} from './sdk.js';
 import {installInputs} from './inputs.js';
-let inputs;
+import {installShell} from './shell.js';
+let inputs,shell,action;
 const replies=new Map();
 let client=new GEC(globalThis.GEP_CONTEXT);
 const ready=client.prepare();
-ready.catch(()=>{});
+ready.catch(e=>{globalThis.GECBridge.prepare_error=e.message;});
 globalThis.GECBridge={
+ // Legacy fallback panel (a frozen config without shell capability).
  mount_inputs(spec){inputs=installInputs(spec);},
  inputs_json(){return inputs.values();},
  clear_input_secrets(){inputs.clearSecrets();inputs.blur();},
+ // Shell-owned panel: fields and buttons are built by the Web companion and
+ // every button reports one action name back to the Godot shell.
+ mount_shell(spec){shell=installShell(spec,name=>{if(action)action(name);});},
+ on_shell_action(callback){action=callback;},
+ shell_values(){return shell?shell.values():'{}';},
+ shell_clear_secrets(){shell?.clearSecrets();},
+ shell_state(spec){shell?.setState(typeof spec==='string'?JSON.parse(spec):spec);},
+ shell_blur(){shell?.blur();},
  async call(key,op,args){try{
    if(typeof args === "string") args=JSON.parse(args);
    let result;
@@ -16,8 +26,9 @@ globalThis.GECBridge={
    else if(op==='download_recovery'){const data=await client.recovery_export();const url=URL.createObjectURL(new Blob([JSON.stringify(data)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='recovery-'+data.session_id+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);result={state:'download_requested'};}
    else result=await client[op](...args);
    replies.set(key,JSON.stringify(result));
- }catch(e){replies.set(key,JSON.stringify({error:e.message,state:'error'}));}},
+ }catch(e){replies.set(key,JSON.stringify({error:e.message,code:e.code,state:'error'}));}},
  take(key){const result=replies.get(key);replies.delete(key);return result??null;},
+ context_json(){return JSON.stringify(globalThis.GEP_CONTEXT??{});},
  status_json(){return JSON.stringify(this.status());},
  status(){return client?.status()??{state:'unprepared'};}
 };

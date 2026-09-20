@@ -304,3 +304,42 @@ def test_public_config_endpoint_keeps_frozen_mode_after_policy_change():
     assert config['mode'] == 'password' and config['shell_capability'] == SHELL_CAPABILITY
     serialized = json.dumps(config)
     assert 'password_hash' not in serialized and 'roster' not in serialized and 'participant' not in serialized
+
+
+def test_headless_shell_contract_harness():
+    """The real Control-based shell is driven through its own fields and buttons."""
+    result = subprocess.run([_godot(), '--headless', '--path', str(ROOT / 'examples' / 'synthetic_experiment'),
+                             '--script', str(ROOT / 'tests' / 'native' / 'shell_harness.gd')],
+                            cwd=ROOT, capture_output=True, text=True, timeout=180)
+    assert 'SHELL_UNIT_VERIFIED' in result.stdout, result.stdout + result.stderr
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_bootstrap_is_assembly_only_and_scientific_task_unchanged():
+    bootstrap = (ROOT / 'examples' / 'synthetic_experiment' / 'bootstrap.gd').read_text()
+    assert 'shell.gd' in bootstrap and 'Shell.new()' in bootstrap
+    assert 'LineEdit.new' not in bootstrap and 'placeholder_text' not in bootstrap
+    assert 'permit.text' not in bootstrap and 'password.text' not in bootstrap and 'short_code.text' not in bootstrap
+    assert 'data.prepare' not in bootstrap and 'backend.prepare' not in bootstrap
+    assert 'task.response' in bootstrap and 'shell.auto_submit' in bootstrap
+    task = (ROOT / 'examples' / 'synthetic_experiment' / 'task.gd').read_bytes()
+    recorded = (ROOT / 'tests' / 'fixtures' / 'scientific_task.sha256').read_text().strip()
+    assert hashlib.sha256(task).hexdigest() == recorded, 'the scientific task source changed; that requires an explicit task decision'
+
+
+def test_shell_module_and_web_companion_contract():
+    shell = (ROOT / 'examples' / 'synthetic_experiment' / 'addons' / 'gec' / 'shell.gd').read_text()
+    assert 'gec-shell/v1' in shell and 'SHELL_CAPABILITY' in shell
+    assert 'confirm_session' in shell and 'confirm_new_session' in shell
+    assert 'announce_finished' in shell
+    companion = (ROOT / 'packages' / 'gec_web' / 'shell.js').read_text()
+    for field in ('gec-input-code', 'gec-input-password', 'gec-input-short-code', 'gec-input-recovery', 'gec-input-permit'):
+        assert field in companion
+    assert 'ResizeObserver' in companion, 'the Web panel must reflow on resize instead of keeping stale coordinates'
+    bridge = (ROOT / 'packages' / 'gec_web' / 'bridge.js').read_text()
+    assert 'mount_shell' in bridge and 'on_shell_action' in bridge
+    assert 'mount_inputs' in bridge, 'the legacy fallback panel must stay available'
+    packaging = (ROOT / 'tools' / 'package_build.py').read_text()
+    assert 'gec/shell.js' in packaging
+    builder = (ROOT / 'tools' / 'build.py').read_text()
+    assert "'shell.js'" in builder

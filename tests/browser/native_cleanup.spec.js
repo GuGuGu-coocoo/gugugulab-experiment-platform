@@ -23,7 +23,9 @@ for(const mode of ['ack_abort','completion_abort','cleanup_abort','cleanup_befor
     const reopened=launch(dir,['--reopen']);
     try {expect(await reopened.exited,reopened.output()).toBe(0);expect(reopened.output()).toContain('NATIVE_CLEANUP_REOPEN_VERIFIED');}finally{reopened.proc.kill('SIGTERM');}
    }else{expect(await run.exited,run.output()).toBe(0);expect(run.output()).toContain('NATIVE_CLEANUP_FAILURE_PRESERVED_DATA');}
-   const rows=snapshot(dir);expect(rows).toHaveLength(1);expect(rows[0]).toEqual({id:rows[0].id,kind:'cleaned',state:'remote_acknowledged'});
+   const rows=snapshot(dir);expect(rows).toHaveLength(1);
+   const binding=JSON.parse(fs.readFileSync(path.resolve('build/native/connection.json'),'utf8'));
+   expect(rows[0]).toEqual({id:rows[0].id,kind:'cleaned',state:'remote_acknowledged',instance_id:binding.instance_id,study_id:binding.study_id});
    const records=JSON.parse(execFileSync('.venv/bin/python',['-c','import sqlite3,json,sys;c=sqlite3.connect("local_data/gep.sqlite3");print(json.dumps([json.loads(r[0]) for r in c.execute("select envelope from core_event where session_id=?",[sys.argv[1].replace("-","")])]))',rows[0].id],{encoding:'utf8'}));
    expect(records).toHaveLength(4);expect(new Set(records.map(e=>e.event_id)).size).toBe(4);expect(records.filter(e=>e.event_type==='exp.rt').map(e=>e.payload.rt_ms).sort()).toEqual([217.25,321.5]);
   }finally{run.proc.kill('SIGTERM');}
