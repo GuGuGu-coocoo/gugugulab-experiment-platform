@@ -22,6 +22,9 @@ const [command, jobPath] = process.argv.slice(2);
 const job = JSON.parse(fs.readFileSync(jobPath, 'utf8'));
 const HOST_RULES = '--host-resolver-rules=MAP admin.localhost 127.0.0.1, MAP experiment.localhost 127.0.0.1';
 
+const PLATFORM = job.platform || 'macos_arm64';
+const SIDECAR_MEMBERS = job.sidecar_members || ['artifact_manifest.json', 'connection.json', 'LICENSE', 'THIRD_PARTY_NOTICES.txt'];
+
 const results = {checks: [], failures: [], evidence: {}};
 function check(condition, label, detail) {
   const entry = {label, ok: !!condition, detail: detail ?? null};
@@ -62,7 +65,7 @@ async function packageFlow(page, context) {
   await page.locator('[name=descriptor]').fill(fs.readFileSync(job.descriptor, 'utf8'));
   await page.getByRole('button', {name: '登记不可变构建'}).click();
   await page.waitForLoadState('load');
-  const buildArticle = page.locator('article', {hasText: 'macos_arm64'}).first();
+  const buildArticle = page.locator('article', {hasText: PLATFORM}).first();
   await buildArticle.waitFor({timeout: 30000});
   check(true, 'native descriptor registered through the GUI');
 
@@ -73,7 +76,7 @@ async function packageFlow(page, context) {
   check(true, 'native program archive bound through the GUI upload form', fs.statSync(job.program).size);
 
   // 3. Approve: the platform freezes and assembles the complete package.
-  await page.locator('article', {hasText: 'macos_arm64'}).first().getByRole('button', {name: '批准合成发行'}).click();
+  await page.locator('article', {hasText: PLATFORM}).first().getByRole('button', {name: '批准合成发行'}).click();
   await page.waitForLoadState('load');
   const artifactLink = page.locator('[data-artifact]').first();
   await artifactLink.waitFor({timeout: 900000});
@@ -98,15 +101,15 @@ async function packageFlow(page, context) {
 
   // 5. Sidecars through the same build scope.
   const sidecars = {};
-  for (const member of ['artifact_manifest.json', 'connection.json', 'LICENSE', 'THIRD_PARTY_NOTICES.txt']) {
+  for (const member of SIDECAR_MEMBERS) {
     const response = await context.request.get(`${job.admin_url}${release_url}/${member}`);
     const body = await response.body();
     const target = path.join(job.run_dir, `sidecar_${path.basename(member)}`);
     fs.writeFileSync(target, body);
-    sidecars[member] = target;
     check(response.status() === 200, `sidecar ${member} downloadable by the build scope`, response.status());
     check(sha256(body) === (response.headers()['x-artifact-member-sha256'] || sha256(body)),
       `sidecar ${member} digest matches its response header`);
+    sidecars[member] = target;
   }
 
   // 6. Open recruitment so the downloaded package can admit.
@@ -162,14 +165,15 @@ async function packageFlow(page, context) {
   await login(memberPage, job.member);
   const memberDownload = await memberContext.request.get(job.admin_url + release_url);
   check(memberDownload.status() === 200, 'invited member with build scope downloads the artifact', memberDownload.status());
-  const memberSidecar = await memberContext.request.get(`${job.admin_url}${release_url}/connection.json`);
+  const configMember = SIDECAR_MEMBERS.find(member => member.endsWith('connection.json')) || 'connection.json';
+  const memberSidecar = await memberContext.request.get(`${job.admin_url}${release_url}/${configMember}`);
   check(memberSidecar.status() === 200, 'invited member downloads the sidecar', memberSidecar.status());
 
   await page.goto(study_url);
   await page.locator('form', {hasText: job.member.username}).first().getByRole('button', {name: '撤销研究权限'}).click();
   await page.waitForLoadState('load');
   const revokedDownload = await memberContext.request.get(job.admin_url + release_url);
-  const revokedSidecar = await memberContext.request.get(`${job.admin_url}${release_url}/connection.json`);
+  const revokedSidecar = await memberContext.request.get(`${job.admin_url}${release_url}/${configMember}`);
   check(revokedDownload.status() === 403, 'revoked member is denied the artifact', revokedDownload.status());
   check(revokedSidecar.status() === 403, 'revoked member is denied the sidecars', revokedSidecar.status());
   await memberContext.close();

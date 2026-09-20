@@ -19,7 +19,7 @@ pnpm install --frozen-lockfile
 
 ## 当前边界
 
-- Web 已在 Mac 与实体 Windows Chrome 验证；独立原生目前仅实测 macOS arm64。Windows x64 原生完整包已列入 Phase 03 必需交付，尚待实现与实机验收；其他原生平台不承诺兼容。
+- Web 已在 Mac 与实体 Windows Chrome 验证；独立原生在 macOS arm64 有真实运行证据，Windows x64 完整包已完成平台契约、真实交叉导出与冻结包工程验证，但**Windows 实机执行/验收尚未运行**（交叉编译不冒充实机通过）；其他原生平台不承诺兼容。Windows 包未做代码签名，SmartScreen 提示状态未知。
 - 完成任务、本地保存、服务器收齐和科学验收是不同事实。
 - 只支持原设备／原存储的明确 trial 恢复；公开 ID 不能取回旧答案或接管会话。
 - 最小 Compose 已在隔离 Linux arm64 环境通过真实上传、重启/替换持久化、Owner 与错卷验收。Windows 11 / Chrome 的实体 LAN 基础链路已验；Mac 原生窗口与实际按键已验，独立研究者操作仍待验。
@@ -36,7 +36,7 @@ pnpm install --frozen-lockfile
 | Phase 03A | 下载、设置回显、名单反馈、错误提示与权限控件 | 首批基础修复已实现并通过定向工程验证 |
 | Phase 03B | Owner/Admin/普通用户、账号生命周期、实例权限矩阵、Excel 预览导入 | 下一开发批次，尚未实现完整模型 |
 | Phase 03C | 研究公开设置、唯一当前招募发行、旧会话兼容 | 待开发 |
-| Phase 03D | GEC 统一参与壳、短恢复码、macOS arm64／Windows x64 完整冻结原生包 | 待开发 |
+| Phase 03D | GEC 统一参与壳、短恢复码、macOS arm64／Windows x64 完整冻结原生包 | macOS 完整包已实现并有合成工程闭环；Windows x64 平台契约与交叉构建完整包工程验证通过，Windows 实机执行未运行 |
 | Phase 03E | 模块化后台、主题与中英文、被试研究门户 | 待开发 |
 | Phase 03F | 集成回归、Windows 原生实机验收、原设计者自主体验、非开发者独立 T17 | 待前述范围完成；不能用自动化替代人类验收 |
 | Phase 04 | 具体研究、正式部署、独立备份恢复、隐私治理与科学时序 | 未启动 |
@@ -141,4 +141,4 @@ Web 自动注入配置；普通原生流程优先提供包含实验资源、GEC�
 
 ### Windows 原生交付要求
 
-Windows x64 完整包为 Phase 03D 与 03F 的必需交付，后续原设计者自主体验以 Windows 为主要环境。目标是解压直接运行，无需安装 Godot 或手动修改连接配置；必须实测三种准入、GEC参与与收尾、本地保存、断网补传、关闭重开、检查点恢复、失败数据导出和完整数据对账。当前尚未完成 Windows 原生验收，既有 Windows Chrome 结果不能替代。验收项目见[Windows 原生验收清单](public_docs/windows_native_acceptance.md)。
+Windows x64 完整包为 Phase 03D 与 03F 的必需交付，后续原设计者自主体验以 Windows 为主要环境。目标是解压直接运行，无需安装 Godot 或手动修改连接配置；必须实测三种准入、GEC参与与收尾、本地保存、断网补传、关闭重开、检查点恢复、失败数据导出和完整数据对账。当前尚未完成 Windows 原生实机验收，既有 Windows Chrome 结果不能替代。工程侧已交付：Windows x64 描述契约（显式程序根/入口/依赖/GDExtension 清单）、Windows ZIP 安全路径规则、真实 PE32+ x86-64 与 PCK 版本核对、平台感知冻结组装与门户呈现，以及用固定 Godot 4.7.2 与官方模板的真实交叉导出验证（`tools/phase03_verify_windows_package.py --verify`，Windows 执行为 NOT_RUN）。构建与验证以 Godot 子进程真实退出码为准：写出产物后非零退出的导出/引擎声明不被接受，冷缓存崩溃只保留证据并由受支持的导入预热重试恢复；Windows 模板在复制或导出前按官方固定 SHA-256 校验，覆盖目录字节不符直接失败。验收项目见[Windows 原生验收清单](public_docs/windows_native_acceptance.md)。

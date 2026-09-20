@@ -8,7 +8,7 @@ Godot 4.7.2 is the locally installed official engine (MIT); export templates mus
 
 Official references: [Django sessions](https://docs.djangoproject.com/en/5.2/topics/http/sessions/), [Godot JavaScriptBridge](https://docs.godotengine.org/en/stable/classes/class_javascriptbridge.html).
 
-Native SQLite: [godot-sqlite v4.7](https://github.com/2shady4u/godot-sqlite/releases/tag/v4.7), SQLite 3.51.0, upstream MIT notice in `third_party/godot_sqlite_license.md`. The installer checks the official demo archive SHA-256 `26966044757cf86a223a8027f8bc88c49c289ab047dcf8138bb591d7632e580e` before selecting macOS frameworks. Native binaries are installed locally, not committed. SQLite itself is in the public domain.
+Native SQLite: [godot-sqlite v4.7](https://github.com/2shady4u/godot-sqlite/releases/tag/v4.7), SQLite 3.51.0, upstream MIT notice in `third_party/godot_sqlite_license.md`. The installer checks the official demo archive SHA-256 `26966044757cf86a223a8027f8bc88c49c289ab047dcf8138bb591d7632e580e` before selecting the macOS frameworks and/or the Windows x86_64 DLLs (`tools/install_sqlite.py <demo.zip> [macos] [windows]`; no platform argument keeps the historical macOS-only install). Native binaries are installed locally, not committed. SQLite itself is in the public domain.
 
 Playwright 1.58.2 is a development dependency under Apache-2.0. It controls the locally installed Google Chrome for engineering tests; it does not establish independent human acceptance.
 
