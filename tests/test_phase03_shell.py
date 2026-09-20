@@ -343,3 +343,23 @@ def test_shell_module_and_web_companion_contract():
     assert 'gec/shell.js' in packaging
     builder = (ROOT / 'tools' / 'build.py').read_text()
     assert "'shell.js'" in builder
+
+
+def test_native_recovery_export_entry_writes_the_gui_document_without_secrets(tmp_path):
+    """The new --export-recovery automation entry, verified on real Godot.
+
+    This is not a shell unit test with a scripted backend: it runs the pinned
+    Godot 4.7.2 against the real native SQLite backend and the real shell in an
+    isolated synthetic store, and proves the automation entry writes the same
+    recovery document as the GUI save dialog, keeps records/pending untouched,
+    contains no session token/proof and reports an error for an unopenable path.
+    """
+    storage = tmp_path / 'store with spaces'
+    storage.mkdir()
+    environment = {**__import__('os').environ, 'GEP_SYNTHETIC_STORAGE': str(storage)}
+    result = subprocess.run(
+        [_godot(), '--headless', '--path', str(ROOT / 'examples' / 'synthetic_experiment'),
+         '--script', str(ROOT / 'tests' / 'native' / 'recovery_export_harness.gd')],
+        cwd=ROOT, capture_output=True, text=True, timeout=180, env=environment)
+    assert 'NATIVE_RECOVERY_EXPORT_VERIFIED' in result.stdout, result.stdout + result.stderr
+    assert result.returncode == 0, result.stdout + result.stderr

@@ -737,6 +737,23 @@ func export_recovery() -> void:
 	dialog.popup_centered(Vector2i(800, 500))
 
 
+func export_recovery_to(path: String) -> Dictionary:
+	## Automation entry for the failure-data export: it writes exactly the same
+	## recovery document the GUI save dialog writes, without a dialog and without
+	## secrets. It never deletes the local queue.
+	if backend == null or not backend.has_method("recovery_export"):
+		return {"error": "recovery_export_unavailable"}
+	var recovery_data: Dictionary = await backend.recovery_export()
+	if recovery_data.has("error"):
+		return recovery_data
+	var file = FileAccess.open(path, FileAccess.WRITE)
+	if file == null:
+		return {"error": "recovery_export_unavailable"}
+	file.store_string(JSON.stringify(recovery_data))
+	file.close()
+	return {"state": "exported", "path": path}
+
+
 ## Harness entry used by the synthetic automation: it fills the same shell fields
 ## and calls the same submission path as a real button press.
 func auto_submit(credentials: Dictionary, auto_new := false) -> Dictionary:

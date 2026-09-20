@@ -120,6 +120,16 @@ func auto_run() -> void:
 		if arg == "--auto-new-session":
 			auto_new = true
 	await shell.auto_submit(credentials, auto_new)
+	var export_path := ""
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--export-recovery="):
+			export_path = arg.trim_prefix("--export-recovery=")
+	if not export_path.is_empty():
+		var exported: Dictionary = await shell.export_recovery_to(export_path)
+		if exported.has("error"):
+			print("SYNTHETIC_RECOVERY_EXPORT_FAILED ", str(exported.error))
+		else:
+			print("SYNTHETIC_RECOVERY_EXPORTED ", export_path)
 	if not accepting:
 		if data_only and OS.get_cmdline_user_args().has("--await-upload"):
 			await await_data_only_upload()
