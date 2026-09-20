@@ -28,6 +28,7 @@ POLICY_LIMITS = {'public_summary': 280, 'public_duration': 80, 'public_device_re
 POLICY_CHANGED = 'publication.policy_changed'
 RELEASE_CHANGED = 'publication.current_release_changed'
 SELECT_ACTIONS = ('study.configure', 'recruitment.manage')
+NATIVE_PLATFORM = 'macos_arm64'
 
 
 def _revision_matches(raw, current):
@@ -50,23 +51,79 @@ def public_snapshot(study):
             'device_requirements': study.public_device_requirements}
 
 
+def release_platform(release):
+    """The registered platform of one release; '' when the build has none."""
+    descriptor = release.build.descriptor if isinstance(release.build.descriptor, dict) else {}
+    platform = descriptor.get('platform')
+    return platform if isinstance(platform, str) else ''
+
+
+def release_kind(release):
+    """What kind of current release this is: ``web``, ``native`` or ``None``.
+
+    A Web release keeps the 03C contract: approved with a stored Web package.
+    A native macOS release is only usable through its frozen complete artifact;
+    a descriptor-only native registration stays an external distribution record
+    and never pretends to be a runnable Web package.
+    """
+    if release is None or not release.approved:
+        return None
+    if release_platform(release) == NATIVE_PLATFORM:
+        return 'native' if (bool(release.artifact_path) and bool(release.artifact_digest)) else None
+    return 'web' if release.build.package_path else None
+
+
 def release_available(release):
-    """Approved release whose build carries a published package for a web start."""
-    return bool(release is not None and release.approved and release.build.package_path)
+    """Whether the current release can actually be offered to participants now.
+
+    The Web contract is unchanged (approved with a stored Web package). A native
+    release additionally requires its frozen complete artifact to be present and
+    byte-intact, so a missing or tampered program is never advertised; this is
+    presentation fail-closed only and never rewrites an old binding.
+    """
+    kind = release_kind(release)
+    if kind == 'web':
+        return True
+    if kind == 'native':
+        from . import artifacts
+        return artifacts.stored_artifact_intact(release)
+    return False
+
+
+def entry_state(study):
+    """Platform-aware presentation state for one study's stable entry.
+
+    ``kind`` is ``web``/``native`` ('' when there is nothing to present) and
+    ``available`` says whether the platform can really offer it right now. A
+    native release with a missing or tampered artifact is reported as
+    ``native``/unavailable instead of silently falling back to a Web start.
+    """
+    release = study.current_release
+    if release is None or study.recruitment != 'open':
+        return {'kind': '', 'available': False}
+    kind = release_kind(release)
+    if kind is None:
+        kind = 'native' if release_platform(release) == NATIVE_PLATFORM else ''
+        return {'kind': kind, 'available': False}
+    return {'kind': kind, 'available': release_available(release)}
 
 
 def bound_release(study, release_id):
     """The requested current release, validating same-study approval and resources.
 
     An empty ``release_id`` clears the current release so the portal stops
-    offering a start without touching recruitment or existing sessions.
+    offering a start without touching recruitment or existing sessions. A release
+    is selectable when it has a real presentation contract: a stored Web package
+    or a frozen complete native artifact. Selection is a research-level decision
+    about new sessions only; whether the artifact is currently byte-intact is a
+    presentation-time check that fails closed without rewriting the binding.
     """
     if not release_id:
         return None
     release = Release.objects.select_related('build').filter(pk=release_id, study=study).first()
     require(release is not None, 'release_not_found', 404)
     require(release.approved, 'release_unapproved', 409)
-    require(bool(release.build.package_path), 'release_unavailable', 409)
+    require(release_kind(release) is not None, 'release_unavailable', 409)
     return release
 
 

@@ -12,6 +12,8 @@ from core import portal
 urlpatterns += [
     path('', portal.site_root), path('login',gui.signin), path('logout',gui.signout), path('activate',gui.activate),
     path('studies/<uuid:study_id>',gui.study_page), path('releases/<uuid:release_id>/config',gui.config),
+    path('releases/<uuid:release_id>/artifact',gui.artifact),
+    path('releases/<uuid:release_id>/artifact/<path:member>',gui.artifact_member),
 ]
 urlpatterns += [path('join/<uuid:study_id>',portal.entry)]
 from core.hosting import resource

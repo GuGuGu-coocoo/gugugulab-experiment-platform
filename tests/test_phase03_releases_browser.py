@@ -229,7 +229,10 @@ def package_zip(body, expected_version):
     with zipfile.ZipFile(target, 'w') as archive:
         archive.writestr('web/index.html', body + driver)
         client_root = Path(__file__).resolve().parents[1] / 'packages' / 'gec_web'
-        for name in ('sdk.js', 'bridge.js', 'inputs.js'):
+        # The shipped Web client is sdk.js + bridge.js + inputs.js + shell.js
+        # (the shell companion bridge.js imports); the package mirrors the real
+        # exporter list in tools/build.py so the bridge can load in Chrome.
+        for name in ('sdk.js', 'bridge.js', 'inputs.js', 'shell.js'):
             archive.writestr('web/gec/' + name, (client_root / name).read_bytes())
     return target.getvalue()
 

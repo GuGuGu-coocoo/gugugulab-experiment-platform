@@ -12,6 +12,7 @@ from jsonschema import Draft202012Validator
 from .models import Audit, Instance, Participant, RecoveryCode, Session, Event, Release, Study
 from .protocol import require, Rejected, uuid_text, equal, validate_tree, MAX_BATCH, MAX_EVENTS, PROTOCOL
 from .access import guard
+from .artifacts import require_release_artifact
 from .throttle import check
 
 
@@ -102,6 +103,7 @@ def _create_session(release, data, binding, proof):
     study = Study.objects.select_for_update().get(pk=release.study_id)
     release = Release.objects.select_related('build').get(pk=release.pk)
     require(release.approved and study.recruitment == 'open', 'admission_closed', 403)
+    require_release_artifact(release)
     mode = frozen_mode(release, study)
     if mode == 'anonymous':
         require(data.get('participant_code') is None, 'unexpected_code')

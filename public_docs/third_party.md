@@ -4,7 +4,7 @@ Original GEP and GEC project code is licensed under [Apache-2.0](../LICENSE). Th
 
 Python dependencies are resolved from PyPI and pinned with distribution hashes in `uv.lock`. Direct dependencies: Django (BSD-3-Clause), jsonschema (MIT), Gunicorn (MIT), openpyxl 3.1.5 (MIT) with et-xmlfile (MIT) for bounded XLSX templates/imports. Development dependencies: pytest (MIT), pytest-django (BSD-3-Clause). Installed distributions retain their license metadata and license files. Redistributing bundled dependencies must retain those notices.
 
-Godot 4.7.2 is the locally installed official engine (MIT); export templates must match the engine. Godot runtime notices must accompany exported distributions. No Godot binary is committed here.
+Godot 4.7.2 is the locally installed official engine (MIT); export templates must match the engine. Godot runtime notices must accompany exported distributions: every complete native package freezes `THIRD_PARTY_NOTICES.txt`, built from the official engine's own `Engine.get_license_text` / `Engine.get_copyright_info` / `Engine.get_license_info` output (frozen source `server/core/data/godot_engine_notices.json`, re-exported and compared against the official local engine during engineering verification), the vendored godot-sqlite notice above and the SQLite public-domain statement. The project `LICENSE` ships separately and is never presented as the license of these dependencies. No Godot binary is committed here.
 
 Official references: [Django sessions](https://docs.djangoproject.com/en/5.2/topics/http/sessions/), [Godot JavaScriptBridge](https://docs.godotengine.org/en/stable/classes/class_javascriptbridge.html).
 

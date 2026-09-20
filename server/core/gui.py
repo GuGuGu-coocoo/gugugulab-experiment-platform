@@ -21,8 +21,8 @@ from .access import guard, allowed, ACTIONS, authority_actions
 from .protocol import require, parse, Rejected
 from .views import endpoint
 from .services import digest, completion_status, issue_recovery_code, SHELL_CAPABILITY
-from .packages import validate_package, descriptor_valid, MAX_ARCHIVE
-from . import publication
+from .packages import validate_package, descriptor_valid, native_program_valid, MAX_ARCHIVE, MAX_NATIVE_ARCHIVE
+from . import publication, artifacts
 
 
 def _revision_ok(raw, current):
@@ -65,13 +65,17 @@ ACTION_LABELS = {
 def study_context(request, study, notice=''):
     permissions={action for action in ACTIONS if allowed(request.user,study,action)}
     can_manage={'member.manage','permission.delegate'} <= permissions
+    releases=list(Release.objects.filter(study=study).select_related('build'))
+    for release in releases:
+        release.artifact_ready=bool(release.approved and release.artifact_digest and release.artifact_path)
+        release.program_bound=bool(release.build.package_path)
     return {
         'study':study, 'notice':notice, 'public_api_url':public_api_url(),
         'revision':Instance.objects.get(pk=1).governance_revision,
         'study_revision':study.revision,
         'current_release_id':study.current_release_id,
         'builds':Build.objects.filter(study=study),
-        'releases':Release.objects.filter(study=study).select_related('build'),
+        'releases':releases,
         'sessions':[{'id':s.id,'state':completion_status(s)['state']} for s in Session.objects.filter(release__study=study)],
         'members':Grant.objects.filter(study=study,action='study.view').exclude(user_id=Instance.objects.get(pk=1).owner_id).select_related('user') if can_manage else [],
         'invitations':Invitation.objects.filter(study=study,consumed=False,revoked=False) if can_manage else [],
@@ -111,7 +115,7 @@ def study_form_errors(fn):
                 'policy_field':'公开信息超出长度上限，未写入任何更改。',
                 'release_not_found':'所选发行不存在或不属于本研究，未执行任何更改。',
                 'release_unapproved':'只能把已批准的发行设为当前发行。',
-                'release_unavailable':'该发行没有已发布的 Web 资源，不能作为当前发行。',
+                'release_unavailable':'该发行没有可用的已发布资源（Web 包或平台完整原生包），不能作为当前发行。',
             }
             context.update(error=messages.get(code,'操作未完成，请检查输入或权限后重试。'),error_code=code)
             return render(request,'core/study.html',context,status=error.status if isinstance(error,Rejected) else 400)
@@ -225,6 +229,18 @@ def study_page(request,study_id):
                 require(not Build.objects.filter(study=study,descriptor__version=descriptor['version'],descriptor__platform=descriptor['platform']).exclude(digest=descriptor['program_sha256']).exists(),'version_content_conflict',409)
                 build,_=Build.objects.get_or_create(study=study,digest=descriptor['program_sha256'],defaults={'descriptor':descriptor})
                 require(build.descriptor==descriptor,'build_conflict',409)
+            elif op=='native_archive':
+                guard(request.user,study,'build.upload')
+                build=Build.objects.get(pk=request.POST['build_id'],study=study)
+                require(build.descriptor.get('platform')=='macos_arm64','native_platform')
+                upload=request.FILES['package'];require(upload.size<=MAX_NATIVE_ARCHIVE,'archive_limit',413)
+                raw=upload.read(MAX_NATIVE_ARCHIVE+1)
+                summary=native_program_valid(raw,build.descriptor)
+                path=artifacts.programs_root()/(summary['digest']+'.zip')
+                artifacts.store_program_archive(path,raw)
+                if build.package_path!=path.name:
+                    require(not build.package_path,'build_conflict',409)
+                    build.package_path=path.name;build.save(update_fields=['package_path'])
             elif op=='upload':
                 guard(request.user,study,'build.upload')
                 upload=request.FILES['package'];require(upload.size<=MAX_ARCHIVE,'archive_limit',413)
@@ -248,7 +264,15 @@ def study_page(request,study_id):
             elif op=='approve':
                 guard(request.user,study,'release.approve_pilot')
                 build=Build.objects.get(pk=request.POST['build_id'],study=study)
-                Release.objects.create(study=study,build=build,approved=True,config={'purpose':'synthetic','mode':study.mode,'max_sessions':study.max_sessions,'offline_policy':'continue_local','recovery':'trial_boundary_v1'})
+                config={'purpose':'synthetic','mode':study.mode,'max_sessions':study.max_sessions,'offline_policy':'continue_local','recovery':'trial_boundary_v1'}
+                if build.descriptor.get('platform')=='macos_arm64' and build.package_path:
+                    release=Release.objects.create(study=study,build=build,approved=False,
+                                                   config={**config,'artifact_format_version':artifacts.ARTIFACT_FORMAT_VERSION})
+                    artifacts.publish_complete_artifact(release,actor=request.user)
+                    release.approved=True;release.save(update_fields=['approved'])
+                    audited=True
+                else:
+                    Release.objects.create(study=study,build=build,approved=True,config=config)
             elif op=='recruitment':
                 guard(request.user,study,'recruitment.manage')
                 state=request.POST['state'];require(state in ('open','paused','closed'),'state')
@@ -323,6 +347,43 @@ def config(request,release_id):
     guard(request.user,release.study,'study.configure');require(release.approved,'not_approved',409)
     response=JsonResponse(connection_config(release))
     response['Content-Disposition']='attachment; filename="connection.json"'
+    return response
+
+
+def _artifact_release(request, release_id):
+    admin_host(request)
+    require(request.method=='GET','method',405)
+    release=Release.objects.select_related('build','study').get(pk=release_id)
+    guard(request.user,release.study,'build.upload')
+    return release
+
+
+@endpoint
+def artifact(request,release_id):
+    """Download one released complete package, byte-identical on every request.
+
+    The build scope is re-checked on each request and the stored bytes are
+    verified against the recorded digest before any of them are served, so a
+    tampered or missing file is refused instead of distributed.
+    """
+    release=_artifact_release(request,release_id)
+    path=artifacts.artifact_file(release)
+    digest,size=artifacts.digest_file(path)
+    require(digest==release.artifact_digest and size==release.artifact_size,'artifact_tampered',409)
+    response=FileResponse(open(path,'rb'),as_attachment=True,filename=f'gep-{release.id}.zip',content_type='application/zip')
+    response['X-Artifact-SHA256']=release.artifact_digest
+    response['ETag']=f'"{release.artifact_digest}"'
+    return response
+
+
+@endpoint
+def artifact_member(request,release_id,member):
+    """One bounded sidecar member of a released artifact (never the program bundle)."""
+    release=_artifact_release(request,release_id)
+    entry,raw=artifacts.sidecar_bytes(release,member)
+    content_type='application/json' if member.endswith('.json') else 'text/plain; charset=utf-8'
+    response=HttpResponse(raw,content_type=content_type)
+    response['X-Artifact-Member-SHA256']=entry['sha256']
     return response
 
 @endpoint

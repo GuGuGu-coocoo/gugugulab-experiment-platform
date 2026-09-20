@@ -68,6 +68,12 @@ class Release(Identified):
     build = models.ForeignKey(Build, on_delete=models.PROTECT)
     config = models.JSONField()
     approved = models.BooleanField(default=False)
+    # Complete immutable distribution artifact (03D). The outer digest of the
+    # finished package lives here only; the artifact's own manifest lists member
+    # hashes and never the artifact digest, so nothing references itself.
+    artifact_path = models.CharField(max_length=256, blank=True)
+    artifact_digest = models.CharField(max_length=64, blank=True)
+    artifact_size = models.PositiveBigIntegerField(default=0)
 
 class Participant(Identified):
     study = models.ForeignKey(Study, on_delete=models.PROTECT)

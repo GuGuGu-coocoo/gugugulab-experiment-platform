@@ -33,6 +33,13 @@ def entry_url(study):
 
 
 def start_url(release):
+    """The real Web entry of a Web release; native releases have no Web path.
+
+    A native program archive never contains ``web/index.html``, so the portal
+    must not fabricate one for it. Callers only build this URL for a release
+    whose ``release_kind`` is ``web``; the guard keeps a future caller honest.
+    """
+    require(publication.release_kind(release) == 'web', 'release_unavailable', 409)
     return f'{public_api_url()}/run/{release.id}/web/index.html'
 
 
@@ -47,7 +54,12 @@ def gated_start_url(release, revision):
 
 
 def recruiting_studies():
-    """Explicit public + open studies whose current release is approved and located."""
+    """Explicit public + open studies whose current release is really presentable.
+
+    A complete native release is listed with its own participation explanation;
+    a native release whose complete artifact is missing or tampered is not
+    listed at all, so the portal never points at a program nobody can obtain.
+    """
     listed = []
     for study in Study.objects.filter(public=True, recruitment='open').select_related('current_release__build').order_by('title', 'id'):
         if publication.release_available(study.current_release):
@@ -62,9 +74,12 @@ def closed_summaries():
 
 def _portal(request):
     require(request.method == 'GET', 'method', 405)
-    entries = [{'study': study, 'snapshot': publication.public_snapshot(study), 'entry_url': entry_url(study),
-                'start_url': start_url(study.current_release), 'revision': study.revision}
-               for study in recruiting_studies()]
+    entries = []
+    for study in recruiting_studies():
+        release = study.current_release
+        kind = publication.release_kind(release)
+        entries.append({'study': study, 'snapshot': publication.public_snapshot(study), 'entry_url': entry_url(study),
+                        'kind': kind, 'start_url': start_url(release) if kind == 'web' else '', 'revision': study.revision})
     closed = [{'study': study, 'snapshot': publication.public_snapshot(study)} for study in closed_summaries()]
     return render(request, 'core/portal.html', {'entries': entries, 'closed': closed, 'portal_title': 'GuGuGu Lab · 参与研究'})
 
@@ -93,14 +108,20 @@ def entry(request, study_id):
     require(request.method == 'GET', 'method', 405)
     study = Study.objects.select_related('current_release__build').filter(pk=study_id).first()
     require(study is not None, 'study_not_found', 404)
-    release = study.current_release if study.recruitment == 'open' else None
-    startable = study.recruitment == 'open' and publication.release_available(release)
+    release = study.current_release
+    state = publication.entry_state(study)
+    startable = state['kind'] == 'web' and state['available']
+    native_available = state['kind'] == 'native' and state['available']
+    native_unavailable = state['kind'] == 'native' and not state['available']
     visible_summary = study.public_summary if study.public and (study.recruitment == 'open' or study.show_closed_summary) else ''
     response = render(request, 'core/entry.html', {
         'study': study, 'title': study.title, 'summary': visible_summary,
         'duration': study.public_duration if study.public else '',
         'device_requirements': study.public_device_requirements if study.public else '',
         'startable': startable,
+        'participation': 'web' if startable else ('native' if native_available else ('native_unavailable' if native_unavailable else '')),
+        'native_available': native_available,
+        'native_unavailable': native_unavailable,
         'start_url': start_url(release) if startable else '',
         'gated_start_url': gated_start_url(release, study.revision) if startable else '',
         'expected_release': str(release.id) if startable else '',

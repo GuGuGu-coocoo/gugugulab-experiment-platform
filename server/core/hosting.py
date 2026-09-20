@@ -7,13 +7,16 @@ from .models import Release
 from .gui import connection_config, public_api_url
 from .protocol import require
 from .views import endpoint
+from . import publication
 
 @endpoint
 def resource(request,release_id,resource_path):
     require(request.get_host().split(':')[0]==settings.EXPERIMENT_HOST,'wrong_host',403)
     require(request.method=='GET','method',405)
     release=Release.objects.select_related('build','study').get(pk=release_id)
-    require(release.approved and bool(release.build.package_path),'not_published',404)
+    # Only a real Web release is served here: a complete native release carries a
+    # program archive without any web/ path and must never be presented as one.
+    require(publication.release_kind(release)=='web','not_published',404)
     require(resource_path.startswith('web/') and '..' not in resource_path.split('/'),'path',404)
     config=connection_config(release)
     if resource_path=='web/index.html':

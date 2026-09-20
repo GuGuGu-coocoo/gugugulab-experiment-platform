@@ -74,3 +74,13 @@ Phase 04 的真实研究协议、伦理/同意、隐私/保留/撤回、备份�
 ## Phase 03 03C 当前发行与公开政策
 
 2026-09-20：03C 工程批次在隔离测试库与临时包目录完成。定向命令（`pytest -q tests/test_phase03_releases.py tests/test_transactions.py tests/test_gui_packages.py`）57 项通过；真实 Chrome 命令（`GEP_T17_BROWSER=1` 下的 `tests/test_phase03_releases_browser.py`）1 项通过，覆盖研究者公开政策与当前发行 GUI、稳定入口点击携带发行/发布版本、过期入口拒绝页与零会话、刷新后新发行准入、真实 GEC 客户端准入、旧会话上传与冻结直达 URL、管理 Cookie host-only 隔离。并发探针在真实文件数据库上运行：2 项发行切换互斥与 4 项“首次准入 × 切换/关闭招募”相交（含研究者事务未提交时准入必须读到已提交状态），全部通过。只读迁移演练在独立证据目录生成报告：3 项研究迁移后均为 private、current_release=null，Release 配置字节、8 个 session 的 release 绑定、32 条事件与 4 个导出身份在迁移前后一致，源库摘要不变。全量非浏览器套件 131 项通过、4 项按需跳过。以上为合成工程证据，不代表原设计者自主体验或独立 T17 已通过。
+
+## Phase 03 03D 完整原生发行包
+
+2026-09-20：原生完整包批次在隔离实例（独立数据目录、数据库与端口）与真实 macOS arm64 导出上完成。定向命令（`pytest -q tests/test_phase03_packages.py tests/test_gui_packages.py`）通过，覆盖：原生程序归档的有界校验与拒绝路径（路径穿越、绝对/反斜杠、重名、链接、脚本、缺二进制/Info.plist/PCK/依赖、摘要不符、畸形压缩、文件数与压缩比、归档与展开上限）、上传绑定描述与字节不变、批准时的完整包组装（`.app` 字节与可执行位未改、公开配置/schema/codebook/许可证冻结、成员哈希清单、外层摘要只存数据库且不自引用）、重复下载逐字节一致、撤销 build scope 后完整包与 sidecar 均 403、非本研究范围 403、未知清单版本与自引用失败关闭、篡改或缺失时下载 409 且准入在创建会话前 409、打包在文件提交前失败与文件提交后数据库回滚都保留旧发行、内容寻址存储从不覆盖、以及 descriptor-only 原生与 Web 旧契约不变。
+
+真实端到端命令（`tools/phase03_verify_package.py --verify`）：真实 Chrome 登录研究者 GUI，登记描述、上传实际 `.app` 归档（约 62 MB）、批准发行、通过 GUI 链接下载完整包两次（逐字节一致）与 sidecar（manifest、connection.json、许可证、第三方许可声明），邀请持有 build scope 的第二成员下载成功并在 GUI 撤销后立即 403；把下载包解包后直接启动真实 macOS 程序（不传 `--config`，使用包内同级 `connection.json` 默认配置）完成同一合成任务，退出码 0；在完成边界保留的本地 SQLite 记录、服务器数据库事件与授权 JSONL 导出按事件 ID/值一致（4/4/4）；随后篡改服务器存储中的完整包字节，完整包与全部 sidecar 下载均 409、准入 409（`release_unavailable`）且会话数不变，恢复字节后同一发行可再次逐字节下载。以上为合成工程证据，不代表原设计者自主体验或独立 T17 已通过。真实签名、公证与正式部署未验证。
+
+2026-09-20（补正批次）：同一工具新增检查并全部通过——平台冻结的引擎许可/版权声明与官方本地 Godot 4.7.2 引擎现场导出逐字节一致（脚本 `tests/native/engine_notices_export.gd`），包内 `THIRD_PARTY_NOTICES.txt`（SHA-256 `a5c87cbc0b0837d3b0fc8ac1f023cf6f30e7a18d70ddea23f9fa61779dcab55a`）含 Godot 引擎 MIT 许可全文、引擎版本、Godot 内置第三方版权/许可文本与 godot-sqlite 上游许可全文，并与项目 `LICENSE` 分别冻结；GUI 下载的 sidecar 与包内成员哈希一致、被撤销 build scope 后 403。GUI 把完整原生发行设为当前发行后，真实门户列出该研究且 `data-participation="native"`、稳定入口显示独立程序参与说明且 `data-startable="0"`，两者都不含 `/run/.../web/index.html`；浏览门户与入口没有创建会话。原生包内的本机程序仍以包内默认配置完成同一合成任务（退出码 0），受控分发与既有准入不受影响。定向回归：`pytest -q tests/test_phase03_packages.py tests/test_gui_packages.py` 56 项通过，`pytest -q tests/test_phase03_releases.py` 19 项通过，全量非浏览器套件 197 项通过、4 项按需跳过；完整包验证工具 110 项检查 0 失败。
+
+P0306R 修正：03C 的真实 Chrome 合成包曾漏带随客户端发布的 `gec/shell.js`（`bridge.js` 导入该文件），导致桥接未加载、`data-admission` 缺失而使 Chrome 旅程在 `tests/test_phase03_releases_browser.py` line 274 失败；测试包补齐该客户端文件后，`GEP_T17_BROWSER=1` 下的同一命令 1 项通过（失败与通过日志在本地忽略证据目录）。该修正随“完整冻结包/GUI/准入”批次进入两笔原子补丁，并在隔离快照中重跑真实 Chrome 旅程验证。
