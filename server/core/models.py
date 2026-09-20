@@ -11,6 +11,23 @@ class Instance(models.Model):
     id = models.PositiveSmallIntegerField(primary_key=True, default=1)
     instance_id = models.UUIDField(unique=True)
     owner = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    governance_revision = models.PositiveIntegerField(default=0)
+
+class AccountProfile(models.Model):
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='gep_profile')
+    role = models.CharField(max_length=16, default='user')
+    must_change_password = models.BooleanField(default=False)
+    auth_version = models.PositiveIntegerField(default=1)
+    revision = models.PositiveIntegerField(default=0)
+
+class AccountInvitation(Identified):
+    issuer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    token_hash = models.CharField(max_length=64, unique=True)
+    username = models.CharField(max_length=150)
+    role = models.CharField(max_length=16, default='user')
+    expires_at = models.DateTimeField()
+    consumed = models.BooleanField(default=False)
+    revoked = models.BooleanField(default=False)
 
 class Study(Identified):
     title = models.CharField(max_length=160)
@@ -77,10 +94,12 @@ class Export(Identified):
     created_at = models.DateTimeField(auto_now_add=True)
 
 class Audit(models.Model):
-    study = models.ForeignKey(Study, on_delete=models.PROTECT)
+    study = models.ForeignKey(Study, on_delete=models.PROTECT, null=True, blank=True)
     actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
     action = models.CharField(max_length=48)
     target = models.CharField(max_length=128)
+    before = models.JSONField(null=True)
+    after = models.JSONField(null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
 class Invitation(Identified):

@@ -16,3 +16,10 @@ urlpatterns += [path('run/<uuid:release_id>/<path:resource_path>',resource)]
 
 from core.hosting import preview
 urlpatterns += [path("preview/<str:token>/<path:resource_path>",preview)]
+
+from core import gui_accounts
+urlpatterns += [
+    path('users',gui_accounts.users_page),
+    path('account/password',gui_accounts.password_page),
+    path('activate-account',gui_accounts.activate_account_page),
+]

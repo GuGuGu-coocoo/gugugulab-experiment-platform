@@ -16,7 +16,7 @@ from django.db import transaction
 from django.http import JsonResponse, HttpResponse, FileResponse
 from django.shortcuts import render, redirect
 from django.utils import timezone
-from .models import Study, Grant, Instance, Participant, Build, Release, Session, Audit, Invitation, Export, RecoveryPermit
+from .models import Study, Grant, Instance, Participant, Build, Release, Session, Audit, Invitation, Export, RecoveryPermit, AccountProfile
 from .access import guard, allowed, ACTIONS
 from .protocol import require, parse, Rejected
 from .views import endpoint
@@ -25,7 +25,7 @@ from .packages import validate_package, descriptor_valid, MAX_ARCHIVE
 
 
 def admin_host(request):
-    require(request.get_host().split(':')[0] in ('admin.localhost','localhost','testserver'),'wrong_host',403)
+    require(request.get_host().split(':')[0] in (settings.ADMIN_HOST,'localhost','testserver'),'wrong_host',403)
 
 
 def public_api_url():
@@ -125,6 +125,8 @@ def signin(request):
         user=authenticate(request,username=request.POST.get('username'),password=request.POST.get('password'))
         if user:
             login(request,user)
+            profile=AccountProfile.objects.filter(user_id=user.pk).first()
+            request.session['gep_auth_version']=profile.auth_version if profile is not None else None
             return redirect('/')
         message='登录失败，请核对凭据。'
     return render(request,'core/login.html',{'message':message})

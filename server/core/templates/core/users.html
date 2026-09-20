@@ -1,0 +1,34 @@
+{% extends 'core/base.html' %}{% block content %}
+<h1>账号与实例治理</h1>
+<p>Owner 由实例指针唯一决定；Admin 由 Owner 任命或降级。Admin 可以管理非 Owner 账号（含其他 Admin 的改密与启停），但不能任命或降级 Admin，也不能重置、停用或启用拥有操作者无法支配研究权限的账号。Owner 与 Admin 角色都不隐含研究 RAW 数据权限。当前治理版本 {{revision}}。</p>
+<p><a href="/">返回我的研究</a> · <a href="/account/password">修改我的密码</a></p>
+{% if notice %}<div class="notice">{{notice}}</div>{% endif %}
+{% if secret %}<div class="notice" data-one-time-secret="1">一次性临时密码（{{secret_username}}，只显示这一次，绝不写入审计或导出）：<code>{{secret}}</code></div>{% endif %}
+{% if invitation_token %}<div class="notice" data-one-time-invitation="1">账号邀请（{{invitation_username}}，24 小时内一次性有效，只显示这一次）：<code>/activate-account?token={{invitation_token}}</code></div>{% endif %}
+{% if error %}<div class="error" role="alert">{{error}}</div>{% endif %}
+<section><h2>账号</h2>
+<table><tr><th>用户名</th><th>角色</th><th>状态</th><th>密码</th><th>操作</th></tr>
+{% for row in rows %}<tr data-account-row="{{row.id}}" data-owner-row="{{row.is_owner|yesno:'1,0'}}" data-account-role="{{row.role}}">
+<td>{{row.username}}{% if row.is_owner %} <small>Owner</small>{% endif %}</td><td>{{row.role}}</td>
+<td>{% if row.is_active %}启用{% else %}停用{% endif %}</td><td>{% if row.must_change_password %}需修改{% else %}正常{% endif %}</td>
+<td>{% if row.is_owner %}<small>Owner 账号只读</small>{% else %}
+<form method="post">{% csrf_token %}<input type="hidden" name="op" value="reset_password"><input type="hidden" name="username" value="{{row.username}}"><input type="hidden" name="revision" value="{{revision}}"><input type="password" name="password" placeholder="你的密码" required><button>重置临时密码</button></form>
+{% if is_owner %}<form method="post">{% csrf_token %}<input type="hidden" name="op" value="set_role"><input type="hidden" name="username" value="{{row.username}}"><input type="hidden" name="revision" value="{{revision}}"><select name="role"><option value="user"{% if row.role == 'user' %} selected{% endif %}>user</option><option value="admin"{% if row.role == 'admin' %} selected{% endif %}>admin</option></select><input type="password" name="password" placeholder="你的密码" required><button>保存角色</button></form>{% endif %}
+{% if row.is_active %}<form method="post">{% csrf_token %}<input type="hidden" name="op" value="disable"><input type="hidden" name="username" value="{{row.username}}"><input type="hidden" name="revision" value="{{revision}}"><input type="password" name="password" placeholder="你的密码" required><button>停用</button></form>{% else %}<form method="post">{% csrf_token %}<input type="hidden" name="op" value="enable"><input type="hidden" name="username" value="{{row.username}}"><input type="hidden" name="revision" value="{{revision}}"><input type="password" name="password" placeholder="你的密码" required><button>启用</button></form>{% endif %}
+{% endif %}</td></tr>{% endfor %}</table></section>
+<section><h2>新增账号</h2>
+<form method="post">{% csrf_token %}<input type="hidden" name="op" value="invite_account"><input type="hidden" name="revision" value="{{revision}}">
+<label>用户名 <input name="username" maxlength="150" required></label>
+{% if is_owner %}<label>角色 <select name="role"><option value="user">user</option><option value="admin">admin</option></select></label>{% endif %}
+<label>你的密码（重新认证）<input type="password" name="password" required></label><button>生成邀请（本人设置密码）</button></form>
+<form method="post">{% csrf_token %}<input type="hidden" name="op" value="create_temp"><input type="hidden" name="revision" value="{{revision}}">
+<label>用户名 <input name="username" maxlength="150" required></label>
+<label>你的密码（重新认证）<input type="password" name="password" required></label><button>创建临时密码账号</button></form></section>
+<section><h2>待接受邀请</h2>{% for invite in invitations %}<form method="post">{% csrf_token %}<input type="hidden" name="op" value="revoke_invitation"><input type="hidden" name="invitation_id" value="{{invite.id}}"><input type="hidden" name="revision" value="{{revision}}">{{invite.username}}（角色 {{invite.role}}）<input type="password" name="password" placeholder="你的密码" required><button>撤销</button></form>{% empty %}<p>没有待接受邀请。</p>{% endfor %}</section>
+{% if is_owner %}<section><h2>授权矛盾预览（缺少 study.view）</h2>
+{% if conflicts %}<table><tr><th>账号</th><th>研究</th><th>无 view 的子权限</th></tr>{% for row in conflicts %}<tr><td>{{row.username}}</td><td>{{row.study}}</td><td>{{row.actions}}</td></tr>{% endfor %}</table>
+<form method="post">{% csrf_token %}<input type="hidden" name="op" value="reconcile"><input type="hidden" name="revision" value="{{revision}}">
+<label>处理方式 <select name="choice"><option value="grant_view">显式补 study.view</option><option value="remove_conflicting">移除冲突子权限</option></select></label>
+<label>你的密码（重新认证）<input type="password" name="password" required></label><button>执行收敛</button></form>
+{% else %}<p>没有缺少 study.view 的授权子权限。</p>{% endif %}</section>{% endif %}
+{% endblock %}

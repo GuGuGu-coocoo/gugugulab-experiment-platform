@@ -27,11 +27,12 @@ def main():
     django.setup()
     from django.core.management import call_command
     from django.contrib.auth import get_user_model
-    from core.models import Instance
+    from core.models import AccountProfile, Instance
     call_command('migrate', verbosity=0)
     password = secrets.token_urlsafe(24)
     owner = get_user_model().objects.create_user(args.owner, password=password)
     instance = Instance.objects.create(instance_id=uuid.uuid4(), owner=owner)
+    AccountProfile.objects.create(user=owner, role='user', must_change_password=False, auth_version=1, revision=0)
     for name, value in [('secret', secret), ('dev_credentials.json', json.dumps({'username': args.owner, 'password': password})), ('instance', str(instance.instance_id))]:
         fd = os.open(root / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, 'w') as stream:

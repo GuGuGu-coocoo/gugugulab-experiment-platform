@@ -1,0 +1,10 @@
+{% extends 'core/base.html' %}{% block content %}<section><h1>接受账号邀请</h1>
+{% if done %}<div class="notice">账号 {{username}} 已激活，请<a href="/login">登录</a>。</div>
+{% else %}
+{% if error %}<div class="error" role="alert">{{error}}</div>{% endif %}
+<form method="post">{% csrf_token %}
+<label>邀请密钥 <input name="token" value="{{token}}" type="password" autocomplete="one-time-code" required></label>
+<label>设置你的密码（至少 16 字符）<input name="password" type="password" minlength="16" autocomplete="new-password" required></label>
+<label>确认密码 <input name="confirm" type="password" minlength="16" autocomplete="new-password" required></label>
+<button>激活账号</button></form>
+<p><a href="/login">已有账号，直接登录</a></p>{% endif %}</section>{% endblock %}

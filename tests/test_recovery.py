@@ -6,6 +6,8 @@ from core.services import recover,digest
 from core.protocol import Rejected
 
 def test_recovery_requires_grant_private_proof_and_single_use(setup):
+    # New 03B contract: study.view is prerequisite for ordinary study actions.
+    Grant.objects.create(user=setup['owner'],study=setup['study'],action='study.view')
     Grant.objects.create(user=setup['owner'],study=setup['study'],action='session.recover')
     RecoveryPermit.objects.create(session=setup['session'],issuer=setup['owner'],token_hash=digest('synthetic-permit'),expires_at=timezone.now()+timedelta(minutes=15))
     with pytest.raises(Rejected,match='recovery_denied'):
@@ -31,6 +33,7 @@ def test_expired_finished_queue_can_reauthenticate_but_declaration_stays_closed(
     session=setup['session'];session.expires_at=timezone.now()-timedelta(seconds=1);session.save(update_fields=['expires_at'])
     with pytest.raises(Rejected,match='session_inactive'):
         receive(session.id,setup['token'],{'batch_id':str(uuid.uuid4()),'events':[event]})
+    Grant.objects.create(user=setup['owner'],study=setup['study'],action='study.view')
     Grant.objects.create(user=setup['owner'],study=setup['study'],action='session.recover')
     RecoveryPermit.objects.create(session=session,issuer=setup['owner'],token_hash=digest('finished-queue-permit'),expires_at=timezone.now()+timedelta(minutes=15))
     result=recover(session.id,setup['request']['proof'],'finished-queue-permit')
@@ -45,6 +48,8 @@ def test_expired_finished_queue_can_reauthenticate_but_declaration_stays_closed(
 
 def test_revocation_still_prevents_upload_reauthentication(setup):
     session=setup['session'];session.revoked=True;session.save(update_fields=['revoked'])
+    # New 03B contract: study.view is prerequisite, so this still exercises revocation not permission.
+    Grant.objects.create(user=setup['owner'],study=setup['study'],action='study.view')
     Grant.objects.create(user=setup['owner'],study=setup['study'],action='session.recover')
     ticket=RecoveryPermit.objects.create(session=session,issuer=setup['owner'],token_hash=digest('revoked-permit'),expires_at=timezone.now()+timedelta(minutes=15))
     with pytest.raises(Rejected,match='recovery_denied'):

@@ -14,7 +14,8 @@ def client_for(setup, *actions):
 
 
 def test_metadata_download_is_authorized_fixed_attachment(setup):
-    client=client_for(setup,'data.export_raw')
+    # New 03B contract: study.view is prerequisite for ordinary study actions.
+    client=client_for(setup,'study.view','data.export_raw')
     response=client.post('/v1/admin/exports',data=json.dumps({'study_id':str(setup['study'].id)}),content_type='application/json')
     assert response.status_code==201
     export=Export.objects.get(pk=response.json()['export_id'])

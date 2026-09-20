@@ -14,6 +14,9 @@ def test_http_authority_snapshot_and_revocation(setup,event):
     export_route='/v1/admin/exports'
     assert client.post(export_route,{'study_id':str(setup['study'].id)},content_type='application/json',HTTP_AUTHORIZATION='Bearer '+setup['token']).status_code==403
     client.force_login(setup['owner'])
+    # New 03B contract: ordinary study access requires study.view plus the action,
+    # so the export grant alone is no longer sufficient (old expectation: 201).
+    Grant.objects.create(user=setup['owner'],study=setup['study'],action='study.view')
     grant=Grant.objects.create(user=setup['owner'],study=setup['study'],action='data.export_raw')
     response=client.post(export_route,{'study_id':str(setup['study'].id)},content_type='application/json')
     assert response.status_code==201
@@ -40,6 +43,8 @@ def test_host_boundary_and_csrf(setup):
 def test_csv_lossless_nested_values_and_sidecar_authorization(setup,event):
     import csv,io,json
     c=Client();c.force_login(setup['owner'])
+    # New 03B contract: study.view is prerequisite for ordinary study actions.
+    Grant.objects.create(user=setup['owner'],study=setup['study'],action='study.view')
     grant=Grant.objects.create(user=setup['owner'],study=setup['study'],action='data.export_raw')
     # Fixed export fixture exercises CSV encoding independently of payload schema.
     golden={'null':None,'zero':0,'false':False,'chinese':'中文','code':'001','negative':-3,'formula':'=1+1','multi':['a','b']}
