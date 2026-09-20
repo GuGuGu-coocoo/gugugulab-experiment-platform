@@ -35,8 +35,8 @@ def _users_binding(actor, instance, ops):
     })
 
 
-def _row_error(errors, row, code, message):
-    errors.append({'row': row, 'code': code, 'message': message})
+def _row_error(errors, row, code, message, message_en):
+    errors.append({'row': row, 'code': code, 'message': message, 'message_en': message_en})
 
 
 def _normalize_users(actor, raw):
@@ -51,13 +51,13 @@ def _normalize_users(actor, raw):
         username, username_ok = excel.text_cell(values['username'])
         operation, operation_ok = excel.text_cell(values['operation'])
         if not username_ok or not operation_ok:
-            _row_error(errors, number, 'numeric_cell', '用户名与操作必须是文本，不能是数字或日期。')
+            _row_error(errors, number, 'numeric_cell', '用户名与操作必须是文本，不能是数字或日期。', 'Username and operation must be text, not numbers or dates.')
             continue
         if not username:
-            _row_error(errors, number, 'username', '用户名不能为空。')
+            _row_error(errors, number, 'username', '用户名不能为空。', 'The username cannot be empty.')
             continue
         if operation not in excel.OPERATIONS:
-            _row_error(errors, number, 'operation', 'operation 必须是 create / update / disable / enable。')
+            _row_error(errors, number, 'operation', 'operation 必须是 create / update / disable / enable。', 'operation must be create / update / disable / enable.')
             continue
         revision, revision_ok = excel.integer_cell(values['revision'])
         target = get_user_model().objects.filter(username=username).first()
@@ -66,75 +66,75 @@ def _normalize_users(actor, raw):
             role, role_ok = excel.text_cell(values['role'])
             role = role or 'user'
             if not role_ok or role not in ROLES:
-                _row_error(errors, number, 'role', 'role 必须是 user 或 admin。')
+                _row_error(errors, number, 'role', 'role 必须是 user 或 admin。', 'role must be user or admin.')
                 continue
             if role == 'admin' and not is_instance_owner(actor):
-                _row_error(errors, number, 'admin_appointment_owner_only', '只有 Owner 可以创建 Admin 账号。')
+                _row_error(errors, number, 'admin_appointment_owner_only', '只有 Owner 可以创建 Admin 账号。', 'Only the Owner can create Admin accounts.')
                 continue
             if target is not None:
-                _row_error(errors, number, 'account_exists', '账号已存在；导入不会覆盖或重置已有密码，请使用 update/disable/enable。')
+                _row_error(errors, number, 'account_exists', '账号已存在；导入不会覆盖或重置已有密码，请使用 update/disable/enable。', 'The account already exists; imports never overwrite or reset passwords — use update/disable/enable.')
                 continue
             if permissions._invitation_digest({username}):
-                _row_error(errors, number, 'invitation_active', '该账号已有未使用的邀请。')
+                _row_error(errors, number, 'invitation_active', '该账号已有未使用的邀请。', 'This account already has an unused invitation.')
                 continue
             seen_create.setdefault(username, number)
             if seen_create[username] != number:
-                _row_error(errors, number, 'duplicate_identifier', '同一用户名在导入中出现多次。')
+                _row_error(errors, number, 'duplicate_identifier', '同一用户名在导入中出现多次。', 'The same username appears more than once in this import.')
                 continue
             ops.append({'row': number, 'operation': 'create', 'username': username, 'role': role})
             continue
         if target is None:
-            _row_error(errors, number, 'account_missing', '目标账号不存在；导入不会按显示名猜测创建。')
+            _row_error(errors, number, 'account_missing', '目标账号不存在；导入不会按显示名猜测创建。', 'The target account does not exist; imports never guess or create from a display name.')
             continue
         if not revision_ok:
-            _row_error(errors, number, 'revision', 'update / disable / enable 必须填写目标账号当前版本（整数）。')
+            _row_error(errors, number, 'revision', 'update / disable / enable 必须填写目标账号当前版本（整数）。', 'update / disable / enable must carry the target account revision (an integer).')
             continue
         if profile is None or profile.revision != revision:
-            _row_error(errors, number, 'revision_mismatch', '目标账号版本已变化；请刷新后重新导出模板再试。')
+            _row_error(errors, number, 'revision_mismatch', '目标账号版本已变化；请刷新后重新导出模板再试。', 'The target account revision changed; refresh and export the template again.')
             continue
         if target.pk == actor.pk:
-            _row_error(errors, number, 'self_target', '不能对自己的账号执行此操作。')
+            _row_error(errors, number, 'self_target', '不能对自己的账号执行此操作。', 'This action cannot target your own account.')
             continue
         if is_instance_owner(target):
-            _row_error(errors, number, 'owner_protected', 'Owner 账号不可通过账号管理修改。')
+            _row_error(errors, number, 'owner_protected', 'Owner 账号不可通过账号管理修改。', 'The Owner account cannot be changed through account management.')
             continue
         if not is_instance_owner(actor) and not dominates(actor, target):
-            _row_error(errors, number, 'higher_privilege_target', '目标账号拥有操作者无法支配的研究权限。')
+            _row_error(errors, number, 'higher_privilege_target', '目标账号拥有操作者无法支配的研究权限。', 'The target holds study privileges this actor cannot dominate.')
             continue
         if operation in ('disable', 'enable'):
             want_active = operation == 'enable'
             if target.is_active == want_active:
-                _row_error(errors, number, 'no_change', '目标状态没有变化。')
+                _row_error(errors, number, 'no_change', '目标状态没有变化。', 'The target already has that state.')
                 continue
             ops.append({'row': number, 'operation': operation, 'username': username, 'user_id': target.pk})
             continue
         study_id, study_ok = excel.text_cell(values['study_id'])
         if not study_ok or not study_id:
-            _row_error(errors, number, 'study_id', 'update 必须填写研究 UUID。')
+            _row_error(errors, number, 'study_id', 'update 必须填写研究 UUID。', 'update must carry the study UUID.')
             continue
         study = Study.objects.filter(pk=study_id).first() if _uuid_ok(study_id) else None
         if study is None:
-            _row_error(errors, number, 'study_missing', '研究不存在。')
+            _row_error(errors, number, 'study_missing', '研究不存在。', 'The study does not exist.')
             continue
         actions_text, actions_ok = excel.text_cell(values['actions'])
         if not actions_ok:
-            _row_error(errors, number, 'actions', 'actions 必须是文本。')
+            _row_error(errors, number, 'actions', 'actions 必须是文本。', 'actions must be text.')
             continue
         actions = [action.strip() for action in actions_text.split(';') if action.strip()]
         if not actions or not set(actions) <= ACTIONS:
-            _row_error(errors, number, 'actions', 'actions 必须是用分号分隔的已知动作代码。')
+            _row_error(errors, number, 'actions', 'actions 必须是用分号分隔的已知动作代码。', 'actions must be a semicolon-separated list of known action codes.')
             continue
         if 'study.view' not in actions:
-            _row_error(errors, number, 'visibility_required', '显式动作必须同时包含 study.view。')
+            _row_error(errors, number, 'visibility_required', '显式动作必须同时包含 study.view。', 'Explicit actions must include study.view.')
             continue
         if not is_instance_owner(actor):
             manageable = manageable_actions(actor, study)
             if not set(actions) <= manageable:
-                _row_error(errors, number, 'delegation_forbidden', '包含操作者无权委派的动作或未授权研究。')
+                _row_error(errors, number, 'delegation_forbidden', '包含操作者无权委派的动作或未授权研究。', 'The row includes actions this actor cannot delegate, or an unauthorized study.')
                 continue
         key = (target.pk, study.pk)
         if key in seen_study:
-            _row_error(errors, number, 'duplicate_identifier', '同一账号与研究在导入中出现多次。')
+            _row_error(errors, number, 'duplicate_identifier', '同一账号与研究在导入中出现多次。', 'The same account and study appear more than once in this import.')
             continue
         seen_study.add(key)
         selected = {action: False for action in actions}
@@ -270,28 +270,28 @@ def preview_roster(actor, study, raw):
         number = item['row']
         code, code_ok = excel.text_cell(item['values']['id'])
         if not code:
-            _row_error(errors, number, 'id', 'ID 不能为空。')
+            _row_error(errors, number, 'id', 'ID 不能为空。', 'The ID cannot be empty.')
             continue
         if not code_ok:
-            _row_error(errors, number, 'numeric_identifier', 'ID 必须是文本；数字形式的 ID 会被拒绝，不会猜测前导零。')
+            _row_error(errors, number, 'numeric_identifier', 'ID 必须是文本；数字形式的 ID 会被拒绝，不会猜测前导零。', 'Identifiers must be text; numeric IDs are rejected because leading zeros cannot be guessed.')
             continue
         if len(code) > 128:
-            _row_error(errors, number, 'id', 'ID 过长。')
+            _row_error(errors, number, 'id', 'ID 过长。', 'The ID is too long.')
             continue
         if code in seen:
-            _row_error(errors, number, 'duplicate_identifier', '本次导入中 ID 重复。')
+            _row_error(errors, number, 'duplicate_identifier', '本次导入中 ID 重复。', 'The same ID appears more than once in this import.')
             continue
         if code in existing:
-            _row_error(errors, number, 'existing_identifier', '名单中已有该 ID；追加导入不会覆盖。')
+            _row_error(errors, number, 'existing_identifier', '名单中已有该 ID；追加导入不会覆盖。', 'The roster already contains that ID; append imports never overwrite.')
             continue
         seen.add(code)
         if study.mode == 'password':
             password, password_ok = excel.text_cell(item['values']['password'])
             if not password_ok:
-                _row_error(errors, number, 'password', '密码必须是文本。')
+                _row_error(errors, number, 'password', '密码必须是文本。', 'The password must be text.')
                 continue
             if len(password) < 12:
-                _row_error(errors, number, 'password_too_short', '密码至少 12 个字符。')
+                _row_error(errors, number, 'password_too_short', '密码至少 12 个字符。', 'The password needs at least 12 characters.')
                 continue
             staged_rows.append({'code': code, 'password_hash': make_password(password)})
         else:

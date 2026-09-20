@@ -7,7 +7,7 @@ surface lives next to its own authorization entry points.
 from django.http import HttpResponse
 from django.shortcuts import redirect
 
-from . import excel, importers, permissions
+from . import excel, importers, permissions, ui
 from .access import guard, is_account_administrator
 from .gui import admin_host
 from .models import Study
@@ -27,23 +27,28 @@ def _upload(request):
 
 def apply_import(request, op):
     """Resolve one XLSX import operation; the caller owns error rendering."""
+    lang = ui.lang_of(request)
     password = request.POST.get('password', '')
     if op == 'import_users_preview':
         preview = importers.preview_users(request.user, _upload(request))
-        return {'preview': permissions.preview_payload(preview), 'commit_op': 'import_users_commit'}
+        return {'preview': permissions.preview_payload(preview, lang), 'commit_op': 'import_users_commit'}
     if op == 'import_users_commit':
         outcome = importers.commit_users(request.user, password, request.POST.get('preview_id'))
         result = outcome.get('result', outcome)
-        notice = f"账号导入完成：邀请 {len(result.get('invited', []))}，权限更新 {len(result.get('updated', []))}，停用 {len(result.get('disabled', []))}，启用 {len(result.get('enabled', []))}。"
+        notice = ui.notice(
+            lang,
+            f"账号导入完成：邀请 {len(result.get('invited', []))}，权限更新 {len(result.get('updated', []))}，停用 {len(result.get('disabled', []))}，启用 {len(result.get('enabled', []))}。",
+            f"Account import completed: {len(result.get('invited', []))} invitations, {len(result.get('updated', []))} permission updates, {len(result.get('disabled', []))} disabled, {len(result.get('enabled', []))} enabled.")
         return {'notice': notice, 'invitation_tokens': outcome.get('invitation_tokens', []), 'import_result': result}
     if op == 'import_roster_preview':
         study = Study.objects.filter(pk=request.POST.get('study_id')).first()
         require(study is not None, 'study_missing', 404)
         preview = importers.preview_roster(request.user, study, _upload(request))
-        return {'preview': permissions.preview_payload(preview), 'commit_op': 'import_roster_commit'}
+        return {'preview': permissions.preview_payload(preview, lang), 'commit_op': 'import_roster_commit'}
     if op == 'import_roster_commit':
         result = importers.commit_roster(request.user, password, request.POST.get('preview_id'))
-        return {'notice': f"名单导入完成：{result['study']} 新增 {result['added']} 个 ID。"}
+        return {'notice': ui.notice(lang, f"名单导入完成：{result['study']} 新增 {result['added']} 个 ID。",
+                                    f"Roster import completed: {result['added']} new IDs in {result['study']}.")}
     raise Rejected('unknown_operation', 400)
 
 

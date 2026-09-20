@@ -13,22 +13,28 @@ Bounded XLSX imports live in :mod:`core.importers` and share this preview core.
 """
 import hashlib
 import json
+import math
 from datetime import timedelta
+from urllib.parse import urlencode
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.hashers import check_password
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.db.models import Count, Exists, OuterRef, Q
 from django.utils import timezone
 
-from . import accounts
-from .access import (ACTIONS, conflicts, dominates, is_account_administrator,
-                     is_instance_owner, manageable_actions)
+from . import accounts, ui
+from .access import (ACTIONS, conflicts, delegable_authority, dominates,
+                     is_account_administrator, is_instance_owner, manageable_actions)
 from .models import (AccountInvitation, AccountProfile, Grant, Instance, PermissionPreview, Study)
 from .protocol import Rejected, require
 
 PREVIEW_TTL = timedelta(minutes=10)
 PURGE_LIMIT = 200
+MATRIX_PAGE_SIZE = 20
+CONFLICT_PAGE_SIZE = 20
+STUDY_CHOICE_LIMIT = 50
 MATRIX_KIND = 'matrix'
 RECONCILE_KIND = 'reconcile'
 USERS_KIND = 'users_import'
@@ -117,10 +123,17 @@ def purge_sensitive_staging(now=None, limit=PURGE_LIMIT):
     return len(stale)
 
 
-def preview_payload(row):
-    """Safe view context: redacted summary, per-row errors, no staged secrets."""
+def preview_payload(row, lang='zh'):
+    """Safe view context: redacted summary, per-row errors, no staged secrets.
+
+    Row errors carry a Chinese message and its English counterpart; the active
+    language is resolved here so templates stay language-agnostic.
+    """
+    errors = [{'row': item.get('row'), 'code': item.get('code'),
+               'message': (item.get('message_en') or item.get('message')) if lang == 'en' else item.get('message')}
+              for item in (row.errors or [])]
     return {'preview_id': str(row.id), 'preview_kind': row.kind, 'preview_scope': row.scope,
-            'preview_summary': row.summary, 'preview_errors': row.errors,
+            'preview_summary': row.summary, 'preview_errors': errors,
             'preview_expires_at': row.expires_at}
 
 
@@ -195,43 +208,207 @@ def _require_target(actor, target):
 
 # --------------------------------------------------------------------------- matrix
 
-def matrix_rows(actor):
-    """Per-account study rows for the /users matrix: visibility first, then the
-    explicit actions; only studies the actor can inspect or delegate on."""
-    from .gui import ACTION_LABELS
+def _pager_links(param, page, pages, params=None, window=5):
+    """Numbered links for one bounded table that keep the active filters.
+
+    ``param`` is the page parameter of this table (``page`` for accounts/matrix,
+    ``cpage`` for conflicts); every other non-empty filter is carried over so
+    paging never silently drops the user's search.
+    """
+    if pages <= 1:
+        return []
+    start = max(1, page - window)
+    end = min(pages, page + window)
+    links = []
+    for number in range(start, end + 1):
+        query = {key: value for key, value in (params or {}).items() if value and key != param}
+        if number > 1:
+            query[param] = str(number)
+        links.append({'number': number, 'current': number == page,
+                      'url': '/users' + ('?' + urlencode(query) if query else '')})
+    return links
+
+
+def _matrix_study_scope(actor):
+    """The actor's editable (effective AND delegable) action map per study.
+
+    Reading and delegating are separate concerns: Owner and every Admin may
+    inspect the account permission metadata of the whole instance, so the study
+    catalog is never filtered for inspection. Delegation stays bounded: only the
+    Owner governs every action, while a non-Owner Admin's editable map (and thus
+    every rendered form) is computed once from their own effective AND delegable
+    grants. Inspection itself grants nothing: study/data/identity APIs
+    re-authorize independently and forged preview/commit submissions stay 403.
+    """
+    if is_instance_owner(actor):
+        return True, {}
+    manageable = {}
+    for study_id, action in delegable_authority(actor):
+        manageable.setdefault(study_id, set()).add(action)
+    return False, manageable
+
+
+def matrix_page(actor, search='', page=1, lang='zh'):
+    """One bounded page of the /users permission matrix.
+
+    Accounts are ordered by id, optionally filtered by a case-insensitive
+    username search, and paged at ``MATRIX_PAGE_SIZE`` accounts per page so a
+    growing instance never renders an unbounded table. Only the page's accounts
+    are materialized: profiles and grants are queried for those ids only, and a
+    non-Owner's study data is limited to the studies named by those grants plus
+    the actor's editable studies (the Owner governs every study, so the catalog
+    is the Owner's scope).
+
+    Owner and Admin inspect the whole instance read-only, but a row outside the
+    actor's effective and delegable authority renders as a read-only summary
+    (``readonly``/``readonly_reason``) instead of a form, and the Owner row stays
+    read-only for everyone. The search never widens the per-account authority
+    checks in :func:`_matrix_authorize`.
+    """
+    from .gui import action_label
     User = get_user_model()
     owner_id = Instance.objects.get(pk=1).owner_id
-    profiles = {profile.user_id: profile for profile in AccountProfile.objects.all()}
+    search = (search or '').strip()
+    accounts = User.objects.order_by('id')
+    if search:
+        accounts = accounts.filter(username__icontains=search)
+    total = accounts.count()
+    pages = max(1, math.ceil(total / MATRIX_PAGE_SIZE))
+    try:
+        page = int(page)
+    except (TypeError, ValueError):
+        page = 1
+    page = min(max(page, 1), pages)
+    window = list(accounts[(page - 1) * MATRIX_PAGE_SIZE: page * MATRIX_PAGE_SIZE])
+    page_ids = [user.pk for user in window]
+    profiles = {profile.user_id: profile for profile in AccountProfile.objects.filter(user_id__in=page_ids)}
+    owner, manageable_by_study = _matrix_study_scope(actor)
+    page_grants = Grant.objects.filter(user_id__in=page_ids)
     grants = {}
-    for user_id, study_id, action, delegable in Grant.objects.values_list('user_id', 'study_id', 'action', 'delegable'):
+    for user_id, study_id, action, delegable in page_grants.values_list('user_id', 'study_id', 'action', 'delegable'):
         grants.setdefault((user_id, study_id), {})[action] = delegable
-    studies = list(Study.objects.order_by('title', 'id'))
+    if owner:
+        # The Owner governs every study, so every study can produce an entry.
+        studies = list(Study.objects.order_by('title', 'id'))
+    else:
+        # Only studies that can produce an entry for this page are loaded: the
+        # ones the page accounts already hold grants on (read-only inspection)
+        # plus the actor's editable studies. A large catalog never materializes.
+        needed = {study_id for _, study_id in grants} | set(manageable_by_study)
+        studies = list(Study.objects.filter(pk__in=needed).order_by('title', 'id'))
+    joiner = ui.tr(lang, 'users_preview_joiner')
     rows = []
-    for user in User.objects.order_by('id'):
-        entries = []
+    for user in window:
+        profile = profiles.get(user.pk)
         is_owner_row = user.pk == owner_id
         own_row = user.pk == getattr(actor, 'pk', None)
+        entries = []
         for study in studies:
             current = grants.get((user.pk, study.pk), {})
-            manageable = set() if (is_owner_row or own_row) else manageable_actions(actor, study)
+            if is_owner_row or own_row:
+                manageable = set()
+            elif owner:
+                manageable = set(ACTIONS)
+            else:
+                manageable = manageable_by_study.get(study.pk, set())
             if not current and not manageable:
                 continue
+            if is_owner_row:
+                reason = 'owner'
+            elif own_row:
+                reason = 'self'
+            elif not manageable or not set(current) <= manageable:
+                reason = 'outside'
+            else:
+                reason = ''
             entries.append({'study': study, 'granted': bool(current), 'current': current,
                             'visibility': 'study.view' in current,
-                            'summary': _describe(current), 'editable': bool(manageable) and not is_owner_row and not own_row,
-                            'checks': [{'action': action, 'label': ACTION_LABELS.get(action, action),
+                            'summary': joiner.join(sorted(current)) if current else ui.tr(lang, 'users_preview_none_actions'),
+                            'editable': not reason, 'readonly': bool(reason), 'readonly_reason': reason,
+                            'checks': [{'action': action, 'label': action_label(action, lang),
                                         'checked': action in current, 'delegable': bool(current.get(action, False))}
                                        for action in sorted(manageable) if action != 'study.view']})
         rows.append({'id': user.pk, 'username': user.username, 'is_owner': is_owner_row,
-                     'role': profiles[user.pk].role if user.pk in profiles else 'user',
+                     'role': profile.role if profile is not None else 'user',
+                     'is_active': user.is_active,
+                     'must_change_password': bool(profile.must_change_password) if profile is not None else False,
                      'studies': entries})
-    return rows
+    return {'rows': rows, 'search': search, 'page': page, 'pages': pages, 'total': total,
+            'page_links': _pager_links('page', page, pages, {'q': search}), 'owner_scope': owner}
 
 
-def _describe(current):
-    if not current:
-        return '（无显式动作）'
-    return '、'.join(sorted(current))
+def _conflict_groups():
+    """Database-side grouping of grants that are missing ``study.view``.
+
+    The queryset yields ``(user_id, study_id)`` value rows, so slicing a page
+    never materializes Grant instances and no page has to load the whole table.
+    """
+    return (Grant.objects.values('user_id', 'study_id')
+            .annotate(has_view=Count('action', filter=Q(action='study.view')))
+            .filter(has_view=0).order_by('user_id', 'study_id'))
+
+
+def conflict_page(page=1, size=CONFLICT_PAGE_SIZE, keep=None):
+    """One bounded page of authorization-conflict groups for the /users page.
+
+    The count comes from the grouped query; only its own page of groups and
+    their actions are loaded. Preview and commit keep using the whole snapshot
+    (see :func:`_conflict_snapshot`), so paging the presentation never narrows
+    what a reconciliation actually checks.
+    """
+    groups = _conflict_groups()
+    total = groups.count()
+    pages = max(1, math.ceil(total / size))
+    try:
+        page = int(page)
+    except (TypeError, ValueError):
+        page = 1
+    page = min(max(page, 1), pages)
+    pairs = [(row['user_id'], row['study_id']) for row in groups[(page - 1) * size: page * size]]
+    user_ids = {user_id for user_id, _ in pairs}
+    study_ids = {study_id for _, study_id in pairs}
+    actions = {}
+    for user_id, study_id, action in Grant.objects.filter(
+            user_id__in=user_ids, study_id__in=study_ids).values_list('user_id', 'study_id', 'action'):
+        actions.setdefault((user_id, study_id), set()).add(action)
+    names = {pk: name for pk, name in
+             get_user_model().objects.filter(pk__in=user_ids).values_list('pk', 'username')}
+    titles = {pk: title for pk, title in
+              Study.objects.filter(pk__in=study_ids).values_list('pk', 'title')}
+    rows = [{'user_id': user_id, 'study_id': study_id,
+             'username': names.get(user_id, str(user_id)), 'study': titles.get(study_id, str(study_id)),
+             'actions': sorted(actions.get((user_id, study_id), set()) - {'study.view'})}
+            for user_id, study_id in pairs]
+    return {'rows': rows, 'total': total, 'page': page, 'pages': pages,
+            'page_links': _pager_links('cpage', page, pages, keep)}
+
+
+def configure_studies_page(actor, search='', limit=STUDY_CHOICE_LIMIT):
+    """Bounded, searchable study choices for roster templates and imports.
+
+    Authorization is unchanged: the Owner sees every study, and another account
+    sees exactly the studies where it holds both ``study.view`` and
+    ``study.configure`` (effective grants, matching :func:`access.allowed`). A
+    large catalog is capped at ``limit`` by title search, but the cap is
+    explicit (``total``/``more``) and the search keeps every configurable study
+    reachable, so choices are bounded by query rather than silently dropped.
+    """
+    search = (search or '').strip()
+    studies = Study.objects.order_by('title', 'id')
+    if search:
+        studies = studies.filter(title__icontains=search)
+    if not is_instance_owner(actor):
+        if not (getattr(actor, 'is_authenticated', False) and getattr(actor, 'is_active', False)):
+            studies = studies.none()
+        else:
+            visible = Grant.objects.filter(user=actor, action='study.view', study=OuterRef('pk'))
+            configure = Grant.objects.filter(user=actor, action='study.configure', study=OuterRef('pk'))
+            studies = (studies.annotate(_visible=Exists(visible), _configure=Exists(configure))
+                       .filter(_visible=True, _configure=True))
+    total = studies.count()
+    window = list(studies[:limit])
+    return {'studies': window, 'total': total, 'more': total > len(window),
+            'search': search, 'limit': limit}
 
 
 def _matrix_submission(post, actor):

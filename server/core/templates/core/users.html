@@ -1,64 +1,79 @@
-{% extends 'core/base.html' %}{% block content %}
-<h1>账号与实例治理</h1>
-<p>Owner 由实例指针唯一决定；Admin 由 Owner 任命或降级。Owner 行即使对 Owner 本人也受保护：账号管理不能修改 Owner 行，Owner 改密码请使用“修改我的密码”。普通 Admin 只能授予自己“有效且可委派”的动作，且目标账号必须在可支配范围内；角色任命与降级始终仅限 Owner。矩阵先显示研究可见性，再展开显式动作；取消可见性会同时清除子权限，服务端拒绝“不可见却保留子权限”的矛盾提交。所有授权变更都需要先预览，再用本人密码一次性确认。</p>
-<p><a href="/">返回我的研究</a> · <a href="/account/password">修改我的密码</a></p>
+{% extends 'core/workbench.html' %}{% block content %}
+<h1>{{ui.users_title}}</h1>
+<p>{{ui.users_intro}}</p>
+<p><a href="/">{{ui.back_to_studies}}</a> · <a href="/account/password">{{ui.nav_password}}</a></p>
 {% if notice %}<div class="notice">{{notice}}</div>{% endif %}
-{% if secret %}<div class="notice" data-one-time-secret="1">一次性临时密码（{{secret_username}}，只显示这一次，绝不写入审计或导出）：<code>{{secret}}</code></div>{% endif %}
-{% if invitation_token %}<div class="notice" data-one-time-invitation="1">账号邀请（{{invitation_username}}，24 小时内一次性有效，只显示这一次）：<code>/activate-account?token={{invitation_token}}</code></div>{% endif %}
-{% for invite in invitation_tokens %}<div class="notice" data-one-time-invitation="1">导入邀请（{{invite.username}}，只显示这一次）：<code>/activate-account?token={{invite.token}}</code></div>{% endfor %}
+{% if secret %}<div class="notice" data-one-time-secret="1">{{ui.users_secret_note}} {{secret_username}} <code>{{secret}}</code></div>{% endif %}
+{% if invitation_token %}<div class="notice" data-one-time-invitation="1">{{ui.users_invitation_note}} {{invitation_username}} <code>/activate-account?token={{invitation_token}}</code></div>{% endif %}
+{% for invite in invitation_tokens %}<div class="notice" data-one-time-invitation="1">{{ui.users_import_invitation_note}} {{invite.username}} <code>/activate-account?token={{invite.token}}</code></div>{% endfor %}
 {% if error %}<div class="error" role="alert">{{error}}</div>{% endif %}
-{% if preview %}<section data-preview="{{preview.preview_kind}}" data-preview-id="{{preview.preview_id}}"><h2>更改预览（未执行）</h2>
-{% if preview.preview_kind == 'matrix' %}<p>账号 {{preview.preview_summary.username}} · 研究 {{preview.preview_summary.study}}：新增 {{preview.preview_summary.add|join:"、"|default:"无"}}；移除 {{preview.preview_summary.remove|join:"、"|default:"无"}}；委派标记变化 {{preview.preview_summary.delegable_changed|join:"、"|default:"无"}}。变更后动作：{{preview.preview_summary.target|join:"、"|default:"无显式动作"}}。</p>{% endif %}
-{% if preview.preview_kind == 'reconcile' %}<table><tr><th>账号</th><th>研究</th><th>冲突子权限</th></tr>{% for row in preview.preview_summary.rows %}<tr><td>{{row.username}}</td><td>{{row.study}}</td><td>{{row.actions|join:"、"}}</td></tr>{% endfor %}</table><p>处理方式：{{preview.preview_summary.choice}}。提交时会重新核对同一批账号/研究/动作，任何变化都会整体拒绝。</p>{% endif %}
-{% if preview.preview_kind == 'users_import' %}<p>共读取 {{preview.preview_summary.rows}} 行，可执行 {{preview.preview_summary.operations|length}} 项；将发出邀请：{{preview.preview_summary.invitations|join:"、"|default:"无"}}。已有密码永不被导入重置。</p><table><tr><th>行</th><th>操作</th><th>用户名</th><th>研究</th><th>动作</th></tr>{% for row in preview.preview_summary.operations %}<tr><td>{{row.row}}</td><td>{{row.operation}}</td><td>{{row.username}}</td><td>{{row.study_id|default:"—"}}</td><td>{{row.actions|join:"、"|default:"—"}}</td></tr>{% endfor %}</table>{% endif %}
-{% if preview.preview_kind == 'roster_import' %}<p>研究 {{preview.preview_summary.study}}（模式 {{preview.preview_summary.mode}}）：读取 {{preview.preview_summary.rows}} 行，追加 {{preview.preview_summary.new_ids}} 个新 ID；{% if preview.preview_summary.passwords_set %}密码已立即哈希到私密暂存，预览、会话、日志与导出都不含明文。{% else %}本模式不读取密码列。{% endif %}</p>{% endif %}
-{% if preview.preview_errors %}<h3>逐行错误（整批不会执行）</h3><table><tr><th>行</th><th>代码</th><th>说明</th></tr>{% for item in preview.preview_errors %}<tr><td>{{item.row}}</td><td>{{item.code}}</td><td>{{item.message}}</td></tr>{% endfor %}</table>{% else %}
+{% if preview %}<section data-preview="{{preview.preview_kind}}" data-preview-id="{{preview.preview_id}}"><h2>{{ui.users_preview_heading}}</h2>
+{% if preview.preview_kind == 'matrix' %}<p>{% if lang == 'en' %}Account {{preview.preview_summary.username}} · study {{preview.preview_summary.study}}: add {{preview.preview_summary.add|join:", "|default:"none"}}; remove {{preview.preview_summary.remove|join:", "|default:"none"}}; delegable-flag changes {{preview.preview_summary.delegable_changed|join:", "|default:"none"}}. Actions after the change: {{preview.preview_summary.target|join:", "|default:"no explicit actions"}}.{% else %}账号 {{preview.preview_summary.username}} · 研究 {{preview.preview_summary.study}}：新增 {{preview.preview_summary.add|join:"、"|default:"无"}}；移除 {{preview.preview_summary.remove|join:"、"|default:"无"}}；委派标记变化 {{preview.preview_summary.delegable_changed|join:"、"|default:"无"}}。变更后动作：{{preview.preview_summary.target|join:"、"|default:"无显式动作"}}。{% endif %}</p>{% endif %}
+{% if preview.preview_kind == 'reconcile' %}<div class="table-wrap"><table><tr><th>{{ui.common_username}}</th><th>{{ui.common_study}}</th><th>{{ui.users_conflict_actions}}</th></tr>{% for row in preview.preview_summary.rows %}<tr><td>{{row.username}}</td><td>{{row.study}}</td><td>{{row.actions|join:"、"}}</td></tr>{% endfor %}</table></div><p>{% if lang == 'en' %}{{ui.users_choice}}: {% if preview.preview_summary.choice == 'grant_view' %}{{ui.users_choice_grant_view}}{% else %}{{ui.users_choice_remove_conflicting}}{% endif %}. {{ui.users_preview_reconcile_note}}{% else %}{{ui.users_choice}}：{% if preview.preview_summary.choice == 'grant_view' %}{{ui.users_choice_grant_view}}{% else %}{{ui.users_choice_remove_conflicting}}{% endif %}。{{ui.users_preview_reconcile_note}}{% endif %}</p>{% endif %}
+{% if preview.preview_kind == 'users_import' %}<p>{% if lang == 'en' %}Read {{preview.preview_summary.rows}} rows; {{preview.preview_summary.operations|length}} operations can run; invitations to issue: {{preview.preview_summary.invitations|join:", "|default:"none"}}. Existing passwords are never reset by imports.{% else %}共读取 {{preview.preview_summary.rows}} 行，可执行 {{preview.preview_summary.operations|length}} 项；将发出邀请：{{preview.preview_summary.invitations|join:"、"|default:"无"}}。已有密码永不被导入重置。{% endif %}</p><div class="table-wrap"><table><tr><th>{{ui.users_import_col_row}}</th><th>{{ui.users_import_col_operation}}</th><th>{{ui.users_import_col_username}}</th><th>{{ui.users_import_col_study}}</th><th>{{ui.users_import_col_actions}}</th></tr>{% for row in preview.preview_summary.operations %}<tr><td>{{row.row}}</td><td>{{row.operation}}</td><td>{{row.username}}</td><td>{{row.study_id|default:"—"}}</td><td>{{row.actions|join:"、"|default:"—"}}</td></tr>{% endfor %}</table></div>{% endif %}
+{% if preview.preview_kind == 'roster_import' %}<p>{% if lang == 'en' %}Study {{preview.preview_summary.study}} (mode {{preview.preview_summary.mode}}): read {{preview.preview_summary.rows}} rows, append {{preview.preview_summary.new_ids}} new IDs; {% if preview.preview_summary.passwords_set %}passwords were hashed into private staging immediately, so previews, sessions, logs and exports never contain plaintext.{% else %}this mode does not read a password column.{% endif %}{% else %}研究 {{preview.preview_summary.study}}（模式 {{preview.preview_summary.mode}}）：读取 {{preview.preview_summary.rows}} 行，追加 {{preview.preview_summary.new_ids}} 个新 ID；{% if preview.preview_summary.passwords_set %}密码已立即哈希到私密暂存，预览、会话、日志与导出都不含明文。{% else %}本模式不读取密码列。{% endif %}{% endif %}</p>{% endif %}
+{% if preview.preview_errors %}<h3>{{ui.users_row_errors}}</h3><div class="table-wrap"><table><tr><th>{{ui.users_import_col_row}}</th><th>{{ui.users_error_col_code}}</th><th>{{ui.users_error_col_message}}</th></tr>{% for item in preview.preview_errors %}<tr><td>{{item.row}}</td><td>{{item.code}}</td><td>{{item.message}}</td></tr>{% endfor %}</table></div>{% else %}
 <form method="post">{% csrf_token %}<input type="hidden" name="op" value="{{commit_op}}"><input type="hidden" name="preview_id" value="{{preview.preview_id}}">
-<label>你的密码（确认时重新认证）<input type="password" name="password" required></label><button>确认执行（{{preview.preview_expires_at|date:"H:i"}} 前一次性有效）</button></form>{% endif %}</section>{% endif %}
-<section><h2>账号</h2>
-<table><tr><th>用户名</th><th>角色</th><th>状态</th><th>密码</th><th>操作</th></tr>
+<label>{{ui.users_confirm_password}}<input type="password" name="password" required></label><button>{{ui.users_confirm_commit}}{% if lang == 'en' %} (valid once before {{preview.preview_expires_at|date:"H:i"}}){% else %}（{{preview.preview_expires_at|date:"H:i"}} {{ui.users_confirm_expiry}}）{% endif %}</button></form>{% endif %}</section>{% endif %}
+<section data-accounts><h2>{{ui.users_accounts}}</h2>
+<p class="muted" data-accounts-total="{{matrix.total}}">{% if lang == 'en' %}{{ui.users_accounts_note}} {{matrix.total}} ({{ui.common_page}} {{matrix.page}} / {{matrix.pages}}){% else %}{{ui.users_accounts_note}} 共 {{matrix.total}} 个账号（{{matrix.page}} / {{matrix.pages}} {{ui.common_page}}）{% endif %}</p>
+<div class="table-wrap"><table><tr><th>{{ui.common_username}}</th><th>{{ui.common_role}}</th><th>{{ui.common_status}}</th><th>{{ui.common_password}}</th><th>{{ui.common_actions}}</th></tr>
 {% for row in rows %}<tr data-account-row="{{row.id}}" data-owner-row="{{row.is_owner|yesno:'1,0'}}" data-account-role="{{row.role}}">
 <td>{{row.username}}{% if row.is_owner %} <small>Owner</small>{% endif %}</td><td>{{row.role}}</td>
-<td>{% if row.is_active %}启用{% else %}停用{% endif %}</td><td>{% if row.must_change_password %}需修改{% else %}正常{% endif %}</td>
-<td>{% if row.is_owner %}<small>Owner 账号只读</small>{% else %}
-<form method="post">{% csrf_token %}<input type="hidden" name="op" value="reset_password"><input type="hidden" name="username" value="{{row.username}}"><input type="hidden" name="revision" value="{{revision}}"><input type="password" name="password" placeholder="你的密码" required><button>重置临时密码</button></form>
-{% if is_owner %}<form method="post">{% csrf_token %}<input type="hidden" name="op" value="set_role"><input type="hidden" name="username" value="{{row.username}}"><input type="hidden" name="revision" value="{{revision}}"><select name="role"><option value="user"{% if row.role == 'user' %} selected{% endif %}>user</option><option value="admin"{% if row.role == 'admin' %} selected{% endif %}>admin</option></select><input type="password" name="password" placeholder="你的密码" required><button>保存角色</button></form>{% endif %}
-{% if row.is_active %}<form method="post">{% csrf_token %}<input type="hidden" name="op" value="disable"><input type="hidden" name="username" value="{{row.username}}"><input type="hidden" name="revision" value="{{revision}}"><input type="password" name="password" placeholder="你的密码" required><button>停用</button></form>{% else %}<form method="post">{% csrf_token %}<input type="hidden" name="op" value="enable"><input type="hidden" name="username" value="{{row.username}}"><input type="hidden" name="revision" value="{{revision}}"><input type="password" name="password" placeholder="你的密码" required><button>启用</button></form>{% endif %}
-{% endif %}</td></tr>{% endfor %}</table></section>
-<section data-permission-matrix><h2>实例权限矩阵</h2><p>研究可见性是显式动作的前提；先勾选“研究可见”，再展开子权限。可委派标记决定该账号能否把同一动作继续转授。Owner 行对所有账号（包括 Owner）只读。</p>
-<table><tr><th>账号</th><th>研究</th><th>可见性与显式动作</th></tr>
-{% for row in matrix %}{% for entry in row.studies %}<tr data-matrix-row="{{row.id}}-{{entry.study.id}}">
-<td>{{row.username}}{% if row.is_owner %} <small>Owner</small>{% endif %}</td><td>{{entry.study.title}}</td><td>
+<td>{% if row.is_active %}{{ui.users_state_active}}{% else %}{{ui.users_state_disabled}}{% endif %}</td><td>{% if row.must_change_password %}{{ui.users_password_change}}{% else %}{{ui.users_password_normal}}{% endif %}</td>
+<td>{% if row.is_owner %}<small>{{ui.users_owner_readonly}}</small>{% else %}
+<form method="post">{% csrf_token %}<input type="hidden" name="op" value="reset_password"><input type="hidden" name="username" value="{{row.username}}"><input type="hidden" name="revision" value="{{revision}}"><input type="password" name="password" placeholder="{{ui.users_your_password}}" required><button>{{ui.users_reset_password}}</button></form>
+{% if is_owner %}<form method="post">{% csrf_token %}<input type="hidden" name="op" value="set_role"><input type="hidden" name="username" value="{{row.username}}"><input type="hidden" name="revision" value="{{revision}}"><select name="role"><option value="user"{% if row.role == 'user' %} selected{% endif %}>user</option><option value="admin"{% if row.role == 'admin' %} selected{% endif %}>admin</option></select><input type="password" name="password" placeholder="{{ui.users_your_password}}" required><button>{{ui.users_save_role}}</button></form>{% endif %}
+{% if row.is_active %}<form method="post">{% csrf_token %}<input type="hidden" name="op" value="disable"><input type="hidden" name="username" value="{{row.username}}"><input type="hidden" name="revision" value="{{revision}}"><input type="password" name="password" placeholder="{{ui.users_your_password}}" required><button>{{ui.users_disable}}</button></form>{% else %}<form method="post">{% csrf_token %}<input type="hidden" name="op" value="enable"><input type="hidden" name="username" value="{{row.username}}"><input type="hidden" name="revision" value="{{revision}}"><input type="password" name="password" placeholder="{{ui.users_your_password}}" required><button>{{ui.users_enable}}</button></form>{% endif %}
+{% endif %}</td></tr>{% endfor %}</table></div>
+{% if matrix.page_links %}<nav class="pager" data-account-pager aria-label="{{ui.users_account_pager}}">{% for link in matrix.page_links %}<a href="{{link.url}}"{% if link.current %} aria-current="page"{% endif %}>{{link.number}}</a>{% endfor %}</nav>{% endif %}</section>
+<section data-permission-matrix><h2>{{ui.users_matrix}}</h2><p>{{ui.users_matrix_help}}</p>
+{% if not matrix.owner_scope %}<p class="muted" data-matrix-scope="1">{{ui.users_matrix_scope_note}}</p>{% endif %}
+<form method="get" data-matrix-search="1"><label>{{ui.users_matrix_search}} <input name="q" value="{{matrix.search}}" maxlength="150"></label><button>{{ui.common_search}}</button>{% if matrix.search %} <a href="/users">{{ui.users_matrix_clear}}</a>{% endif %}</form>
+<p class="muted" data-matrix-total="{{matrix.total}}">{% if lang == 'en' %}{{ui.users_matrix_total}}: {{matrix.total}} ({{ui.common_page}} {{matrix.page}} / {{matrix.pages}}){% else %}{{ui.users_matrix_total}}：{{matrix.total}}（{{matrix.page}} / {{matrix.pages}} {{ui.common_page}}）{% endif %}</p>
+<div class="table-wrap matrix-wrap">
+<table class="matrix-table"><tr><th>{{ui.common_username}}</th><th>{{ui.common_study}}</th><th>{{ui.users_matrix_column}}</th></tr>
+{% for row in matrix.rows %}{% for entry in row.studies %}<tr data-matrix-row="{{row.id}}-{{entry.study.id}}">
+<th scope="row" data-matrix-account="{{row.id}}">{{row.username}}{% if row.is_owner %} <small>Owner</small>{% endif %}</th><td>{{entry.study.title}}</td><td>
 {% if entry.editable %}<form method="post" data-visibility-form>{% csrf_token %}
 <input type="hidden" name="op" value="matrix_preview"><input type="hidden" name="user_id" value="{{row.id}}"><input type="hidden" name="study_id" value="{{entry.study.id}}">
-<label><input type="checkbox" name="visibility" value="1" {% if entry.visibility %}checked{% endif %}> 研究可见：查看研究概况 <small>study.view</small></label>
-<details><summary>显式动作（点击展开）</summary>{% for check in entry.checks %}
+<label><input type="checkbox" name="visibility" value="1" {% if entry.visibility %}checked{% endif %}> {{ui.users_visibility_label}} <small>study.view</small></label>
+<details data-matrix-expand="1"><summary>{{ui.users_explicit_actions}}</summary>{% for check in entry.checks %}
 <label><input type="checkbox" name="action:{{check.action}}" value="1" data-child="1" {% if check.checked %}checked{% endif %}> {{check.label}} <small>{{check.action}}</small></label>
-<label><input type="checkbox" name="delegable:{{check.action}}" value="1" {% if check.delegable %}checked{% endif %}> 可委派</label>{% endfor %}</details>
-<button>预览更改</button></form>
-{% else %}{{entry.summary}}{% if row.is_owner or row.id == request.user.id %} <small>只读</small>{% endif %}{% endif %}
-</td></tr>{% endfor %}{% empty %}<tr><td colspan="3">当前没有可显示的研究权限行。</td></tr>{% endfor %}</table></section>
-<section><h2>Excel 批量导入（先预览，再用本人密码确认）</h2>
-<p>模板不含任何已有密码或哈希。导入永不重置已有密码：新账号默认发出一次性邀请；已有账号必须写明操作与当前账号版本，不会按显示名猜测或覆盖。公式、宏、外部链接、数字形式的 ID 会被整体拒绝；上限 2 MiB、展开 10 MiB、1000 行、32 列。</p>
-<p><a href="/users/templates/users">下载用户与权限模板（.xlsx）</a>{% for study in configure_studies %} · <a href="/users/templates/roster?study={{study.id}}">下载《{{study.title}}》名单模板</a>{% endfor %}</p>
-<form method="post" enctype="multipart/form-data">{% csrf_token %}<input type="hidden" name="op" value="import_users_preview"><label>用户与权限模板 <input type="file" name="file" accept=".xlsx" required></label><button>预览用户与权限导入</button></form>
-{% if configure_studies %}<form method="post" enctype="multipart/form-data">{% csrf_token %}<input type="hidden" name="op" value="import_roster_preview"><label>目标研究 <select name="study_id">{% for study in configure_studies %}<option value="{{study.id}}">{{study.title}}</option>{% endfor %}</select></label><label>名单模板 <input type="file" name="file" accept=".xlsx" required></label><button>预览名单导入（仅追加）</button></form>{% endif %}
+<label><input type="checkbox" name="delegable:{{check.action}}" value="1" {% if check.delegable %}checked{% endif %}> {{ui.users_delegable}}</label>{% endfor %}</details>
+<button>{{ui.users_preview_matrix}}</button></form>
+{% else %}{{entry.summary}}{% if entry.readonly %} <small data-readonly-reason="{{entry.readonly_reason}}">{{ui.users_readonly}}</small>{% endif %}{% endif %}
+</td></tr>{% endfor %}{% empty %}<tr data-matrix-empty="1"><td colspan="3">{{ui.users_matrix_empty}}</td></tr>{% endfor %}</table>
+</div>
+{% if matrix.page_links %}<nav class="pager" data-matrix-pager aria-label="{{ui.users_matrix_pager}}">{% for link in matrix.page_links %}<a href="{{link.url}}"{% if link.current %} aria-current="page"{% endif %}>{{link.number}}</a>{% endfor %}</nav>{% endif %}
 </section>
-<section><h2>新增账号</h2>
+<section><h2>{{ui.users_import}}</h2>
+<p>{{ui.users_import_help}}</p>
+<form method="get" data-study-search="1">{% if matrix.search %}<input type="hidden" name="q" value="{{matrix.search}}">{% endif %}{% if matrix.page > 1 %}<input type="hidden" name="page" value="{{matrix.page}}">{% endif %}{% if conflicts.page > 1 %}<input type="hidden" name="cpage" value="{{conflicts.page}}">{% endif %}<label>{{ui.users_study_search}} <input name="study_q" value="{{study_choice.search}}" maxlength="150"></label><button>{{ui.common_search}}</button>{% if study_choice.search %} <a href="/users">{{ui.users_study_clear}}</a>{% endif %}</form>
+<p class="muted" data-configure-total="{{study_choice.total}}">{% if lang == 'en' %}{{ui.users_study_total}}: {{study_choice.total}}{% else %}{{ui.users_study_total}}：{{study_choice.total}}{% endif %}</p>
+{% if study_choice.more %}<p class="muted" data-configure-more="1">{{ui.users_study_limited}}</p>{% endif %}
+<p><a href="/users/templates/users">{{ui.users_template_users}}</a>{% for study in study_choice.studies %} · <a href="/users/templates/roster?study={{study.id}}">{% if lang == 'en' %}{{ui.users_template_roster}} — {{study.title}}{% else %}{{ui.users_template_roster}}：《{{study.title}}》{% endif %}</a>{% endfor %}</p>
+<form method="post" enctype="multipart/form-data">{% csrf_token %}<input type="hidden" name="op" value="import_users_preview"><label>{{ui.users_import_users_label}} <input type="file" name="file" accept=".xlsx" required></label><button>{{ui.users_preview_users_import}}</button></form>
+{% if study_choice.studies %}<form method="post" enctype="multipart/form-data">{% csrf_token %}<input type="hidden" name="op" value="import_roster_preview"><label>{{ui.users_import_target_study}} <select name="study_id">{% for study in study_choice.studies %}<option value="{{study.id}}">{{study.title}}</option>{% endfor %}</select></label><label>{{ui.users_import_roster_label}} <input type="file" name="file" accept=".xlsx" required></label><button>{{ui.users_preview_roster_import}}</button></form>{% endif %}
+</section>
+<section><h2>{{ui.users_new}}</h2>
 <form method="post">{% csrf_token %}<input type="hidden" name="op" value="invite_account"><input type="hidden" name="revision" value="{{revision}}">
-<label>用户名 <input name="username" maxlength="150" required></label>
-{% if is_owner %}<label>角色 <select name="role"><option value="user">user</option><option value="admin">admin</option></select></label>{% endif %}
-<label>你的密码（重新认证）<input type="password" name="password" required></label><button>生成邀请（本人设置密码）</button></form>
+<label>{{ui.common_username}} <input name="username" maxlength="150" required></label>
+{% if is_owner %}<label>{{ui.common_role}} <select name="role"><option value="user">user</option><option value="admin">admin</option></select></label>{% endif %}
+<label>{{ui.users_your_password_reauth}}<input type="password" name="password" required></label><button>{{ui.users_create_invite}}</button></form>
 <form method="post">{% csrf_token %}<input type="hidden" name="op" value="create_temp"><input type="hidden" name="revision" value="{{revision}}">
-<label>用户名 <input name="username" maxlength="150" required></label>
-<label>你的密码（重新认证）<input type="password" name="password" required></label><button>创建临时密码账号</button></form></section>
-<section><h2>待接受邀请</h2>{% for invite in invitations %}<form method="post">{% csrf_token %}<input type="hidden" name="op" value="revoke_invitation"><input type="hidden" name="invitation_id" value="{{invite.id}}"><input type="hidden" name="revision" value="{{revision}}">{{invite.username}}（角色 {{invite.role}}）<input type="password" name="password" placeholder="你的密码" required><button>撤销</button></form>{% empty %}<p>没有待接受邀请。</p>{% endfor %}</section>
-{% if is_owner %}<section><h2>授权矛盾预览（缺少 study.view）</h2>
-{% if conflicts %}<table><tr><th>账号</th><th>研究</th><th>无 view 的子权限</th></tr>{% for row in conflicts %}<tr><td>{{row.username}}</td><td>{{row.study}}</td><td>{{row.actions}}</td></tr>{% endfor %}</table>
-<p>收敛也必须先预览：提交时会重新核对同一批账号、研究与动作，旧写入者未更新治理版本也会被拒绝。</p>
+<label>{{ui.common_username}} <input name="username" maxlength="150" required></label>
+<label>{{ui.users_your_password_reauth}}<input type="password" name="password" required></label><button>{{ui.users_create_temp}}</button></form></section>
+<section><h2>{{ui.users_invitations}}</h2>{% for invite in invitations %}<form method="post">{% csrf_token %}<input type="hidden" name="op" value="revoke_invitation"><input type="hidden" name="invitation_id" value="{{invite.id}}"><input type="hidden" name="revision" value="{{revision}}">{{invite.username}}{% if lang == 'en' %} (role {{invite.role}}){% else %}（角色 {{invite.role}}）{% endif %}<input type="password" name="password" placeholder="{{ui.users_your_password}}" required><button>{{ui.users_revoke}}</button></form>{% empty %}<p>{{ui.users_invitations_empty}}</p>{% endfor %}</section>
+{% if is_owner %}<section data-conflicts><h2>{{ui.users_conflicts}}</h2>
+<p class="muted" data-conflict-total="{{conflicts.total}}">{% if lang == 'en' %}{{ui.users_conflicts_total}}: {{conflicts.total}} ({{ui.common_page}} {{conflicts.page}} / {{conflicts.pages}}){% else %}{{ui.users_conflicts_total}}：{{conflicts.total}}（{{conflicts.page}} / {{conflicts.pages}} {{ui.common_page}}）{% endif %}</p>
+{% if conflicts.rows %}<div class="table-wrap"><table><tr><th>{{ui.common_username}}</th><th>{{ui.common_study}}</th><th>{{ui.users_conflict_actions}}</th></tr>{% for row in conflicts.rows %}<tr data-conflict-row="{{row.user_id}}-{{row.study_id}}"><td>{{row.username}}</td><td>{{row.study}}</td><td>{% if lang == 'en' %}{{row.actions|join:", "}}{% else %}{{row.actions|join:"、"}}{% endif %}</td></tr>{% endfor %}</table></div>
+{% if conflicts.page_links %}<nav class="pager" data-conflict-pager aria-label="{{ui.users_conflicts_pager}}">{% for link in conflicts.page_links %}<a href="{{link.url}}"{% if link.current %} aria-current="page"{% endif %}>{{link.number}}</a>{% endfor %}</nav>{% endif %}
+{% if conflicts.pages > 1 %}<p class="muted" data-conflict-paged="1">{{ui.users_conflicts_paged_note}}</p>{% endif %}
+<p>{{ui.users_conflicts_note}}</p>
 <form method="post">{% csrf_token %}<input type="hidden" name="op" value="reconcile_preview">
-<label>处理方式 <select name="choice"><option value="grant_view">显式补 study.view</option><option value="remove_conflicting">移除冲突子权限</option></select></label><button>预览收敛</button></form>
-{% else %}<p>没有缺少 study.view 的授权子权限。</p>{% endif %}</section>{% endif %}
+<label>{{ui.users_choice}} <select name="choice"><option value="grant_view">{{ui.users_choice_grant_view}}</option><option value="remove_conflicting">{{ui.users_choice_remove_conflicting}}</option></select></label><button>{{ui.users_preview_reconcile}}</button></form>
+{% else %}<p>{{ui.users_conflicts_empty}}</p>{% endif %}</section>{% endif %}
 <script>
 document.querySelectorAll('[data-visibility-form]').forEach(form=>{const box=form.querySelector('[name=visibility]');if(!box)return;box.addEventListener('change',()=>{if(!box.checked){form.querySelectorAll('[data-child]').forEach(child=>{child.checked=false})}})});
 </script>

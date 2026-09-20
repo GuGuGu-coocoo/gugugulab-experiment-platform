@@ -347,6 +347,58 @@ def test_roster_query_identity_gate_and_pagination(setup):
         assert leak not in page and leak not in hidden
 
 
+def test_permission_matrix_search_frozen_column_and_bounded_pagination(setup):
+    """The /users matrix stays bounded and searchable: at most 20 accounts per
+    page in a stable id order, a username search that preserves leading-zero
+    names exactly, pager links that keep the search, a clamped last page, an
+    explicit empty state, and a row-header first column the stylesheet freezes."""
+    study = setup['study']
+    grant(setup['owner'], study, 'study.view', 'permission.delegate')
+    users = [get_user_model().objects.create_user(f'matrix_target_{index:03d}', password=OWNER_PASSWORD)
+             for index in range(1, 26)]
+    client = login_client('synthetic_owner')
+
+    # 26 accounts (Owner + 25) => exactly 20 on the first page, ordered by id.
+    page = client.get('/users').content.decode()
+    assert 'data-matrix-total="26"' in page
+    assert 'data-matrix-search="1"' in page
+    first = MATRIX_ACCOUNT_RE.findall(page)
+    assert len(first) == 20 and first[0] == str(setup['owner'].pk)
+    # The same request renders the same bounded page (CSRF values differ).
+    assert MATRIX_ACCOUNT_RE.findall(client.get('/users').content.decode()) == first
+    second_page = client.get('/users?page=2').content.decode()
+    second = MATRIX_ACCOUNT_RE.findall(second_page)
+    assert second == [str(user.pk) for user in users[19:]]
+    assert not set(first) & set(second) and 'aria-current="page"' in second_page
+    # Out-of-range pages clamp to the last real page; malformed pages show page 1
+    # instead of failing open or rendering every account.
+    assert MATRIX_ACCOUNT_RE.findall(client.get('/users?page=999').content.decode()) == second
+    assert MATRIX_ACCOUNT_RE.findall(client.get('/users?page=abc').content.decode()) == first
+
+    # Username search is case-insensitive, keeps the exact typed value and never
+    # includes accounts that do not match.
+    found = client.get('/users?q=MATRIX_TARGET_001').content.decode()
+    assert MATRIX_ACCOUNT_RE.findall(found) == [str(users[0].pk)]
+    assert f'data-matrix-account="{users[1].pk}"' not in found
+    assert 'name="q" value="MATRIX_TARGET_001"' in found
+
+    # Search plus pagination: the pager keeps q, and the second page has the rest.
+    matched = client.get('/users?q=matrix_target_').content.decode()
+    assert 'data-matrix-total="25"' in matched
+    assert len(MATRIX_ACCOUNT_RE.findall(matched)) == 20
+    assert 'q=matrix_target_&amp;page=2' in matched
+    rest = client.get('/users?q=matrix_target_&page=2').content.decode()
+    assert MATRIX_ACCOUNT_RE.findall(rest) == [str(user.pk) for user in users[20:]]
+
+    # A no-match search renders the explicit empty state, not the whole matrix.
+    empty = client.get('/users?q=no_such_account').content.decode()
+    assert 'data-matrix-empty="1"' in empty and MATRIX_ACCOUNT_RE.findall(empty) == []
+
+    # The first column is a real row header and the stylesheet freezes it; the
+    # explicit actions stay inside an expandable group.
+    assert '<th scope="row" data-matrix-account=' in page
+    assert 'position:sticky;left:0' in page
+    assert 'data-matrix-expand="1"' in page and '<details' in page
 
 
 def test_exports_module_lists_authorized_snapshots(setup):
@@ -461,3 +513,312 @@ def test_session_page_loading_bounded_and_exact_on_large_synthetic_data(setup):
     assert 'core.Event' not in rows_searched and 'core.Event' not in tuples_searched, (rows_searched, tuples_searched)
     assert rows_searched.get('core.Session', 0) == 20, rows_searched
     assert searched.content.decode().count('data-session-row=') == 20
+
+
+def test_matrix_page_loading_bounded_to_page_accounts_and_readonly_scope(setup):
+    """With hundreds of accounts and a dozen studies, the matrix materializes one
+    page of accounts, only those accounts' profiles and grants, and only the
+    studies that can produce an entry.
+
+    Corrected expectation (explicit user requirement recorded 2026-09-20):
+    Owner and Admin may inspect every account's permission metadata read-only,
+    so a non-Owner Admin no longer hides studies outside their delegable scope.
+    That scope bounds editing only: outside grants render read-only, and the
+    Owner/own rows stay read-only. The earlier expectation (Admin sees only the
+    delegable study) came from worker inference; it is replaced here with the
+    confirmed contract rather than silently relaxed.
+    """
+    from core import permissions
+
+    owner, study = setup['owner'], setup['study']
+    grant(owner, study, 'study.view', 'permission.delegate')
+    other_studies = [Study.objects.create(title=f'Matrix scope {index:02d}', mode='id') for index in range(11)]
+    admin = get_user_model().objects.create_user('matrix_bounded_admin', password=OWNER_PASSWORD)
+    AccountProfile.objects.create(user=admin, role='admin')
+    Grant.objects.create(user=admin, study=study, action='study.view', delegable=True)
+    Grant.objects.create(user=admin, study=study, action='permission.delegate', delegable=True)
+    User = get_user_model()
+    users = User.objects.bulk_create([User(username=f'matrix_bulk_{index:04d}') for index in range(240)])
+    AccountProfile.objects.bulk_create([AccountProfile(user=user, role='user') for user in users[::3]])
+    Grant.objects.bulk_create(
+        [Grant(user=user, study=study, action='study.view', delegable=False) for user in users] +
+        [Grant(user=user, study=other_studies[index % len(other_studies)], action='study.view', delegable=False)
+         for index, user in enumerate(users) if index % 2])
+    page_ids = list(User.objects.order_by('id').values_list('id', flat=True)[:20])
+
+    admin = User.objects.get(username='matrix_bounded_admin')
+    result, rows, tuples = materialized_rows(lambda: permissions.matrix_page(admin, '', 1, 'en'))
+    assert result['total'] == User.objects.count()
+    assert [row['id'] for row in result['rows']] == page_ids
+    assert rows.get('auth.User', 0) == 20, rows
+    assert rows.get('core.AccountProfile', 0) <= 20, rows
+    # Read inspection covers the studies the page accounts hold grants on plus
+    # the admin's own delegable study — not the whole catalog — and the grant
+    # query stays bounded to the page accounts plus the actor's scope.
+    page_study_ids = {study_id for user_id, study_id in
+                      Grant.objects.filter(user_id__in=page_ids).values_list('user_id', 'study_id')}
+    assert rows.get('core.Study', 0) == len(page_study_ids | {study.pk}), rows
+    assert tuples.get('core.Grant', 0) == (Grant.objects.filter(user_id__in=page_ids).count()
+                                           + Grant.objects.filter(user=admin, delegable=True).count()), tuples
+    assert rows.get('core.Grant', 0) == 0, rows
+    # Outside-authority grants are visible but read-only; only the delegable
+    # study is editable, and the Owner/own rows stay read-only too.
+    seen_studies = set()
+    for row in result['rows']:
+        for entry in row['studies']:
+            seen_studies.add(entry['study'].pk)
+            if row['id'] == owner.pk:
+                assert entry['readonly'] and entry['readonly_reason'] == 'owner', entry
+            elif row['id'] == admin.pk:
+                assert entry['readonly'] and entry['readonly_reason'] == 'self', entry
+            elif entry['study'].pk == study.pk:
+                assert entry['editable'] and not entry['readonly'], entry
+            else:
+                assert entry['readonly'] and entry['readonly_reason'] == 'outside', entry
+    assert seen_studies == page_study_ids | {study.pk}
+
+    # The Owner still governs every study, with accounts/profiles/grants bounded
+    # to the rendered page instead of the whole instance.
+    result, rows, tuples = materialized_rows(lambda: permissions.matrix_page(owner, '', 1, 'en'))
+    assert [row['id'] for row in result['rows']] == page_ids
+    assert rows.get('auth.User', 0) == 20, rows
+    assert rows.get('core.AccountProfile', 0) <= 20, rows
+    assert rows.get('core.Study', 0) == Study.objects.count(), rows
+    assert tuples.get('core.Grant', 0) == Grant.objects.filter(user_id__in=page_ids).count(), tuples
+    assert rows.get('core.Grant', 0) == 0, rows
+
+
+def test_actual_users_page_bounded_and_admin_readonly_without_access(setup):
+    """The real /users request stays bounded on large data and the confirmed
+    read-only inspection grants nothing.
+
+    Explicit user requirement: Owner and Admin may inspect every account's
+    permission metadata (the Owner row included) and the Admin's Owner row stays
+    read-only; an Admin with zero delegable scope sees another account's existing
+    permissions read-only but cannot reach the underlying study/raw/session/
+    identity APIs and cannot mutate anything through forged matrix or account
+    requests. No answer may be derived from the Admin role alone.
+    """
+    from core import accounts, permissions
+
+    owner, study = setup['owner'], setup['study']
+    grant(owner, study, 'study.view', 'permission.delegate', 'data.export_raw')
+    other_studies = [Study.objects.create(title=f'Readonly scope {index:02d}', mode='id') for index in range(11)]
+    User = get_user_model()
+    target = User.objects.create_user('readonly_target', password=OWNER_PASSWORD)
+    AccountProfile.objects.create(user=target, role='user')
+    Grant.objects.create(user=target, study=study, action='study.view', delegable=False)
+    Grant.objects.create(user=target, study=other_studies[1], action='study.view', delegable=False)
+    Grant.objects.create(user=target, study=other_studies[1], action='identity_mapping.read', delegable=False)
+    admin = User.objects.create_user('readonly_admin', password=OWNER_PASSWORD)
+    AccountProfile.objects.create(user=admin, role='admin')
+    assert AccountProfile.objects.get(user=admin).role == 'admin'
+    assert not Grant.objects.filter(user=admin).exists()
+    users = User.objects.bulk_create([User(username=f'readonly_bulk_{index:04d}') for index in range(240)])
+    AccountProfile.objects.bulk_create([AccountProfile(user=user, role='user') for user in users[::3]])
+    Grant.objects.bulk_create([Grant(user=user, study=study, action='study.view') for user in users])
+
+    client = login_client('readonly_admin')
+    before = sorted(Grant.objects.values_list('user_id', 'study_id', 'action'))
+    page, rows, tuples = materialized_rows(lambda: client.get('/users'))
+    body = page.content.decode()
+    assert page.status_code == 200
+    # One bounded page: the actor plus at most one matrix page of accounts and
+    # profiles; grants arrive as values rows for the page accounts only, never
+    # as Grant instances and never as every grant in the instance.
+    page_ids = list(User.objects.order_by('id').values_list('id', flat=True)[:permissions.MATRIX_PAGE_SIZE])
+    assert rows.get('auth.User', 0) <= 1 + permissions.MATRIX_PAGE_SIZE, rows
+    assert rows.get('core.AccountProfile', 0) <= permissions.MATRIX_PAGE_SIZE, rows
+    assert rows.get('core.Grant', 0) == 0, rows
+    assert rows.get('core.Event', 0) == 0, rows
+    assert tuples.get('core.Grant', 0) == Grant.objects.filter(user_id__in=page_ids).count(), tuples
+    # The study scope follows the page (the two studies the page accounts hold
+    # grants on), not the eleven-study catalog.
+    assert rows.get('core.Study', 0) <= 2, rows
+    # The confirmed bilingual scope explanation is rendered for the Admin.
+    assert 'data-matrix-scope="1"' in body and '实例内所有账号的授权都可以查看' in body
+    client.cookies['gep_lang'] = 'en'
+    english = client.get('/users').content.decode()
+    assert 'Every account grant in the instance is visible' in english
+
+    # The target's two studies are visible read-only: no form, no input, and the
+    # existing actions are shown as a summary.
+    target_rows = re.findall(rf'<tr data-matrix-row="{target.pk}-[0-9a-f-]{{36}}">.*?</tr>', body, re.S)
+    assert len(target_rows) == 2, target_rows
+    assert all('data-readonly-reason="outside"' in row for row in target_rows)
+    assert all('<form' not in row and '<input' not in row for row in target_rows)
+    readable = ' '.join(target_rows)
+    assert 'identity_mapping.read' in readable and 'study.view' in readable
+    # The Owner row stays visible and read-only for the Admin.
+    owner_row = re.search(rf'<tr data-matrix-row="{owner.pk}-{study.pk}">.*?</tr>', body, re.S).group(0)
+    assert 'data-readonly-reason="owner"' in owner_row
+    assert '<form' not in owner_row and '<input' not in owner_row
+
+    # Read-only inspection grants no study-data, session, identity or export
+    # access: every module and API re-authorizes on its own.
+    for path in (f'/studies/{study.id}', f'/studies/{study.id}/sessions',
+                 f'/studies/{study.id}/participation', f'/studies/{study.id}/exports',
+                 f'/studies/{other_studies[1].id}/sessions'):
+        assert client.get(path).status_code == 403, path
+    assert client.post('/v1/admin/exports', {'study_id': str(study.id)},
+                       content_type='application/json').status_code == 403
+
+    # Forged mutations are refused without a write: an out-of-scope preview, a
+    # foreign preview identity, and a guarded account operation.
+    forged_preview = client.post('/users', {'op': 'matrix_preview', 'user_id': str(target.pk),
+                                            'study_id': str(other_studies[1].pk), 'visibility': '1',
+                                            'action:build.upload': '1'})
+    assert forged_preview.status_code == 403
+    assert client.post('/users', {'op': 'matrix_commit', 'preview_id': str(uuid.uuid4()),
+                                  'password': OWNER_PASSWORD}).status_code == 404
+    owner_client = login_client('synthetic_owner')
+    owner_preview = owner_client.post('/users', {'op': 'matrix_preview', 'user_id': str(target.pk),
+                                                 'study_id': str(other_studies[1].pk), 'visibility': '1',
+                                                 'action:build.upload': '1'}).content.decode()
+    foreign = PREVIEW_ID_RE.search(owner_preview).group(1)
+    assert client.post('/users', {'op': 'matrix_commit', 'preview_id': foreign,
+                                  'password': OWNER_PASSWORD}).status_code == 404
+    assert client.post('/users', {'op': 'disable', 'username': target.username, 'password': OWNER_PASSWORD,
+                                  'revision': str(accounts.instance_revision())}).status_code == 403
+    assert sorted(Grant.objects.values_list('user_id', 'study_id', 'action')) == before
+
+
+def test_users_page_conflicts_and_study_choice_bounded_and_searchable(setup):
+    """The actual /users request bounds conflicts and the configurable-study
+    choice: the conflict count comes from the database, only one page of groups
+    and their actions is loaded even though the account search keeps the whole
+    conflict set out of the matrix page, and a large study catalog is capped with
+    an explicit notice while every study stays reachable by search. The
+    reconcile preview still binds the entire conflict set, not the visible page.
+    """
+    from core import permissions
+
+    owner, study = setup['owner'], setup['study']
+    grant(owner, study, 'study.view', 'permission.delegate')
+    conflicts_total = 45
+    for index in range(conflicts_total):
+        user = get_user_model().objects.create_user(f'conflict_user_{index:03d}', password=OWNER_PASSWORD)
+        Grant.objects.create(user=user, study=study, action='build.upload', delegable=True)
+    studies = [Study.objects.create(title=f'Choice study {index:03d}', mode='id') for index in range(60)]
+    client = login_client('synthetic_owner')
+
+    # The account search narrows the matrix page to the Owner, so none of the
+    # conflict users' grants can enter through the account-table query.
+    page, rows, tuples = materialized_rows(lambda: client.get('/users?q=synthetic_owner'))
+    body = page.content.decode()
+    assert page.status_code == 200
+    assert f'data-conflict-total="{conflicts_total}"' in body
+    assert len(re.findall(r'data-conflict-row="', body)) == permissions.CONFLICT_PAGE_SIZE
+    assert 'data-conflict-paged="1"' in body
+    assert rows.get('core.Grant', 0) == 0, rows
+    # One page of groups plus their actions, not the whole conflict table.
+    assert tuples.get('core.Grant', 0) <= 2 + 2 * permissions.CONFLICT_PAGE_SIZE, tuples
+    assert tuples.get('core.Grant', 0) < Grant.objects.count(), tuples
+    second = client.get('/users?q=synthetic_owner&cpage=2').content.decode()
+    assert len(re.findall(r'data-conflict-row="', second)) == permissions.CONFLICT_PAGE_SIZE
+    # Out-of-range pages clamp to the last real page instead of growing the table.
+    third = client.get('/users?q=synthetic_owner&cpage=9').content.decode()
+    assert len(re.findall(r'data-conflict-row="', third)) == conflicts_total - 2 * permissions.CONFLICT_PAGE_SIZE
+
+    # The Owner's configurable-study choice is capped with a count and an
+    # explicit notice; studies beyond the cap stay reachable through the search.
+    assert f'data-configure-total="{len(studies) + 1}"' in body
+    assert body.count('/users/templates/roster?study=') == permissions.STUDY_CHOICE_LIMIT
+    assert 'data-configure-more="1"' in body
+    searched = client.get('/users?q=synthetic_owner&study_q=Choice+study+059').content.decode()
+    assert 'data-configure-total="1"' in searched
+    assert 'Choice study 059' in searched and 'data-configure-more' not in searched
+
+    # Reconciliation is still previewed over the entire conflict set: the next
+    # page is presentation only.
+    preview = client.post('/users', {'op': 'reconcile_preview', 'choice': 'grant_view'}).content.decode()
+    section = re.search(r'<section data-preview="reconcile".*?</section>', preview, re.S).group(0)
+    for index in range(conflicts_total):
+        assert f'conflict_user_{index:03d}' in section, index
+
+
+def test_english_users_page_controls_lifecycle_previews_and_errors(setup):
+    """The English users page is a complete generic UI, exercised by real
+    requests: controls, matrix action labels, previews, one-time notices and
+    errors — not merely a language switch on the shell."""
+    study, owner = setup['study'], setup['owner']
+    grant(owner, study, 'study.view', 'study.configure', 'permission.delegate', 'member.manage')
+    target = get_user_model().objects.create_user('english_matrix_target', password=OWNER_PASSWORD)
+    client = login_client('synthetic_owner')
+    client.cookies['gep_lang'] = 'en'
+
+    page = client.get('/users').content.decode()
+    for label in ('Accounts &amp; instance governance', 'Instance permission matrix',
+                  'Search accounts by username', 'Study visibility: view study overview',
+                  'Explicit actions (expand)', 'Delegable', 'Preview change',
+                  'Reset temporary password', 'Save role', 'Disable',
+                  'Create invitation (self-set password)', 'Create temporary-password account',
+                  'Pending invitations', 'No pending invitations.', 'Excel batch import'):
+        assert label in page, label
+    assert 'Raw data export: download raw study records; grant with care' in page
+    assert 'Permission delegation: pass on delegable permissions; grant with care' in page
+    # Both languages state the confirmed read-only inspection scope.
+    assert 'an Admin can inspect every account grant read-only' in page
+    for chinese in ('实例权限矩阵', '研究可见：查看研究概况', '显式动作（点击展开）', '预览更改',
+                    '重置临时密码', '创建临时密码账号', '待接受邀请', '没有待接受邀请。'):
+        assert chinese not in page, chinese
+
+    # One-time account notices in English.
+    revision = str(Instance.objects.get(pk=1).governance_revision)
+    body = client.post('/users', {'op': 'create_temp', 'username': 'english_temp',
+                                  'password': OWNER_PASSWORD, 'revision': revision}).content.decode()
+    assert 'Temporary-password account created: english_temp.' in body
+    assert 'One-time temporary password' in body and '一次性临时密码' not in body
+    assert SECRET_RE.search(body)
+    revision = str(Instance.objects.get(pk=1).governance_revision)
+    body = client.post('/users', {'op': 'invite_account', 'username': 'english_invite',
+                                  'password': OWNER_PASSWORD, 'revision': revision}).content.decode()
+    assert 'Account invitation created: english_invite (role user).' in body
+    assert 'Account invitation (single use within 24 hours' in body
+
+    # A real preview, a rejected confirmation and a successful commit in English.
+    body = client.post('/users', {'op': 'matrix_preview', 'user_id': str(target.pk),
+                                  'study_id': str(study.id), 'visibility': '1',
+                                  'action:data.export_raw': '1'}).content.decode()
+    assert 'Change preview (not executed)' in body
+    assert 'Account english_matrix_target · study Synthetic A: add data.export_raw, study.view' in body
+    assert 'remove none' in body and 'Actions after the change: data.export_raw, study.view' in body
+    preview = PREVIEW_ID_RE.search(body).group(1)
+    body = client.post('/users', {'op': 'matrix_commit', 'preview_id': preview,
+                                  'password': 'wrong-password-2026'}).content.decode()
+    assert 'Re-authentication failed: the actor password is wrong; nothing was changed.' in body
+    assert 'data-preview="matrix"' in body
+    assert Grant.objects.filter(user=target, study=study).count() == 0
+    body = client.post('/users', {'op': 'matrix_commit', 'preview_id': preview,
+                                  'password': OWNER_PASSWORD}).content.decode()
+    assert 'Permission matrix updated: english_matrix_target · Synthetic A → data.export_raw, study.view.' in body
+    assert sorted(Grant.objects.filter(user=target, study=study).values_list('action', flat=True)) == [
+        'data.export_raw', 'study.view']
+
+    # The legacy study roster notice and its error are English too.
+    response = client.post(f'/studies/{study.id}', {'op': 'roster', 'roster': 'E-001\nE-002'}, follow=True)
+    assert 'Roster imported: 2 new IDs.' in response.content.decode()
+    response = client.post(f'/studies/{study.id}', {'op': 'roster', 'roster': 'E-001'},
+                           HTTP_ACCEPT='text/html')
+    assert 'The roster contains duplicate, existing or invalid IDs; no row was imported.' in response.content.decode()
+
+    # A real XLSX preview shows the row error in English, with the English UI.
+    book = Workbook()
+    sheet = book.active
+    sheet.append(['username', 'operation', 'revision', 'role', 'study_id', 'actions'])
+    sheet.append([123, 'create', None, 'user', None, None])
+    stream = io.BytesIO()
+    book.save(stream)
+    upload = SimpleUploadedFile('users.xlsx', stream.getvalue(),
+                                content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    body = client.post('/users', {'op': 'import_users_preview', 'file': upload}).content.decode()
+    assert 'Row errors (the whole batch will not run)' in body
+    assert 'Username and operation must be text, not numbers or dates.' in body
+    assert '用户名与操作必须是文本' not in body
+
+    # The same controls stay Chinese when the language is switched back.
+    client.cookies['gep_lang'] = 'zh'
+    page = client.get('/users').content.decode()
+    assert '实例权限矩阵' in page and '研究可见：查看研究概况' in page and '预览更改' in page
+    assert 'Admin 可只读查看实例内全部账号授权' in page
+    assert 'Instance permission matrix' not in page

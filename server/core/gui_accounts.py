@@ -11,10 +11,10 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.shortcuts import redirect, render
 from django.utils import timezone
 
-from . import accounts, permissions
-from .access import allowed, conflicts, is_account_administrator, is_instance_owner
+from . import accounts, permissions, ui
+from .access import is_account_administrator, is_instance_owner
 from .gui import ACTION_LABELS, admin_host
-from .models import AccountInvitation, AccountProfile, Instance, Study
+from .models import AccountInvitation, AccountProfile, Instance
 from .protocol import Rejected, require
 from .throttle import check
 from .views import endpoint
@@ -80,8 +80,8 @@ MESSAGES = {
 }
 
 
-def message_for(code):
-    return MESSAGES.get(code, '操作未完成，请检查输入或权限后重试。')
+def message_for(code, lang='zh'):
+    return ui.error_message(code, MESSAGES.get(code, ui.tr(lang, 'error_invalid_request')), lang)
 
 
 COMMIT_OPS = {'matrix': 'matrix_commit', 'reconcile': 'reconcile_commit',
@@ -97,6 +97,7 @@ def _target(username):
 
 def _apply(request):
     op = request.POST.get('op')
+    lang = ui.lang_of(request)
     password = request.POST.get('password', '')
     revision = request.POST.get('revision')
     username = request.POST.get('username', '')
@@ -105,59 +106,73 @@ def _apply(request):
         return gui_imports.apply_import(request, op)
     if op == 'invite_account':
         result = accounts.invite_account(request.user, password, revision, username, request.POST.get('role', 'user'))
-        return {'notice': f"已创建账号邀请：{result['username']}（角色 {result['role']}）。", 'invitation_token': result['token'], 'invitation_username': result['username']}
+        return {'notice': ui.notice(lang, f"已创建账号邀请：{result['username']}（角色 {result['role']}）。",
+                                    f"Account invitation created: {result['username']} (role {result['role']})."),
+                'invitation_token': result['token'], 'invitation_username': result['username']}
     if op == 'create_temp':
         result = accounts.create_temporary_account(request.user, password, revision, username)
-        return {'notice': f"已创建临时密码账号：{result['username']}。", 'secret': result['temporary_password'], 'secret_username': result['username']}
+        return {'notice': ui.notice(lang, f"已创建临时密码账号：{result['username']}。",
+                                    f"Temporary-password account created: {result['username']}."),
+                'secret': result['temporary_password'], 'secret_username': result['username']}
     if op == 'reset_password':
         result = accounts.reset_temporary_password(request.user, password, revision, _target(username).pk)
-        return {'notice': f"已为 {result['username']} 生成新的临时密码。", 'secret': result['temporary_password'], 'secret_username': result['username']}
+        return {'notice': ui.notice(lang, f"已为 {result['username']} 生成新的临时密码。",
+                                    f"A new temporary password was generated for {result['username']}."),
+                'secret': result['temporary_password'], 'secret_username': result['username']}
     if op in ('disable', 'enable'):
         result = accounts.set_account_active(request.user, password, revision, _target(username).pk, op == 'enable')
-        return {'notice': f"已{'启用' if result['is_active'] else '停用'}账号：{result['username']}。"}
+        if result['is_active']:
+            notice = ui.notice(lang, f"已启用账号：{result['username']}。", f"Account enabled: {result['username']}.")
+        else:
+            notice = ui.notice(lang, f"已停用账号：{result['username']}。", f"Account disabled: {result['username']}.")
+        return {'notice': notice}
     if op == 'set_role':
         result = accounts.set_account_role(request.user, password, revision, _target(username).pk, request.POST.get('role', ''))
-        return {'notice': f"已将 {result['username']} 的角色设为 {result['role']}。"}
+        return {'notice': ui.notice(lang, f"已将 {result['username']} 的角色设为 {result['role']}。",
+                                    f"Role of {result['username']} set to {result['role']}.")}
     if op == 'revoke_invitation':
         result = accounts.revoke_invitation(request.user, password, revision, request.POST.get('invitation_id'))
-        return {'notice': f"已撤销账号邀请：{result['username']}。"}
+        return {'notice': ui.notice(lang, f"已撤销账号邀请：{result['username']}。",
+                                    f"Account invitation revoked: {result['username']}.")}
     if op in ('reconcile', 'reconcile_preview'):
         preview = permissions.preview_reconcile(request.user, request.POST.get('choice', ''))
-        return {'preview': permissions.preview_payload(preview), 'commit_op': 'reconcile_commit'}
+        return {'preview': permissions.preview_payload(preview, lang), 'commit_op': 'reconcile_commit'}
     if op == 'reconcile_commit':
         resolved = permissions.commit_reconcile(request.user, password, request.POST.get('preview_id'))
-        return {'notice': f"已完成 {len(resolved)} 组授权矛盾收敛。"}
+        return {'notice': ui.notice(lang, f"已完成 {len(resolved)} 组授权矛盾收敛。",
+                                    f"Resolved {len(resolved)} authorization conflict group(s).")}
     if op == 'matrix_preview':
         preview = permissions.preview_matrix(request.user, request.POST)
-        return {'preview': permissions.preview_payload(preview), 'commit_op': 'matrix_commit'}
+        return {'preview': permissions.preview_payload(preview, lang), 'commit_op': 'matrix_commit'}
     if op == 'matrix_commit':
         result = permissions.commit_matrix(request.user, password, request.POST.get('preview_id'))
-        shown = '、'.join(result['actions']) or '无显式动作'
-        return {'notice': f"权限矩阵已更新：{result['username']} · {result['study']} → {shown}。"}
+        if lang == 'en':
+            shown = ', '.join(result['actions']) or 'no explicit actions'
+            notice = f"Permission matrix updated: {result['username']} · {result['study']} → {shown}."
+        else:
+            shown = '、'.join(result['actions']) or '无显式动作'
+            notice = f"权限矩阵已更新：{result['username']} · {result['study']} → {shown}。"
+        return {'notice': notice}
     raise Rejected('unknown_operation', 400)
 
 
 def _users_context(request):
-    User = get_user_model()
-    profiles = {profile.user_id: profile for profile in AccountProfile.objects.all()}
-    rows = []
-    for user in User.objects.order_by('id'):
-        profile = profiles.get(user.pk)
-        rows.append({'id': user.pk, 'username': user.username, 'is_owner': is_instance_owner(user),
-                     'role': profile.role if profile is not None else 'user', 'is_active': user.is_active,
-                     'must_change_password': profile.must_change_password if profile is not None else False})
-    conflict_rows = []
-    for user_id, study_id, actions in conflicts():
-        conflict_rows.append({'username': User.objects.filter(pk=user_id).values_list('username', flat=True).first() or str(user_id),
-                              'study': Study.objects.filter(pk=study_id).values_list('title', flat=True).first() or str(study_id),
-                              'actions': '、'.join(actions)})
-    configure_studies = [study for study in Study.objects.order_by('title')
-                         if is_instance_owner(request.user) or allowed(request.user, study, 'study.configure')]
-    return {'rows': rows, 'owner_username': Instance.objects.get(pk=1).owner.username, 'is_owner': is_instance_owner(request.user),
+    lang = ui.lang_of(request)
+    matrix = permissions.matrix_page(request.user, request.GET.get('q', ''),
+                                     request.GET.get('page', '1'), lang)
+    owned = is_instance_owner(request.user)
+    if owned:
+        conflicts = permissions.conflict_page(request.GET.get('cpage', '1'),
+                                              keep={'q': matrix['search'], 'page': matrix['page']})
+    else:
+        # Ordinary Admins cannot reconcile conflicts, so the page never loads them.
+        conflicts = {'rows': [], 'total': 0, 'page': 1, 'pages': 1, 'page_links': []}
+    return {'rows': matrix['rows'], 'owner_username': Instance.objects.values_list('owner__username', flat=True).get(pk=1),
+            'is_owner': owned,
             'invitations': AccountInvitation.objects.filter(consumed=False, revoked=False, expires_at__gt=timezone.now()).order_by('username'),
-            'conflicts': conflict_rows, 'revision': accounts.instance_revision(),
-            'matrix': permissions.matrix_rows(request.user), 'action_labels': ACTION_LABELS,
-            'configure_studies': configure_studies}
+            'conflicts': conflicts, 'revision': accounts.instance_revision(),
+            'matrix': matrix, 'action_labels': ACTION_LABELS,
+            'study_choice': permissions.configure_studies_page(request.user, request.GET.get('study_q', ''))}
 
 
 @endpoint
@@ -174,16 +189,17 @@ def users_page(request):
             extra.update(_apply(request))
         except (Rejected, ObjectDoesNotExist, ValueError) as error:
             code = error.code if isinstance(error, Rejected) else 'invalid_request'
-            extra['error'] = message_for(code)
+            extra['error'] = message_for(code, ui.lang_of(request))
             status = error.status if isinstance(error, Rejected) else 400
             # A rejected confirmation (for example a wrong own password) keeps the
             # still-valid preview visible so the actor can retry it.
             pending = permissions.pending_preview(request.user, request.POST.get('preview_id'))
             if pending is not None:
-                extra['preview'] = permissions.preview_payload(pending)
+                extra['preview'] = permissions.preview_payload(pending, ui.lang_of(request))
                 extra['commit_op'] = COMMIT_OPS.get(pending.kind, '')
     context = _users_context(request)
     context.update(extra)
+    context['nav_current'] = 'users'
     response = render(request, 'core/users.html', context, status=status)
     response['Cache-Control'] = 'no-store'
     return response
@@ -194,28 +210,30 @@ def password_page(request):
     admin_host(request)
     if not request.user.is_authenticated:
         return redirect('/login')
-    error = ''
     must_change = AccountProfile.objects.filter(user_id=request.user.pk, must_change_password=True).exists()
+    review = {'error': '', 'must_change': must_change, 'nav_current': 'password'}
     if request.method == 'POST':
         try:
             profile = accounts.change_own_password(request.user, request.POST.get('current', ''), request.POST.get('new', ''), request.POST.get('confirm', ''))
-        except Rejected as error:
-            return render(request, 'core/password.html', {'error': message_for(error.code), 'must_change': must_change}, status=error.status)
+        except Rejected as exc:
+            review['error'] = message_for(exc.code, ui.lang_of(request))
+            return render(request, 'core/password.html', review, status=exc.status)
         request.user.refresh_from_db()
         update_session_auth_hash(request, request.user)
         request.session['gep_auth_version'] = profile.auth_version
         return redirect('/')
-    return render(request, 'core/password.html', {'error': error, 'must_change': must_change})
+    return render(request, 'core/password.html', review)
 
 
 @endpoint
 def activate_account_page(request):
     admin_host(request)
+    lang = ui.lang_of(request)
     if request.method == 'POST':
         check('account_activation:' + request.META.get('REMOTE_ADDR', ''), 5)
         try:
             user = accounts.activate_account(request.POST.get('token', ''), request.POST.get('password', ''), request.POST.get('confirm', ''))
-        except Rejected as error:
-            return render(request, 'core/activate_account.html', {'error': message_for(error.code), 'token': '', 'done': False}, status=error.status)
+        except Rejected as exc:
+            return render(request, 'core/activate_account.html', {'error': message_for(exc.code, lang), 'token': '', 'done': False}, status=exc.status)
         return render(request, 'core/activate_account.html', {'error': '', 'token': '', 'done': True, 'username': user.username})
     return render(request, 'core/activate_account.html', {'error': '', 'token': request.GET.get('token', ''), 'done': False})
