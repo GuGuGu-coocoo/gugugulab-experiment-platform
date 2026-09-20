@@ -34,11 +34,11 @@ pnpm install --frozen-lockfile
 | Phase 01 | 数据链路、事务、去重、授权导出、最小 Compose 持久化 | 有限工程验收完成 |
 | Phase 02 | Web/macOS 插件、三种准入、断网补传、检查点恢复、共享设备与清理边界 | 有限工程验收完成；实体 Windows LAN 已补验 |
 | Phase 03A | 下载、设置回显、名单反馈、错误提示与权限控件 | 首批基础修复已实现并通过定向工程验证 |
-| Phase 03B | Owner/Admin/普通用户、账号生命周期、实例权限矩阵、Excel 预览导入 | 下一开发批次，尚未实现完整模型 |
-| Phase 03C | 研究公开设置、唯一当前招募发行、旧会话兼容 | 待开发 |
-| Phase 03D | GEC 统一参与壳、短恢复码、macOS arm64／Windows x64 完整冻结原生包 | macOS 完整包已实现并有合成工程闭环；Windows x64 平台契约与交叉构建完整包工程验证通过，Windows 实机执行未运行 |
-| Phase 03E | 模块化后台、主题与中英文、被试研究门户 | 待开发 |
-| Phase 03F | 集成回归、Windows 原生实机验收、原设计者自主体验、非开发者独立 T17 | 待前述范围完成；不能用自动化替代人类验收 |
+| Phase 03B | Owner/Admin/普通用户、账号生命周期、实例权限矩阵、Excel 预览导入 | 已实现并通过定向工程验证（T26 工程证据；人工验收未运行） |
+| Phase 03C | 研究公开设置、唯一当前招募发行、旧会话兼容 | 已实现并通过定向工程验证（含只读迁移演练） |
+| Phase 03D | GEC 统一参与壳、短恢复码、macOS arm64／Windows x64 完整冻结原生包 | macOS 完整包与 Web 壳已实现并有合成工程闭环；Windows x64 平台契约与交叉构建完整包工程验证通过，Windows 实机执行未运行 |
+| Phase 03E | 模块化后台、主题与中英文、被试研究门户 | 已实现并通过定向工程验证 |
+| Phase 03F | 集成回归、Windows 原生实机验收、原设计者自主体验、非开发者独立 T17 | 工程编排与隔离回归已实现（`tools/phase03_acceptance.py --verify`）；Windows 实机、原设计者自主体验与独立 T17 均为 NOT_RUN |
 | Phase 04 | 具体研究、正式部署、独立备份恢复、隐私治理与科学时序 | 未启动 |
 
 **最近完成的基础修复：**
@@ -52,6 +52,8 @@ pnpm install --frozen-lockfile
 最近批次 **44 项定向服务端测试、1 项真实 Chrome 浏览器测试通过**，包括实际 metadata 下载、招募状态持久化及就地错误显示。此前原版本服务端 **56 项**、发行准备 **2 项**及贯通 **31 项**通过；两批证据覆盖不同范围，不能相加当作一次完整回归。环境、复现命令及限制见[验收记录](public_docs/verification.md)。
 
 验收顺序：完成反馈开发与工程回归 → 原设计者无逐步指导地自行跑通并确认体验可交付 → 未参与开发的人执行[独立 T17](public_docs/researcher_acceptance.md)。原设计者受指导预演、自主体验及自动 GUI 测试都不能替代独立 T17。
+
+03F 工程编排：`.venv/bin/python tools/phase03_acceptance.py --verify` 依次执行完整性/迁移覆盖检查、受影响服务端与真实 Chrome 契约套件、真实 Web 与 macOS 壳回归、完整包检查、**新隔离实例**上的受影响浏览器规格（web_e2e、web_recovery、storage、admission_modes、native_release、web_release）与 Windows 准备门槛，并输出机器可读证据：T25–T30 及受影响 T03/04/07/08/11/13/14/16/18–24 的每个条款都绑定命名的可执行证据，缺失/跳过记为未运行、失败记为失败，不整体继承无关运行的通过；整体 `PASS` 只在整个矩阵与每个必需步骤都明确通过时成立，步骤内部异常一律记为失败并保留报告。每次运行使用**新的唯一证据根**；已存在根、受保护根、专用运行根之外的路径与符号链接组件都会在任何写入/清理/启动之前拒绝，失败或中断的尝试保留全部文件与日志，重试使用新根，不提供原地刷新。Windows 实机 WN01–WN06 必须用 `--windows-run/--windows-prep`（或对应环境变量）显式选择运行与准备对；未选择时整体为 `BLOCKED` 且非 0，本地准备目录永不替代所选准备。原设计者自主体验与独立 T17 始终记为 NOT_RUN。设计者环境与冻结包由 `tools/phase03_designer_kit.py --prepare/--verify` 准备（冻结包来自本实例真实上传/批准/授权下载；`--verify` 先做启动前门槛——manifest/哈希/成员扫描/配置与实例·研究·发行·模式绑定/生成引用，任一失败或解析异常只写 `NOT_READY` 证据并非 0 返回，不启动服务、不打开浏览器、不运行程序；门槛全绿才从停止状态真实执行生成的 `START-HERE.command`/`open-browser.command` 入口并做真实 Chrome 登录，哈希清单要求与清单成员完整对应且与当前构建/源码绑定），清单见[原设计者自主体验](public_docs/designer_acceptance.md)。
 
 ## 使用指南
 
@@ -141,4 +143,4 @@ Web 自动注入配置；普通原生流程优先提供包含实验资源、GEC�
 
 ### Windows 原生交付要求
 
-Windows x64 完整包为 Phase 03D 与 03F 的必需交付，后续原设计者自主体验以 Windows 为主要环境。目标是解压直接运行，无需安装 Godot 或手动修改连接配置；必须实测三种准入、GEC参与与收尾、本地保存、断网补传、关闭重开、检查点恢复、失败数据导出和完整数据对账。当前尚未完成 Windows 原生实机验收，既有 Windows Chrome 结果不能替代。工程侧已交付：Windows x64 描述契约（显式程序根/入口/依赖/GDExtension 清单）、Windows ZIP 安全路径规则、真实 PE32+ x86-64 与 PCK 版本核对、平台感知冻结组装与门户呈现，以及用固定 Godot 4.7.2 与官方模板的真实交叉导出验证（`tools/phase03_verify_windows_package.py --verify`，Windows 执行为 NOT_RUN）。构建与验证以 Godot 子进程真实退出码为准：写出产物后非零退出的导出/引擎声明不被接受，冷缓存崩溃只保留证据并由受支持的导入预热重试恢复；Windows 模板在复制或导出前按官方固定 SHA-256 校验，覆盖目录字节不符直接失败。验收项目见[Windows 原生验收清单](public_docs/windows_native_acceptance.md)。
+Windows x64 完整包为 Phase 03D 与 03F 的必需交付，后续原设计者自主体验以 Windows 为主要环境。目标是解压直接运行，无需安装 Godot 或手动修改连接配置；必须实测三种准入、GEC参与与收尾、本地保存、断网补传、关闭重开、检查点恢复、失败数据导出和完整数据对账。当前尚未完成 Windows 原生实机验收，既有 Windows Chrome 结果不能替代。工程侧已交付：Windows x64 描述契约（显式程序根/入口/依赖/GDExtension 清单）、Windows ZIP 安全路径规则、真实 PE32+ x86-64 与 PCK 版本核对、平台感知冻结组装与门户呈现，以及用固定 Godot 4.7.2 与官方模板的真实交叉导出验证（`tools/phase03_verify_windows_package.py --verify`，Windows 执行为 NOT_RUN）。实机准备已改为**真实平台生命周期**：`tools/phase03_verify_windows_native.py --verify-preparation --probe-device` 在一个独立合成实例里创建三个独立冻结研究/发行（无需 ID、名单 ID、ID+密码，共用同一不可变 Windows 构建，批准后模式不可改）、真实名单账号与经邀请流程创建的受限成员、真实登录与准入，并通过授权下载端点取得完整包与 sidecar 组成 kit（`integrity.json` 只是成员哈希清单，不是签名；可用账号单独 0600 存放且不在 kit 内），同时执行平台侧 WN06 契约并只读探测授权主机。真实 Windows 主机上用 kit 内准备好的启动器（无需输入命令）运行 `tools/windows_native_harness.py --run`：自有 PID 的交互启动与窗口/路径/架构证据、三种模式、错误凭据/绑定、断网本地提交与重连补传、丢 ACK 去重、进程终止与重开、检查点恢复与短码+原设备证明、重放/过期、共享写锁、清理与仅数据恢复、无秘密失败导出、本地 SQLite/API/授权 JSONL 逐 ID 逐值对账与旧发行兼容；缺前置条件记 `BLOCKED`/`NOT_RUN`，不冒充通过。严格门槛 `--gate --gate-run <运行目录> --gate-prep <准备目录>` 只校验显式选择的运行目录，重算当前源码/构建/描述/harness 摘要并独立复核 WN01–WN06 原始证据，裸 PASS、doctor、陈旧 kit、跳项、值不符与证据损坏一律拒绝。构建与验证以 Godot 子进程真实退出码为准：写出产物后非零退出的导出/引擎声明不被接受，冷缓存崩溃只保留证据并由受支持的导入预热重试恢复；Windows 模板在复制或导出前按官方固定 SHA-256 校验，覆盖目录字节不符直接失败。验收项目见[Windows 原生验收清单](public_docs/windows_native_acceptance.md)。

@@ -93,4 +93,62 @@ Phase 04 的真实研究协议、伦理/同意、隐私/保留/撤回、备份�
 
 **Windows 实机执行始终记为 NOT_RUN**：本轮是交叉构建与冻结包本机工程验证，未在真实 Windows 主机上运行任何程序，也没有用模拟程序替代真实构建；Windows 原生版本、实机三种准入、GEC 参与/收尾、断网补传、关闭重开、检查点恢复、失败数据导出与完整对账仍待真实 Windows 验收（03F）。包未做代码签名，SmartScreen/杀毒提示状态未知，未购买签名，也未自动关闭系统防护或添加信任。
 
+## Phase 03 03F Windows 原生实机准备与探测（P0307W）
+
+2026-09-20：新增准备门槛工具 `tools/phase03_verify_windows_native.py` 与实机 harness `tools/windows_native_harness.py`。定向命令 `pytest -q tests/test_phase03_windows_acceptance.py` 31 项通过，覆盖：描述缺少显式程序元数据/错平台/错引擎版本失败、程序归档篡改入口、路径逃逸、错误 PCK 版本与摘要不符全部拒绝、kit 按成员哈希可复现且 sidecar 不自引用、篡改 kit 成员即失败、凭据样式内容被拒绝、私有账号文件 0600 且不在 kit 内、不可达/无别名/非 Windows/无桌面主机记为精确 BLOCKED、可达 Windows 桌面记录机器事实、报告把准备状态与运行状态分开且人工验收固定 NOT_RUN、harness 无 kit 时失败并输出机器可读报告、指南与模板覆盖 WN01–WN06 且人类无需输入命令，以及严格最终门槛在“仅准备”“无报告”“探测未验证准备”三种情况下都拒绝、只有真实设备运行 PASS 才通过。
+
+真实运行命令（`tools/phase03_verify_windows_native.py --verify-preparation --probe-device`）：98 项检查 0 失败，`preparation_status=PREPARED`。它核对本机官方 Godot 4.7.2 与官方 Windows 模板固定摘要（`d34d36f3…0562`）、程序归档与 `build/windows/descriptor.json` 记录摘要一致（`dd60833d…771d`）、归档内入口与依赖均为真实 PE32+ x86-64 映像、PCK 头部 4.7.2、GDExtension `windows.release.x86_64` 声明、Windows ZIP 路径规则；组装 kit（程序归档、描述、许可证、离线冻结完整包 10 个成员含 EXE 同级 `connection.json`，`integrity.json` 覆盖全部 7 个 kit 成员且不自引用）并写入私有合成账号文件（0600）。实机探测如实记录：授权主机可达时只记录通用事实（`Microsoft Windows 11 Pro`、x64、控制台会话 Active），`runtime_status` 保持 `NOT_RUN`；同一探测稍后（主机进入不可达状态）记录 `runtime_status=BLOCKED` 与精确的 TCP 22 不可达条件。探测成功或失败都没有改变运行状态结论；主机别名、地址与本机拓扑只保留在忽略目录的交接证据中，不写入公开文档。
+
+同一主机上真实执行 harness：`--doctor` 26 项检查 0 失败（kit 与冻结包成员逐字节匹配、私有账号文件位置与内容、机器可读报告）；完整模式到达解压与启动阶段并通过冻结包解压到含中文与空格的路径（`…\GEP 原生测试 20260920\…`）、成员哈希、PE32+/PCK/依赖、冻结配置与 EXE 同目录等检查，随后主机离线，该次启动与后续界面结论**不记为通过**。因此：准备可交付，Windows 实机 WN01–WN06 仍为 NOT_RUN/BLOCKED，原设计者自主体验与独立 T17 仍为 NOT_RUN，Phase 03 未完成。证据在本地忽略目录 `local_data/phase03_20260920/windows_native_prep/`、`p0307w/`。
+
+严格最终门槛（P0307W 版实现，已被下节的失败关闭门槛取代）：`tools/phase03_verify_windows_native.py --gate` 读取最新 readiness 报告，只有真实设备 `runtime_status=PASS` 才退出 0；准备完成但实机未运行输出 `PREPARATION_ONLY` 并非 0 退出，缺报告输出 `EVIDENCE_ABSENT`。`tests/test_phase03_windows_acceptance.py` 的 5 项门槛测试覆盖这些分支（含“探测未验证准备不算已准备”），防止把 Windows 工程准备当成必需运行验收。
+
 P0306R 修正：03C 的真实 Chrome 合成包曾漏带随客户端发布的 `gec/shell.js`（`bridge.js` 导入该文件），导致桥接未加载、`data-admission` 缺失而使 Chrome 旅程在 `tests/test_phase03_releases_browser.py` line 274 失败；测试包补齐该客户端文件后，`GEP_T17_BROWSER=1` 下的同一命令 1 项通过（失败与通过日志在本地忽略证据目录）。该修正随“完整冻结包/GUI/准入”批次进入两笔原子补丁，并在隔离快照中重跑真实 Chrome 旅程验证。
+
+## Phase 03 03F Windows 原生：真实生命周期 kit、可自动化工程路径与严格门槛（P0307WR 纠正）
+
+2026-09-20：监督审查指出 P0307W 的功能缺口（离线 DIY 冻结与占位 API、只写标签的账号文件、只按镜像名启动/终止、只看 `runtime_status` 的宽松门槛），本批按审查结论纠正，并保留全部本地证据与“实机未运行”的结论。
+
+准备改为真实平台生命周期：`tools/phase03_windows_kit.py` 在独立合成实例中经真实认证 HTTP 流程创建三个独立冻结研究/发行（无需 ID、名单 ID、ID+密码），三者共用同一不可变 Windows 程序构建；批准后再次改模式被真实拒绝（`policy_frozen_after_release`）。名单账号经真实名单导入创建，受限成员经真实邀请流程创建/激活/登录（仅 `study.view`/`session.recover`/`data.export_raw`，无批准/上传/配置权限），并记录三个模式的真实 HTTP 准入、会话落库与错误口令 `admission_denied` 拒绝。kit 内完整包与 sidecar 全部来自授权下载端点，逐字节等于数据库外层摘要、响应头摘要、包内清单与平台 sidecar；另有同一构建的第二个真实发行成为当前发行（供旧发行兼容验证）。`integrity.json` 是成员哈希清单而非签名；可用账号/口令与 owner 材料单独 0600 存放，不在 kit 内，并逐值比对确认 kit 不含任何私有口令值。平台侧 WN06 契约在本机真实实例上执行：存储包篡改与 sidecar 篡改后下载 409、准入 409 `release_unavailable` 且不新增会话、恢复字节后同一下载 200；缺声明依赖 422 `missing_dependencies`、错平台 422 `reserved_path`、无下载授权 403。
+
+工程 harness（`tools/windows_native_harness.py --run`）改为自有 PID 安全启动与真实自动化流程：启动脚本把本次 `Start-Process` 的 PID 写入受控文件，核对可执行文件路径、控制台会话与启动时间，只检查/终止该 PID，不再使用按镜像名查找或 `taskkill`，默认不使用 `ExecutionPolicy Bypass`；`--doctor` 只做主机/kit/ACL 检查，绝不产生 WN01 结论。WN02–WN06 路径用程序自身的 `--synthetic-auto` 输入驱动真实导出 EXE 与真实原生存储（显式 `queue.sqlite`/`writer.sqlite`，只读 URI 与固定 SQL），配合作用域回环故障代理执行：三模式准入与完成、错误凭据/错误绑定拒绝、断网本地提交与进程终止、重连补传保持同一事件 ID、丢 ACK 后重试去重、检查点恢复与新 segment、短码+原设备证明、重放与过期拒绝、共享写锁、清理墓碑、仅数据恢复、无秘密失败导出与目标绑定、授权 JSONL 逐事件 ID/逐 `rt_ms` 原值对账、旧发行（已非当前发行）仍可准入完成。运行前置条件（作用域 SSH 隧道）缺失时全部运行项记 `BLOCKED`，不冒充通过。
+
+严格门槛改为失败关闭：`--gate --gate-run <目录> --gate-prep <目录>` 只校验显式选择的运行目录，重算当前源码/构建/描述/harness 摘要与 kit 字节、读取绑定实例数据库，并独立复核 WN01–WN06 的原始证据文件（本地存储副本、授权 JSONL、失败导出、启动记录）。裸 `runtime_status=PASS`、doctor-only、陈旧 kit、缺少/跳过 case、宿主或架构不符、构建/发行不符、原始值不符、证据文件损坏一律 `EVIDENCE_INVALID` 且非 0 退出；证据有效但 case 未全过为 `RUNTIME_INCOMPLETE`；未显式选择运行目录为 `SELECTION_REQUIRED`；只有真实设备六项全过且证据绑定当前构建才是 `RUNTIME_PASS`。`tests/test_phase03_windows_acceptance.py` 40 项覆盖描述/归档负向、真实 kit 契约（无 DIY 冻结与占位、包来自下载端点）、私有产物 0600 与口令不入 kit、harness 自有 PID 契约与 doctor 不产生 WN01 通过、指南/模板契约、探测分支、报告状态分离，以及严格门槛的正向与 9 类负向（裸 PASS、doctor、错宿主/架构、陈旧构建/源码、篡改绑定包、损坏证据、原始值不符、跳项、失败 case）。
+
+实机状态不变：授权 Windows 实机本轮仍不可达，`runtime_status` 为 `BLOCKED`/`NOT_RUN`，`preparation_status=PREPARED` 只代表准备与工程契约；P0308 的严格运行门槛仍必须保持阻塞，原设计者自主体验与独立 T17 仍为 `NOT_RUN`。已知限制如实记录：包未做代码签名，哈希清单不是签名；运行时不做包完整性校验，本地被篡改的 PCK 不会被程序自动拒绝。
+
+## Phase 03 03F 集成纠正、隔离回归与设计者环境（P0308）
+
+2026-09-21：按监督审查纠正 P0307WR 准备批次的缺陷，并完成 03F 可独立完成的集成准备。全部改动都在本机合成环境内执行；原设计者自主体验与独立 T17 仍为 `NOT_RUN`，真实 Windows 实机仍为 `BLOCKED`。
+
+**验收编排改为命名证据**：`tools/phase03_acceptance.py --verify` 不再从无关运行整体继承结论。T25–T30 与受影响 T03/04/07/08/11/13/14/16/18–24 的每个条款都拆成具名子项，每个子项绑定命名的可执行证据（pytest 节点、Playwright 规格标题、壳/完整包验证器检查标签、Windows 准备/运行项）；缺失或跳过记为 `NOT_RUN`，失败记为 `FAIL`，只有全部子项通过才是 `PASS`。步骤失败、子项失败或步骤抛出异常都会写入报告并让整体保持 `FAIL`；只有"唯一缺失证据是外部 Windows 设备门槛"时整体才是 `BLOCKED`，永不 `PASS`。报告始终写出 `acceptance.json`/`ACCEPTANCE.md`，并单列保留的历史平台覆盖。
+
+最近一次真实运行（2026-09-21，`local_data/phase03_20260920/p0308/acceptance_20260920T214604Z/`）：步骤
+`integrity=PASS, pytest=PASS（383 项通过、0 失败、0 跳过）, shell=PASS（123 项检查 0 失败）, package=PASS（110 项检查 0 失败）,
+browser=PASS（6 个规格 exit 0）, windows_preparation=PASS（229 项检查 0 失败、PREPARED）, windows_runtime=NOT_RUN`；T25–T30 与
+受影响 T 项全部 `PASS`，唯一未通过子项是 T20 的“真实 Windows x64 原生运行”（外部设备门槛），整体 `BLOCKED`、退出码 1。
+受保护旧验收库内容摘要运行前后一致（含 WAL sidecar，按真实 SHA-256 比较，不使用文件大小）。更早的失败运行
+（`acceptance_20260921T080000Z/`、`acceptance_20260921T083000Z/`，pytest 步骤 FAIL）保留原样，不被后续通过覆盖。
+
+**显式选择运行/准备对**：`--windows-run/--windows-prep`（或 `GEP_WINDOWS_RUN_DIR`/`GEP_WINDOWS_PREP_DIR`）必须成对给出；本地准备步骤与本轮新建的准备目录永不替代所选准备，也不自动发现"最新"目录。部分对、目录不存在、证据无效或与所选准备不匹配都是精确非 0 拒绝；未选择时运行项为 `NOT_RUN`。
+
+**设计者冻结包与空环境改为真实平台产物**：`tools/phase03_designer_kit.py --prepare` 不再复制原始归档冒充完整包。它在新建隔离实例上经真实登记/上传/批准/授权下载取得 Web 构建原始字节与 macOS/Windows 完整包（含 `connection.json`、`artifact_manifest.json`、许可证与第三方声明 sidecar），逐包核对包内成员与清单、配置绑定本实例/研究/发行/模式、无凭据字段，并对包内成员做有界秘密/会话数据扫描；失败准备目录保留为证据。`--verify` 从停止状态走生成的 `START-HERE` 服务路径（生成的服务助手校验端口占用、PID 命令行与实例身份后才打开浏览器），执行真实 Chrome 登录，并只用包内 `connection.json` 运行冻结 macOS 包，把本地记录与实例数据库、授权 JSONL 导出按事件 ID 对账；生成文档引用的路径会被逐一验证存在。Windows 入口为工程侧 `--serve` 作用域反向隧道 + `OPEN-ADMIN-WINDOWS.cmd`，不改 DNS/防火墙/证书信任，设计者不需要输入命令。
+
+**Windows 隧道与启动器**：`--serve-runtime` 真实建立 `ssh -N -R` 作用域反向转发（严格主机密钥、`ExitOnForwardFailure`、仅公钥、自有 PID），失败先清理再精确报错；`--stop-runtime` 只停止记录且命令行一致的自有进程。`--designer-launch` 在计划任务分支也等到自有程序退出记录后才释放任务与代理；kit 启动器改为校验 Python 真实版本（`sys.version_info>=(3,12)`）；`Verify` 派生路径统一基于解析后的绝对 root。
+
+**测试数字（2026-09-21 P0308）**：Windows 工具链与平台契约 183 项通过（`tests/test_phase03_windows_acceptance.py` 88 项、`tests/test_phase03_windows_packages.py` 81 项、`tests/test_phase03_windows_build.py` 14 项）；03F 编排器契约 27 项通过（缺失证据、真实失败子命令/超时、伪造 PASS 摘要、平台缺口、选择对拒绝、步骤抛出时仍写出报告、全部子项通过但 step 未运行不得 PASS、同一需求同时缺本地与外部子项不算“仅外部”、未知 selector/check 状态不得通过、同长度受保护内容变更被检测、受保护/越界/符号链接/已存在证据根在写入前拒绝、重复运行保持先前文件路径与内容不变、含准备/证据标记的目录不被当作验收根）；设计者 kit 契约 33 项通过（env 引号与不执行文本、0600 原子写入与用后删除、保留根拒绝、成员扫描与有界预算、生成入口引用真实解释器、文档路径解析、Windows 入口绑定端口、受保护内容变更、生成的服务助手拒绝占用端口/复用 PID/畸形 PID/未就绪实例且不误杀、哈希清单格式与覆盖、必需成员不可被删除清单绕过、陈旧构建/旧源码绑定拒绝、双击入口伪造或失败不 READY、以及真实文件的启动前门槛负向：哈希篡改、缺失 manifest、移除包内 config、旧源码绑定、损坏 JSON 都只写 `NOT_READY` 且不调用任何启动路径）。编排器的 pytest 步骤合计 392 项通过（含上述三组工具契约）；定向壳/完整包验证为 123/110 项检查 0 失败，Windows 准备 229 项检查 0 失败（`PREPARED`，实机 `BLOCKED`）。
+
+**P0308 第三轮本地收尾（2026-09-21）**：
+
+- **验收状态严格收敛**：`tools/phase03_acceptance.py` 的整体结论现在要求每个必需 step 与每个子项都明确 `PASS`——任何 `NOT_RUN`/未知 step 状态都不得整体 `PASS`；步骤内部异常一律记为 `FAIL` 并保留完整报告（不再默认成 `NOT_RUN`/`BLOCKED`）；`_selector_status`/`_check_status` 只接受明确已知的通过枚举，未知 pytest/浏览器结果、未知检查状态与未知 Windows 运行项一律 `NOT_RUN`。“仅外部 Windows 缺失”改为逐个检查未通过子项，同一需求还有一个本地子项缺失时不再误称“仅外部”。
+- **证据根只新建、从不原地清理**：每次运行使用新的唯一证据根（默认 `local_data/phase03_20260920/p0308/acceptance_<UTC 时间戳>`）。已存在的根、受保护根（旧验收库/卷、专用运行根之外的路径）与含符号链接组件的路径都在任何写入/清理/启动之前拒绝（非 0 退出），不再提供原地刷新；失败或中断的尝试保留全部文件、路径与日志（含数据库/WAL/SHM、JSONL 队列与命令日志），重试使用新根。该检查同时存在于程序入口与 `orchestrate` 内部，程序调用方不能绕过。
+- **设计者双击入口真正执行且绑定检查**：`open-browser.command` 修掉了向上两级落到 `local_data` 再执行不存在解释器的错误，`START-HERE.command` 与它共用项目 `.venv/bin/python` 绝对路径与 POSIX 安全引用（空格/单引号路径可用）；`--verify` 从停止状态真实执行这两个生成的 `.command` 入口（不再只调 `service.py start`），核对入口自己记录的打开证据、只读健康检查与真实 Chrome 登录；stop 拒绝、启动失败或实例身份不匹配都记为失败且不继续打开可疑实例；生成服务助手对 `already_running` 但未就绪/身份不符、畸形 PID 记录（缺 pid/命令行）一律拒绝打开。
+- **设计者 `--verify` 先核对再启动（失败关闭）**：manifest、哈希清单、秘密/成员扫描、配置与实例/研究/发行/模式绑定、生成引用与双击入口引用全部收敛为**启动前门槛**；任一失败或解析异常都写出明确的 `NOT_READY` readiness 证据并立即非 0 返回，不停止/启动服务、不打开浏览器、不运行冻结程序，因此已检测为损坏或含秘密的包不会被误执行。只有门槛全绿才进入真实 `START-HERE`/`open-browser` 执行、真实 Chrome 登录与冻结 macOS 包运行。
+- **冻结证据覆盖与源码绑定**：`freeze_hash_mismatches` 对空清单、格式错误、重复条目、缺失/多余条目明确拒绝，`--verify` 要求 manifest 成员与哈希清单完整对应；新增 `freeze_binding_problems` 把冻结记录的源码摘要、程序归档/描述摘要与当前工作区比较，并要求包内 `artifact_manifest.json` 的程序摘要等于当前构建（zip 与其自报哈希相互一致也不再接受陈旧构建）；`member_scan_problems` 从平台与包内清单派生必需成员，删除 manifest 的 `required_members` 不能绕过平台必需清单/配置；README 明确哈希清单不是签名。刷新冻结使用新唯一目录，旧包保留。
+- **Windows 运行助手生命周期**：`runtime.pid` 记录真实 Popen argv 与 OS 启动时间戳，`--stop-runtime` 只停止真实 argv 仍一致且启动时间未变的记录；畸形记录（空/缺失命令行）与 PID 复用拒绝并保留现场。已用真实本地进程验证“启动→记录→从新进程停止→端口释放”，并测 PID 复用不杀无关进程。
+- **隧道就绪证明转发可用**：`Tunnel.wait_ready` 除 ssh 存活与本地目标可达外，还执行严格只读远端探针（同一授权别名的独立 SSH 会话，`powershell -EncodedCommand`，Windows 侧 `Host: admin.localhost` 取回 `/login` 原始字节），归一化 CSRF token 后与本机实例页面指纹比对；探针失败/异常/页面不一致一律不 `READY`，保持 `BLOCKED`，不修改 hostkey、全局 SSH、防火墙或 DNS。
+- **可提交的独立原子分组**：隔离浏览器组已由监督者原子提交并推送为 `2e42779`（该组不依赖其他组，不再重复准备）。其余三组在忽略目录 `local_data/phase03_20260920/p0308/atomic_commits_p0308r/` 准备为顺序补丁（Windows kit/运行时/门槛 → 设计者冻结/kit → 编排器与公开状态），每组含实现、测试与工具引用的指南；`make_patches.py` 以 `2e42779` 为基线生成 `stage/base→a→b→c` 与三份补丁，`verify_snapshots.sh` 在**每次运行新建的唯一** `run_<UTC 时间戳>` 目录中顺序应用并通过组内定向测试、边界检查与最终快照比对；每个 patch/pytest/边界/diff 的退出码都写入该目录的 `exit_codes.txt` 并在任一失败时以非 0 退出（不再用会吞掉失败状态的 echo 汇总），旧快照与失败证据一律保留、不删除。补丁与逐文件 SHA256 见该目录 `README.md`、`patches.sha256`、`groups.json`；不 commit、不 push。
+
+**一次真实 flake 及其修复**：编排器首轮运行记录到 `tests/test_phase03_releases_browser.py::test_actual_chrome_publication_and_stable_entry` 间歇失败（真实 Chrome 页面在 `shell.js` 请求上得到 400；服务端定位为测试线程写入的发行行对 live-server 线程短暂不可见，属共享内存 SQLite 测试库的跨线程可见性竞态，不是产品缺陷）。修复使用项目既有的真实文件测试库机制（`GEP_TEST_DB_FILE`，与并发探针相同），编排器 pytest 步骤显式设置该变量；随后同一 358 项套件连续两轮通过。首轮失败证据保留在 `acceptance_20260921T080000Z/`、`acceptance_20260921T083000Z/`，不删除。
+
+**仍为 NOT_RUN**：真实 Windows x64 WN01–WN06、原设计者自主体验、独立 T17。`tools/phase03_acceptance.py --verify` 在缺实机证据时保持非 0；03F 与 Phase 03 均未完成。
