@@ -358,6 +358,230 @@ def test_stable_entry_admission_binds_observed_release_and_fails_stale():
     assert current.status_code == 200 and current.json()['release_id'] == str(second.id)
 
 
+# ---------------------------------------------------------------------------
+# 03C batch 2: public portal, stable study entry and the researcher GUI workflow
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_policy_and_recruitment_never_auto_publish():
+    context = world()
+    study, first = context['study'], context['first']
+    assert (study.public, study.current_release_id, study.show_closed_summary, study.revision) == (False, None, False, 0)
+
+    # Anonymous open recruitment and a current release do not publish by themselves.
+    study.recruitment = 'open'
+    study.save()
+    publication.select_current_release(context['owner'], study, '0', str(first.id))
+    study.refresh_from_db()
+    assert study.public is False
+    portal = Client().get('/', HTTP_HOST='experiment.localhost')
+    assert f'data-study="{study.id}"' not in portal.content.decode()
+
+    # A private roster study stays absent even when open with a valid current release.
+    study.mode = 'id'
+    study.save()
+    participant = Participant.objects.create(study=study, code='PRIVATE-CODE-001')
+    session, _ = admit_request(entry_request(context, first, study.revision, participant_code='PRIVATE-CODE-001'))
+    assert Participant.objects.filter(pk=participant.pk).exists() and session.release_id == first.id
+    portal = Client().get('/', HTTP_HOST='experiment.localhost')
+    assert f'data-study="{study.id}"' not in portal.content.decode()
+
+    # Explicit publication lists it, independent of the authentication mode.
+    publication.update_policy(context['owner'], study, str(study.revision), {
+        'public': True, 'public_summary': '名单制研究', 'public_duration': '10 分钟',
+        'public_device_requirements': '桌面浏览器'})
+    study.refresh_from_db()
+    assert study.public is True and study.mode == 'id'
+    portal = Client().get('/', HTTP_HOST='experiment.localhost').content.decode()
+    assert f'data-study="{study.id}"' in portal and '名单制研究' in portal
+
+    # Paused recruitment is not listed; closed only with the explicit summary opt-in.
+    study.recruitment = 'paused'
+    study.save()
+    assert f'data-study="{study.id}"' not in Client().get('/', HTTP_HOST='experiment.localhost').content.decode()
+    study.recruitment = 'closed'
+    study.save()
+    assert f'data-closed-study="{study.id}"' not in Client().get('/', HTTP_HOST='experiment.localhost').content.decode()
+    study.show_closed_summary = True
+    study.save()
+    closed = Client().get('/', HTTP_HOST='experiment.localhost').content.decode()
+    assert f'data-closed-study="{study.id}"' in closed and '名单制研究' in closed
+    assert f'/join/{study.id}' not in closed
+
+
+@pytest.mark.django_db
+def test_portal_lists_only_public_open_current_and_hides_roster_and_history():
+    context = world(title='Listed synthetic', mode='anonymous')
+    study, first = context['study'], context['first']
+    publication.update_policy(context['owner'], study, '0', {'public': True, 'public_summary': '公开简介 A', 'public_duration': '12 分钟',
+                                                            'public_device_requirements': '桌面 Chrome'})
+    publication.select_current_release(context['owner'], study, str(Study.objects.get(pk=study.pk).revision), str(first.id))
+    participant = Participant.objects.create(study=study, code='ROSTER-CODE-777')
+    session, _ = admit_request(entry_request(context, first, Study.objects.get(pk=study.pk).revision))
+    member = get_user_model().objects.create_user('portal_hidden_member', password=OWNER_PASSWORD)
+    grant(member, study, 'study.view')
+
+    # Visible only with explicit public + open + valid current release.
+    no_current = Study.objects.create(title='Public without current', recruitment='open', public=True)
+    unapproved_current = Study.objects.create(title='Public unapproved current', recruitment='open', public=True)
+    unapproved_release = make_release(unapproved_current, 'v1', approved=False, package='x.zip')
+    Study.objects.filter(pk=unapproved_current.pk).update(current_release=unapproved_release)
+    no_package = Study.objects.create(title='Public no package', recruitment='open', public=True)
+    unpackaged = make_release(no_package, 'v1', approved=True, package='')
+    Study.objects.filter(pk=no_package.pk).update(current_release=unpackaged)
+    private_open = Study.objects.create(title='Private open current', recruitment='open', public=False)
+    private_release = make_release(private_open, 'v1', package='p.zip')
+    Study.objects.filter(pk=private_open.pk).update(current_release=private_release)
+    paused = Study.objects.create(title='Public paused', recruitment='paused', public=True)
+    paused_release = make_release(paused, 'v1', package='p.zip')
+    Study.objects.filter(pk=paused.pk).update(current_release=paused_release)
+
+    page = Client().get('/', HTTP_HOST='experiment.localhost')
+    assert page.status_code == 200
+    body = page.content.decode()
+    assert f'data-study="{study.id}"' in body and '公开简介 A' in body and '12 分钟' in body and '桌面 Chrome' in body
+    for hidden in (no_current, unapproved_current, no_package, private_open, paused):
+        assert f'data-study="{hidden.id}"' not in body
+    # No roster, history or membership fields on the portal.
+    for leaked in ('ROSTER-CODE-777', str(session.id), str(participant.pk), 'portal_hidden_member', 'data-session', 'max_sessions'):
+        assert leaked not in body
+    assert '/users' not in body and 'admin.localhost' not in body
+    assert Client().post('/', {}, HTTP_HOST='experiment.localhost').status_code == 405
+
+
+@pytest.mark.django_db
+def test_stable_entry_page_binds_current_release_and_stale_admission_fails(monkeypatch):
+    monkeypatch.setenv('GEP_PUBLIC_API', 'http://experiment.localhost:8123')
+    context = world(title='Entry synthetic')
+    study, first, second = context['study'], context['first'], context['second']
+    publication.select_current_release(context['owner'], study, '0', str(first.id))
+    study.refresh_from_db()
+
+    page = Client().get(f'/join/{study.id}', HTTP_HOST='experiment.localhost')
+    assert page.status_code == 200
+    body = page.content.decode()
+    assert 'Entry synthetic' in body
+    assert f'data-expected-release="{first.id}"' in body and f'data-expected-revision="{study.revision}"' in body
+    # The start click composes the gated URL from the observed binding; the href
+    # already carries it for the no-script fallback.
+    base = f'http://experiment.localhost:8123/run/{first.id}/web/index.html'
+    gated = f'{base}?entry_release={first.id}&entry_revision={study.revision}'
+    assert f'data-start-url="{base}"' in html.unescape(body) and f'href="{gated}"' in html.unescape(body)
+
+    admission = entry_request(context, first, study.revision)
+    response = post_admission(admission)
+    assert response.status_code == 200 and response.json()['release_id'] == str(first.id)
+
+    # A researcher switch after page load fails stale instead of silently switching.
+    publication.select_current_release(context['owner'], study, str(study.revision), str(second.id))
+    study.refresh_from_db()
+    stale = entry_request(context, first, 1)
+    failed = post_admission(stale)
+    assert failed.status_code == 409 and failed.json()['code'] == 'stale_entry'
+    assert not Session.objects.filter(operation=stale['operation_id']).exists()
+    current = post_admission(entry_request(context, second, study.revision))
+    assert current.status_code == 200 and current.json()['release_id'] == str(second.id)
+
+    # Stable entry requires all expected fields and the experiment host.
+    assert post_admission({'operation_id': str(uuid.uuid4()), 'proof': 'p' * 48,
+                           'instance_id': str(context['instance'].instance_id),
+                           'study_id': str(study.id)}).status_code == 422
+    bad_revision = entry_request(context, second, study.revision)
+    bad_revision['expected_revision'] = str(study.revision)
+    assert post_admission(bad_revision).status_code == 422
+    assert Client().get(f'/join/{study.id}', HTTP_HOST='admin.localhost').status_code == 403
+    assert Client().get(f'/join/{study.id}', HTTP_HOST='testserver').status_code == 403
+    assert Client().get(f'/join/{uuid.uuid4()}', HTTP_HOST='experiment.localhost').status_code == 404
+
+
+@pytest.mark.django_db
+def test_entry_gate_serves_only_the_observed_release_and_fails_closed(tmp_path, settings, monkeypatch):
+    """The start click's observed binding is validated before the application is
+    served: a current binding injects the expected release/revision into the app
+    context, while a superseded or half-specified binding returns the refresh page
+    and never loads the app or creates a session."""
+    monkeypatch.setenv('GEP_PUBLIC_API', 'http://experiment.localhost:8123')
+    settings.DATA_DIR = tmp_path
+    package_root = tmp_path / 'packages'
+    package_root.mkdir()
+    (package_root / 'first.zip').write_bytes(FIRST_PACKAGE)
+    (package_root / 'second.zip').write_bytes(SECOND_PACKAGE)
+    context = world(title='Entry gate synthetic')
+    study, first, second = context['study'], context['first'], context['second']
+    publication.select_current_release(context['owner'], study, '0', str(first.id))
+    study.refresh_from_db()
+    client = Client()
+    base = f'/run/{first.id}/web/index.html'
+
+    current = client.get(f'{base}?entry_release={first.id}&entry_revision={study.revision}', HTTP_HOST='experiment.localhost')
+    assert current.status_code == 200
+    config = json.loads(re.search(r'globalThis\.GEP_CONTEXT=(\{.*?\});</script>', current.content.decode()).group(1))
+    assert config['expected_release_id'] == str(first.id) and config['expected_revision'] == study.revision
+    assert config['release_id'] == str(first.id) and config['build_id'] == str(first.build_id)
+
+    # The frozen legacy direct URL stays ungated and carries no binding.
+    legacy = client.get(base, HTTP_HOST='experiment.localhost')
+    assert legacy.status_code == 200 and 'expected_release_id' not in legacy.content.decode()
+
+    # A stale revision, a missing half of the binding: refuse without serving the app.
+    for refused in (f'{base}?entry_release={first.id}&entry_revision=0', f'{base}?entry_release={first.id}',
+                    f'{base}?entry_revision={study.revision}'):
+        page = client.get(refused, HTTP_HOST='experiment.localhost')
+        assert page.status_code == 409 and '研究入口已更新' in page.content.decode()
+
+    publication.select_current_release(context['owner'], study, str(study.revision), str(second.id))
+    study.refresh_from_db()
+    stale = client.get(f'{base}?entry_release={first.id}&entry_revision=1', HTTP_HOST='experiment.localhost')
+    assert stale.status_code == 409
+    html = stale.content.decode()
+    assert '研究入口已更新' in html and 'GEP_CONTEXT' not in html and f'/join/{study.id}' in html
+    # A stale entry click creates no session; the old release still serves its frozen URL.
+    assert Session.objects.filter(release__study=study).count() == 0
+    frozen = client.get(base, HTTP_HOST='experiment.localhost')
+    assert frozen.status_code == 200 and 'expected_release_id' not in frozen.content.decode()
+    assert 'first synthetic package' in frozen.content.decode()
+
+    # Closing recruitment also refuses the previously current binding.
+    study.recruitment = 'closed'
+    study.save()
+    closed = client.get(f'/run/{second.id}/web/index.html?entry_release={second.id}&entry_revision={study.revision}',
+                        HTTP_HOST='experiment.localhost')
+    assert closed.status_code == 409 and '研究入口已更新' in closed.content.decode()
+
+
+@pytest.mark.django_db
+def test_stable_entry_page_states_for_private_closed_and_unset_studies(monkeypatch):
+    monkeypatch.setenv('GEP_PUBLIC_API', 'http://experiment.localhost:8123')
+    context = world(title='Entry states')
+    study, first = context['study'], context['first']
+    publication.update_policy(context['owner'], study, '0', {'public': True, 'public_summary': '仅公开简介'})
+    study.refresh_from_db()
+    publication.select_current_release(context['owner'], study, str(study.revision), str(first.id))
+    study.refresh_from_db()
+
+    # Clearing the current release keeps the study open but offers no start.
+    publication.select_current_release(context['owner'], study, str(study.revision), '')
+    study.refresh_from_db()
+    body = Client().get(f'/join/{study.id}', HTTP_HOST='experiment.localhost').content.decode()
+    assert 'data-startable="0"' in body and '/run/' not in body and 'data-expected-release=""' in body
+
+    # Private study entry never renders the public summary but still knows its own title.
+    private = Study.objects.create(title='Private entry synthetic')
+    private_release = make_release(private, 'v1', package='p.zip')
+    Study.objects.filter(pk=private.pk).update(current_release=private_release, public_summary='private summary not public')
+    body = Client().get(f'/join/{private.id}', HTTP_HOST='experiment.localhost').content.decode()
+    assert 'Private entry synthetic' in body and 'private summary not public' not in body
+
+    # Closed study: no start; summary only with the explicit opt-in.
+    study.recruitment = 'closed'
+    study.show_closed_summary = True
+    study.save()
+    body = Client().get(f'/join/{study.id}', HTTP_HOST='experiment.localhost').content.decode()
+    assert '仅公开简介' in body and 'data-startable="0"' in body and '/run/' not in body
+    assert '该研究已结束' in body
+
+
 @pytest.mark.django_db
 def test_operation_retry_returns_original_session_before_new_current_policy():
     context = world()
@@ -435,6 +659,91 @@ def test_switch_keeps_old_session_uploads_recovery_config_export_and_resources(t
     assert connection_config(first) == context_before and first.config == {'purpose': 'synthetic', 'mode': 'anonymous', 'tag': 'v1'}
     assert first.approved is True and first.build.package_path == 'first.zip'
     assert hashlib.sha256((package_root / 'second.zip').read_bytes()).hexdigest() == hashlib.sha256(SECOND_PACKAGE).hexdigest()
+
+
+@pytest.mark.django_db
+def test_gui_publication_forms_and_authority():
+    context = world()
+    study, first, second = context['study'], context['first'], context['second']
+    owner = context['owner']
+    client = Client()
+    client.force_login(owner)
+    url = f'/studies/{study.id}'
+    page = client.get(url).content.decode()
+    assert 'data-publication-form="1"' in page and 'data-current-release-form="1"' in page
+    assert f'data-current-release=""' in page
+
+    assert client.post(url, {'op': 'publication', 'study_revision': '0', 'public': '1',
+                             'public_summary': 'GUI 公开简介', 'public_duration': '8 分钟',
+                             'public_device_requirements': '桌面浏览器'}).status_code == 302
+    study.refresh_from_db()
+    assert study.public is True and study.public_summary == 'GUI 公开简介' and study.revision == 1
+    assert client.post(url, {'op': 'current_release', 'study_revision': '1', 'release_id': str(first.id)}).status_code == 302
+    study.refresh_from_db()
+    assert study.current_release_id == first.id and study.revision == 2
+    page = client.get(url).content.decode()
+    assert f'data-current-release="{first.id}"' in page and 'GUI 公开简介' in page
+
+    # Stale revision renders an in-place error page without writing.
+    stale = client.post(url, {'op': 'current_release', 'study_revision': '1', 'release_id': str(second.id)},
+                        HTTP_ACCEPT='text/html')
+    assert stale.status_code == 409 and '研究发布版本已变化' in stale.content.decode()
+    study.refresh_from_db()
+    assert study.current_release_id == first.id and study.revision == 2
+    ineligible = client.post(url, {'op': 'current_release', 'study_revision': '2', 'release_id': ''})
+    assert ineligible.status_code == 302  # clearing is a valid explicit target
+    study.refresh_from_db()
+    assert study.current_release_id is None and study.revision == 3
+    rejected = client.post(url, {'op': 'current_release', 'study_revision': '3', 'release_id': str(second.id)})
+    assert rejected.status_code == 302
+
+    viewer = get_user_model().objects.create_user('publication_gui_viewer', password=OWNER_PASSWORD)
+    grant(viewer, study, 'study.view')
+    viewer_client = Client()
+    viewer_client.force_login(viewer)
+    assert viewer_client.get(url).status_code == 200
+    assert viewer_client.post(url, {'op': 'current_release', 'study_revision': str(study.revision),
+                                    'release_id': str(first.id)}).status_code == 403
+    assert viewer_client.post(url, {'op': 'publication', 'study_revision': str(study.revision),
+                                    'public': '1'}).status_code == 403
+    study.refresh_from_db()
+    assert study.current_release_id == second.id and study.public is True
+
+
+@pytest.mark.django_db
+def test_hosts_and_admin_cookie_are_isolated(settings):
+    assert settings.SESSION_COOKIE_DOMAIN is None and settings.CSRF_COOKIE_DOMAIN is None
+    owner = get_user_model().objects.create_user('host_isolation_owner', password=OWNER_PASSWORD)
+    Instance.objects.create(instance_id=uuid.uuid4(), owner=owner)
+    login = Client().post('/login', {'username': owner.username, 'password': OWNER_PASSWORD}, HTTP_HOST='admin.localhost')
+    assert login.status_code == 302
+    cookie_header = login.cookies['gep_admin'].output()
+    assert 'Domain=' not in cookie_header and 'HttpOnly' in cookie_header
+    # Admin endpoints and login never open on the experiment host.
+    assert Client().get('/users', HTTP_HOST='experiment.localhost').status_code == 403
+    assert Client().get('/login', HTTP_HOST='experiment.localhost').status_code == 403
+    assert Client().get('/studies/' + str(uuid.uuid4()), HTTP_HOST='experiment.localhost').status_code == 403
+    portal = Client().get('/', HTTP_HOST='experiment.localhost')
+    assert portal.status_code == 200 and '/users' not in portal.content.decode()
+    # The admin host still serves the researcher workbench.
+    assert Client().get('/', HTTP_HOST='testserver').status_code == 302  # anonymous -> /login
+    assert Client().get('/login', HTTP_HOST='admin.localhost').status_code == 200
+    # Host responsibilities stay separate: there is no study. alias, and the www
+    # host is a distinct configurable origin that only links to the portal.
+    assert settings.WWW_HOST not in (settings.ADMIN_HOST, settings.EXPERIMENT_HOST)
+    assert 'www.localhost' in settings.ALLOWED_HOSTS
+    assert Client().get('/', HTTP_HOST='study.localhost').status_code == 400
+
+
+@pytest.mark.django_db
+def test_www_host_only_links_to_the_portal(monkeypatch):
+    monkeypatch.setenv('GEP_PUBLIC_API', 'http://experiment.localhost:8123')
+    page = Client().get('/', HTTP_HOST='www.localhost')
+    assert page.status_code == 200
+    body = page.content.decode()
+    assert 'data-www="1"' in body and 'http://experiment.localhost:8123/' in body
+    assert '/users' not in body and '/login' not in body and 'csrfmiddlewaretoken' not in body
+    assert Client().post('/', {}, HTTP_HOST='www.localhost').status_code == 405
 
 
 def test_concurrent_current_release_switches_compare_revision(tmp_path):

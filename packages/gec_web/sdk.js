@@ -37,8 +37,14 @@ export class GEC {
     let draft=(await this.all()).find(s=>s.kind==='admission'&&JSON.stringify(s.config)===JSON.stringify(this.config));
     if(!draft){draft={id:uuid(),kind:'admission',config:this.config,proof:Array.from(crypto.getRandomValues(new Uint8Array(32)),v=>v.toString(16).padStart(2,'0')).join('')};await this.mutate(store=>{const r=store.getAll();r.onsuccess=()=>{for(const old of r.result){if(old.kind==='cleaned')continue;old.front_locked=true;store.put(old);}store.put(draft);};});}
     const c=this.config;
-    const response=await this.request(c,'/v1/participant/sessions',{operation_id:draft.id,proof:draft.proof,instance_id:c.instance_id,study_id:c.study_id,release_id:c.release_id,build_id:c.build_id,...credentials});
+    const request={operation_id:draft.id,proof:draft.proof,instance_id:c.instance_id,study_id:c.study_id,release_id:c.release_id,build_id:c.build_id,...credentials};
+    // A stable study entry injects the observed release and publication revision;
+    // the server then refuses a superseded binding with stale_entry instead of
+    // silently admitting against a release the page no longer observed.
+    if(c.expected_release_id!==undefined&&c.expected_revision!==undefined){request.expected_release_id=c.expected_release_id;request.expected_revision=c.expected_revision;}
+    const response=await this.request(c,'/v1/participant/sessions',request);
     for(const k of ['instance_id','study_id','release_id','build_id'])if(response[k]!==c[k])fail('admission_binding');
+    if(c.expected_release_id!==undefined&&response.release_id!==c.expected_release_id)fail('admission_binding');
     this.id=response.session_id;
     await this.mutate(store=>{store.delete(draft.id);store.put({id:this.id,kind:'session',config:c,context:response,records:[],pending:[],segments:[this.segment],checkpoint:null,completion:null,complete_ack:null,front_locked:false,proof:draft.proof});});
     this.state='active';return {session_id:this.id};

@@ -12,10 +12,58 @@ from .views import endpoint
 def resource(request,release_id,resource_path):
     require(request.get_host().split(':')[0]==settings.EXPERIMENT_HOST,'wrong_host',403)
     require(request.method=='GET','method',405)
-    release=Release.objects.select_related('build').get(pk=release_id)
+    release=Release.objects.select_related('build','study').get(pk=release_id)
     require(release.approved and bool(release.build.package_path),'not_published',404)
     require(resource_path.startswith('web/') and '..' not in resource_path.split('/'),'path',404)
-    return serve(release.build,connection_config(release),resource_path)
+    config=connection_config(release)
+    if resource_path=='web/index.html':
+        binding=entry_binding(request,release)
+        if binding is False:
+            return entry_stale_page(release.study_id)
+        if binding:
+            config.update(binding)
+    return serve(release.build,config,resource_path)
+
+
+ENTRY_RELEASE_PARAM='entry_release'
+ENTRY_REVISION_PARAM='entry_revision'
+
+
+def entry_binding(request,release):
+    """Resolve the stable-entry binding carried by a start click.
+
+    ``None`` means the frozen legacy direct-release path: the request did not come
+    from a stable study entry and keeps its original admission contract. A request
+    that carries the observed release and publication revision is only served
+    while that binding is still the study's current, open and resource-located
+    release, so a page loaded before a researcher switch never starts the
+    superseded materials. The validated binding is injected into the observed
+    application context and checked again atomically at admission.
+    """
+    raw_release=request.GET.get(ENTRY_RELEASE_PARAM)
+    raw_revision=request.GET.get(ENTRY_REVISION_PARAM)
+    if raw_release is None and raw_revision is None:
+        return None
+    study=release.study
+    valid=(raw_release==str(release.id) and raw_revision is not None and raw_revision.isdigit()
+           and int(raw_revision)==study.revision and study.current_release_id==release.id
+           and study.recruitment=='open' and release.approved and bool(release.build.package_path))
+    if not valid:
+        return False
+    return {'expected_release_id':str(release.id),'expected_revision':int(raw_revision)}
+
+
+def entry_stale_page(study_id):
+    """Refusal page for a start click whose observed entry is no longer current."""
+    body=('<!doctype html><html lang="zh"><meta charset="utf-8">'
+          '<meta name="viewport" content="width=device-width,initial-scale=1">'
+          '<title>研究入口已更新</title><body><main><h1>研究入口已更新</h1>'
+          '<p>当前参与版本或招募状态已变化，本次没有开始新的参与会话。</p>'
+          f'<p><a href="/join/{study_id}">返回研究入口，刷新后重新开始</a></p>'
+          '</main></body></html>')
+    response=HttpResponse(body,content_type='text/html; charset=utf-8',status=409)
+    response['Cache-Control']='no-store'
+    return response
 
 def serve(build,config,resource_path):
     with zipfile.ZipFile(settings.DATA_DIR/'packages'/build.package_path) as archive:

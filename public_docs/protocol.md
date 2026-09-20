@@ -13,3 +13,22 @@ These limits and protocol tests are synthetic engineering evidence. Browser/nati
 Recovery requires a study-authorized, unexpired one-time permit plus the original private recovery proof. Public participant/session identifiers are insufficient. Successful reauthentication atomically persists renewed credentials and resets the paused upload retry budget; a rejected permit cannot unpause it. The response includes `task_finished`. A local or server completion declaration forces data-only recovery: no new trial, segment or completion-set expansion. Experiments without a declared compatible recovery strategy also recover data only.
 
 New participation locks older active sessions out of foreground recovery; it does not erase their unacknowledged data or modify already cleaned tombstones. Cleanup requires the complete declared event set, a durably saved valid completion ACK and no pending records or recovery dependencies. Transaction/process interruption is covered separately for IndexedDB and native SQLite; physical power-loss and secure-erasure guarantees are outside this acceptance.
+
+## Study entry, public listing and the current release
+
+The additional fields below were added in the Phase 03 03C delivery and are covered by synthetic engineering tests, not by human acceptance.
+
+A study is listed publicly only when the researcher explicitly marks it public, recruitment is open and the study has a current release that is approved and resource-located. Private and roster studies never become public through recruitment or authentication mode, and a study without a current release does not open new participation through the portal. A closed study is only shown as an opted-in summary without any start.
+
+The stable study entry on the experiment origin reports the current release and publication revision it observed. A new participation request can bind them instead of a direct release:
+
+- Stable-entry admission uses `study_id`, `expected_release_id` and `expected_revision` instead of `release_id`.
+- The start click carries that observation through the platform entry gate: the release application is only served while the binding is still the study's current, open, approved and resource-located release, and the validated `expected_release_id`/`expected_revision` are injected into the application context so the shipped client sends them with its create request. A page whose binding is superseded receives the entry-refresh page (409) instead of the application and creates no session.
+- A create request that carries the stable-entry binding is validated as a stable entry even when it also carries `release_id`; only a request with `release_id` alone uses the frozen direct-release contract.
+- If the current release or the publication revision changed after the page loaded, the request is refused with `stale_entry` (409) and no session is created; the server never silently switches materials.
+- Repeating an existing create operation with its original proof and binding returns the original session even after the current release changed, before any new current-release policy is applied.
+- Direct `release_id` requests keep their frozen original admission contract (approved release plus open recruitment) and are never redirected to another release. Existing sessions, uploads, recovery permits, configuration downloads, exports and resource URLs stay bound to their original release and are not rewritten.
+
+## Public participation links
+
+The personal site only links to the participation portal; the portal and experiment resources are served on the experiment origin, and the researcher workbench stays on its own origin with a host-only management cookie. Real domain, DNS and TLS deployment remain future work and are not part of this implementation.

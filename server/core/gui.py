@@ -22,6 +22,7 @@ from .protocol import require, parse, Rejected
 from .views import endpoint
 from .services import digest, completion_status
 from .packages import validate_package, descriptor_valid, MAX_ARCHIVE
+from . import publication
 
 
 def _revision_ok(raw, current):
@@ -67,6 +68,8 @@ def study_context(request, study, notice=''):
     return {
         'study':study, 'notice':notice, 'public_api_url':public_api_url(),
         'revision':Instance.objects.get(pk=1).governance_revision,
+        'study_revision':study.revision,
+        'current_release_id':study.current_release_id,
         'builds':Build.objects.filter(study=study),
         'releases':Release.objects.filter(study=study).select_related('build'),
         'sessions':[{'id':s.id,'state':completion_status(s)['state']} for s in Session.objects.filter(release__study=study)],
@@ -103,6 +106,12 @@ def study_form_errors(fn):
                 'roster_columns':'名单列数不正确；密码模式请填写 ID 与密码两列。本次未导入任何行。',
                 'password_too_short':'密码长度不足，请检查后重新提交。',
                 'forbidden':'当前账号没有此操作权限，未执行更改。',
+                'revision_conflict':'研究发布版本已变化，请刷新页面后重试；未执行任何更改。',
+                'no_change':'目标状态没有变化，未写入任何更改。',
+                'policy_field':'公开信息超出长度上限，未写入任何更改。',
+                'release_not_found':'所选发行不存在或不属于本研究，未执行任何更改。',
+                'release_unapproved':'只能把已批准的发行设为当前发行。',
+                'release_unavailable':'该发行没有已发布的 Web 资源，不能作为当前发行。',
             }
             context.update(error=messages.get(code,'操作未完成，请检查输入或权限后重试。'),error_code=code)
             return render(request,'core/study.html',context,status=error.status if isinstance(error,Rejected) else 400)
@@ -163,9 +172,10 @@ def study_page(request,study_id):
     notice=request.session.pop('roster_notice:'+str(study.id),'')
     if request.method=='POST':
         op=request.POST.get('op')
+        audited=False
         with transaction.atomic():
             instance=Instance.objects.select_for_update().get(pk=1)
-            study=Study.objects.get(pk=study_id)
+            study=Study.objects.select_for_update().get(pk=study_id)
             if op=='configure':
                 guard(request.user,study,'study.configure')
                 mode=request.POST['mode']; require(mode in ('anonymous','id','password'),'mode')
@@ -225,6 +235,18 @@ def study_page(request,study_id):
                 guard(request.user,study,'recruitment.manage')
                 state=request.POST['state'];require(state in ('open','paused','closed'),'state')
                 study.recruitment=state;study.save()
+            elif op=='publication':
+                guard(request.user,study,'study.configure')
+                publication.update_policy(request.user,study,request.POST.get('study_revision'),{
+                    'public':request.POST.get('public')=='1',
+                    'public_summary':request.POST.get('public_summary',''),
+                    'public_duration':request.POST.get('public_duration',''),
+                    'public_device_requirements':request.POST.get('public_device_requirements',''),
+                    'show_closed_summary':request.POST.get('show_closed_summary')=='1'})
+                audited=True
+            elif op=='current_release':
+                publication.select_current_release(request.user,study,request.POST.get('study_revision'),request.POST.get('release_id',''))
+                audited=True
             elif op=='revoke_session':
                 guard(request.user,study,'study.configure')
                 session=Session.objects.get(pk=request.POST['session_id'],release__study=study)
@@ -266,7 +288,8 @@ def study_page(request,study_id):
                 _bump(instance)
             else:
                 raise Rejected('unknown_operation')
-            Audit.objects.create(study=study,actor=request.user,action=op,target=str(study.id))
+            if not audited:
+                Audit.objects.create(study=study,actor=request.user,action=op,target=str(study.id))
         if not notice:return redirect('/studies/'+str(study.id))
     return render(request,'core/study.html',study_context(request,study,notice))
 

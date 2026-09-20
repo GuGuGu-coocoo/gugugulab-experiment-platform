@@ -7,10 +7,12 @@ urlpatterns = [
     path('v1/admin/exports/<uuid:export_id>/download',views.exports),
 ]
 from core import gui
+from core import portal
 urlpatterns += [
-    path('',gui.home), path('login',gui.signin), path('logout',gui.signout), path('activate',gui.activate),
+    path('', portal.site_root), path('login',gui.signin), path('logout',gui.signout), path('activate',gui.activate),
     path('studies/<uuid:study_id>',gui.study_page), path('releases/<uuid:release_id>/config',gui.config),
 ]
+urlpatterns += [path('join/<uuid:study_id>',portal.entry)]
 from core.hosting import resource
 urlpatterns += [path('run/<uuid:release_id>/<path:resource_path>',resource)]
 
