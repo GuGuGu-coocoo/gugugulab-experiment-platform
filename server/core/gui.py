@@ -20,7 +20,7 @@ from .models import Study, Grant, Instance, Participant, Build, Release, Session
 from .access import guard, allowed, ACTIONS, authority_actions
 from .protocol import require, parse, Rejected
 from .views import endpoint
-from .services import digest, completion_status
+from .services import digest, completion_status, issue_recovery_code
 from .packages import validate_package, descriptor_valid, MAX_ARCHIVE
 from . import publication
 
@@ -258,6 +258,11 @@ def study_page(request,study_id):
                 token=secrets.token_urlsafe(32)
                 RecoveryPermit.objects.create(session=session,issuer=request.user,token_hash=digest(token),expires_at=timezone.now()+timedelta(minutes=15))
                 notice='同设备恢复：会话 '+str(session.id)+'；15 分钟一次性许可：'+token
+            elif op=='recover_code':
+                guard(request.user,study,'session.recover')
+                session=Session.objects.get(pk=request.POST['session_id'],release__study=study)
+                issued=issue_recovery_code(request.user,session.id)
+                notice='同设备六位恢复码（5 分钟、最多 5 次尝试，仅本次有效）：'+issued['code']
             elif op=='invite':
                 guard(request.user,study,'member.manage');guard(request.user,study,'permission.delegate')
                 require(_revision_ok(request.POST.get('revision'),instance.governance_revision),'revision_conflict',409)

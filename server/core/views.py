@@ -9,7 +9,8 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
 from .protocol import Rejected, require, parse
 from .models import Session, Study, Event, Export
-from .services import admit_request, context, receive, finish, authorize_session, completion_status, recover
+from .services import (admit_request, context, receive, finish, authorize_session, completion_status, recover,
+                       redeem_recovery_code, recover_named, RECOVERY_CODE_CAPABILITY, RECOVERY_NAMED_CAPABILITY)
 from .access import guard
 
 
@@ -55,6 +56,26 @@ def participant(request, session_id=None, action=None):
     authorize_session(session,bearer(request))
     require(action in ('status','context'),'unknown_action',404)
     return JsonResponse(context(session) if action=='context' else completion_status(session))
+
+
+@csrf_exempt
+@endpoint
+def recovery(request):
+    """Versioned same-device recovery: six-digit code or named credentials.
+
+    The adapter submits one explicit capability; an unknown or missing
+    capability fails closed instead of being routed to a guessed protocol.
+    """
+    require(request.get_host().split(':')[0] in (settings.EXPERIMENT_HOST,'127.0.0.1','testserver'), 'wrong_host',403)
+    require(request.method=='POST','method',405)
+    data=parse(request.body)
+    client=request.META.get('REMOTE_ADDR','')
+    capability=data.get('capability')
+    if capability==RECOVERY_CODE_CAPABILITY:
+        return JsonResponse(redeem_recovery_code(data,client))
+    if capability==RECOVERY_NAMED_CAPABILITY:
+        return JsonResponse(recover_named(data,client))
+    raise Rejected('unsupported_capability',409)
 
 
 @endpoint

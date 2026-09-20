@@ -3,6 +3,7 @@ from core import views
 urlpatterns = [
     path('v1/participant/sessions',views.participant),
     path('v1/participant/sessions/<uuid:session_id>/<str:action>',views.participant),
+    path('v1/participant/recovery',views.recovery),
     path('v1/admin/exports',views.exports),
     path('v1/admin/exports/<uuid:export_id>/download',views.exports),
 ]

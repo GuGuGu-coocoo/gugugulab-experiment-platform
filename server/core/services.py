@@ -1,14 +1,18 @@
 """Transactional domain operations. HTTP ACKs are formed after atomic exit."""
 import hashlib
 import hmac
+import secrets
 from datetime import timedelta
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.contrib.auth.hashers import check_password
 from django.db import transaction, IntegrityError
 from django.utils import timezone
 from jsonschema import Draft202012Validator
-from .models import Instance, Participant, Session, Event, Release, Study
+from .models import Audit, Instance, Participant, RecoveryCode, Session, Event, Release, Study
 from .protocol import require, Rejected, uuid_text, equal, validate_tree, MAX_BATCH, MAX_EVENTS, PROTOCOL
+from .access import guard
+from .throttle import check
 
 
 def digest(value):
@@ -259,3 +263,213 @@ def recover(session_id, proof, permit):
         ticket.consumed=True;ticket.save(update_fields=['consumed'])
         Audit.objects.create(study=session.release.study,actor=ticket.issuer,action='session.recovered',target=str(session.id))
     return {'session_id':str(session.id),'token':token_for(session),'task_finished':session.completion is not None}
+
+
+RECOVERY_CODE_CAPABILITY = 'recovery_code/v1'
+RECOVERY_NAMED_CAPABILITY = 'recovery_named/v1'
+RECOVERY_CODE_DIGITS = 6
+RECOVERY_CODE_TTL = timedelta(minutes=5)
+RECOVERY_CODE_MAX_ATTEMPTS = 5
+RECOVERY_RENEWAL_DAYS = 7
+RECOVERY_ISSUE_LIMIT = 10
+RECOVERY_REDEEM_CLIENT_LIMIT = 20
+RECOVERY_REDEEM_STUDY_LIMIT = 50
+RECOVERY_REDEEM_DEVICE_LIMIT = 20
+RECOVERY_REDEEM_GLOBAL_LIMIT = 60
+
+
+def recovery_code_digest(code):
+    """Server-secret HMAC of the six digits; the code itself is never stored."""
+    return hmac.new(settings.SECRET_KEY.encode(), f'gep-recovery-code:{code}'.encode(), hashlib.sha256).hexdigest()
+
+
+def _recovery_binding(data):
+    """Require the fixed adapter binding every redemption must repeat."""
+    require(all(key in data for key in ('instance_id', 'study_id', 'release_id', 'build_id')), 'invalid_binding')
+    for key in ('instance_id', 'study_id', 'release_id', 'build_id'):
+        uuid_text(data[key])
+    return {key: data[key] for key in ('instance_id', 'study_id', 'release_id', 'build_id')}
+
+
+def _binding_matches(release, binding):
+    return (binding['instance_id'] == str(Instance.objects.get(pk=1).instance_id)
+            and binding['study_id'] == str(release.study_id)
+            and binding['release_id'] == str(release.id)
+            and binding['build_id'] == str(release.build_id))
+
+
+def _redeem_throttle(kind, binding, client_key, proof):
+    """Bounded study/device/client/global counters.
+
+    Labels contain only server-side identifiers and a non-reversible digest of
+    the submitted proof; the raw code and proof are never part of a key.
+    """
+    instance_id = str(Instance.objects.get(pk=1).instance_id)
+    check(f'{kind}:{instance_id}', limit=RECOVERY_REDEEM_GLOBAL_LIMIT)
+    study = Study.objects.filter(pk=binding['study_id']).first()
+    check(f'{kind}:{instance_id}:study:{study.pk if study is not None else "unknown"}', limit=RECOVERY_REDEEM_STUDY_LIMIT)
+    if client_key:
+        check(f'{kind}:{instance_id}:client:{client_key[:64]}', limit=RECOVERY_REDEEM_CLIENT_LIMIT)
+    check(f'{kind}:{instance_id}:device:{digest(proof)}', limit=RECOVERY_REDEEM_DEVICE_LIMIT)
+
+
+def _renew_session(session):
+    session.expires_at = timezone.now() + timedelta(days=RECOVERY_RENEWAL_DAYS)
+    session.save(update_fields=['expires_at'])
+
+
+def issue_recovery_code(issuer, session_id):
+    """Issue the one live six-digit code for a session.
+
+    Requires the current ``session.recover`` authority (whose ``study.view``
+    prerequisite is enforced by :func:`core.access.guard`) on a live account;
+    the session must not be revoked. A newer issuance supersedes any earlier
+    unconsumed ticket, so exactly one code per session can ever redeem. The raw
+    digits are returned to the issuing researcher only and are never persisted.
+    """
+    with transaction.atomic():
+        session = Session.objects.select_for_update().select_related('release__study').get(pk=session_id)
+        study = session.release.study
+        actor = get_user_model().objects.filter(pk=getattr(issuer, 'pk', None)).first()
+        require(actor is not None, 'forbidden', 403)
+        check(f'recovery-code-issue:{Instance.objects.get(pk=1).instance_id}:{study.pk}:{actor.pk}', limit=RECOVERY_ISSUE_LIMIT)
+        guard(actor, study, 'session.recover')
+        require(not session.revoked, 'not_recoverable', 409)
+        RecoveryCode.objects.filter(session=session, consumed=False, superseded=False).update(superseded=True)
+        for _ in range(32):
+            code = f'{secrets.randbelow(10 ** RECOVERY_CODE_DIGITS):0{RECOVERY_CODE_DIGITS}d}'
+            code_hash = recovery_code_digest(code)
+            if not RecoveryCode.objects.filter(code_hash=code_hash).exists():
+                break
+        else:
+            raise Rejected('recovery_code_unavailable', 503)
+        ticket = RecoveryCode.objects.create(session=session, study=study, release=session.release, issuer=actor,
+                                             code_hash=code_hash, expires_at=timezone.now() + RECOVERY_CODE_TTL)
+        Audit.objects.create(study=study, actor=actor, action='recovery.code_issued', target=str(session.id),
+                             after={'capability': RECOVERY_CODE_CAPABILITY, 'expires_at': ticket.expires_at.isoformat()})
+        return {'capability': RECOVERY_CODE_CAPABILITY, 'code': code, 'session_id': str(session.id),
+                'expires_at': ticket.expires_at, 'attempts_allowed': RECOVERY_CODE_MAX_ATTEMPTS}
+
+
+def _code_redeemable(ticket, binding, proof):
+    """All redemption predicates for one locked ticket; any miss denies alike."""
+    session = ticket.session
+    if ticket.consumed or ticket.superseded or ticket.expires_at <= timezone.now():
+        return False
+    if ticket.attempts >= RECOVERY_CODE_MAX_ATTEMPTS:
+        return False
+    if ticket.study_id != session.release.study_id or ticket.release_id != session.release_id:
+        return False
+    if not _binding_matches(session.release, binding):
+        return False
+    if session.revoked:
+        return False
+    if not hmac.compare_digest(session.proof_hash, digest(proof)):
+        return False
+    issuer = get_user_model().objects.filter(pk=ticket.issuer_id).first()
+    if issuer is None:
+        return False
+    try:
+        guard(issuer, session.release.study, 'session.recover')
+    except Rejected:
+        return False
+    return True
+
+
+def redeem_recovery_code(data, client_key=None):
+    """Redeem a six-digit code from the original device.
+
+    The device submits the code, its private proof and the frozen binding; the
+    server resolves the session internally, so a public session/participant UUID
+    is not required and the code alone can never reveal a session or credential.
+    Every failed attempt is persisted even though the call raises, and the
+    successful consume is single-writer atomic.
+    """
+    require(data.get('capability') == RECOVERY_CODE_CAPABILITY, 'unsupported_capability', 409)
+    binding = _recovery_binding(data)
+    proof = data.get('proof')
+    require(isinstance(proof, str) and 43 <= len(proof) <= 128, 'invalid_proof')
+    code = data.get('code')
+    require(isinstance(code, str) and len(code) == RECOVERY_CODE_DIGITS and code.isdigit(), 'invalid_code')
+    _redeem_throttle('recovery-code-redeem', binding, client_key, proof)
+    code_hash = recovery_code_digest(code)
+    denied, payload = True, None
+    with transaction.atomic():
+        ticket = (RecoveryCode.objects.select_for_update().select_related('session__release__study')
+                  .filter(code_hash=code_hash).first())
+        if ticket is not None:
+            if _code_redeemable(ticket, binding, proof):
+                session = ticket.session
+                _renew_session(session)
+                ticket.consumed = True
+                ticket.save(update_fields=['consumed'])
+                Audit.objects.create(study=ticket.study, actor=ticket.issuer, action='recovery.code_redeemed', target=str(session.id),
+                                     after={'capability': RECOVERY_CODE_CAPABILITY})
+                denied = False
+                payload = {'capability': RECOVERY_CODE_CAPABILITY, 'session_id': str(session.id), 'token': token_for(session),
+                           'task_finished': session.completion is not None}
+            elif ticket.attempts < RECOVERY_CODE_MAX_ATTEMPTS:
+                ticket.attempts += 1
+                ticket.last_attempt_at = timezone.now()
+                ticket.save(update_fields=['attempts', 'last_attempt_at'])
+    if denied:
+        raise Rejected('recovery_denied', 403)
+    return payload
+
+
+def _named_redeemable(session, binding, proof, password):
+    """Frozen-mode, active-roster and same-device checks for named continuation."""
+    release = session.release
+    if release.config.get('mode') != 'password':
+        return False
+    if not _binding_matches(release, binding):
+        return False
+    if session.revoked:
+        return False
+    participant = session.participant
+    if not participant.active:
+        return False
+    if participant.expires_at is not None and participant.expires_at <= timezone.now():
+        return False
+    if not hmac.compare_digest(session.proof_hash, digest(proof)):
+        return False
+    return check_password(password, participant.password_hash)
+
+
+def recover_named(data, client_key=None):
+    """Same-device named continuation with the frozen roster credentials.
+
+    The server validates the frozen release mode, the matching participant ID,
+    the configured password and the original device proof inside one
+    transaction. A public participant code or session UUID alone restores
+    nothing, and a locally front-locked candidate is refused here: it needs the
+    separately issued code or long permit path.
+    """
+    require(data.get('capability') == RECOVERY_NAMED_CAPABILITY, 'unsupported_capability', 409)
+    participant_code = data.get('participant_code')
+    require(isinstance(participant_code, str) and 0 < len(participant_code) <= 128, 'invalid_request')
+    password = data.get('password')
+    require(isinstance(password, str), 'invalid_request')
+    proof = data.get('proof')
+    require(isinstance(proof, str) and 43 <= len(proof) <= 128, 'invalid_proof')
+    require(type(data.get('front_locked', False)) is bool, 'invalid_request')
+    binding = _recovery_binding(data)
+    _redeem_throttle('recovery-named-redeem', binding, client_key, proof)
+    require(not data.get('front_locked', False), 'front_locked', 403)
+    denied, payload = True, None
+    with transaction.atomic():
+        candidates = (Session.objects.select_for_update().select_related('release__build', 'participant')
+                      .filter(participant__study_id=binding['study_id'], participant__code=participant_code)
+                      .order_by('-created_at'))
+        for session in candidates:
+            if _named_redeemable(session, binding, proof, password):
+                _renew_session(session)
+                Audit.objects.create(study=session.release.study, actor=None, action='recovery.named_redeemed', target=str(session.id),
+                                     after={'capability': RECOVERY_NAMED_CAPABILITY})
+                denied = False
+                payload = {'capability': RECOVERY_NAMED_CAPABILITY, 'session_id': str(session.id), 'token': token_for(session),
+                           'task_finished': session.completion is not None}
+                break
+    if denied:
+        raise Rejected('recovery_denied', 403)
+    return payload

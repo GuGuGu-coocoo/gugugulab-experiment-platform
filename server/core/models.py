@@ -107,7 +107,9 @@ class Export(Identified):
 
 class Audit(models.Model):
     study = models.ForeignKey(Study, on_delete=models.PROTECT, null=True, blank=True)
-    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    # Device-initiated recovery carries no human actor; every governance and
+    # administrative action still names one.
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True)
     action = models.CharField(max_length=48)
     target = models.CharField(max_length=128)
     before = models.JSONField(null=True)
@@ -130,6 +132,29 @@ class RecoveryPermit(Identified):
     expires_at = models.DateTimeField()
     consumed = models.BooleanField(default=False)
     issuer = models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT)
+
+class RecoveryCode(Identified):
+    """Versioned six-digit one-time recovery ticket bound to one session.
+
+    The digits themselves are never stored: ``code_hash`` is an HMAC of the
+    submitted code under the server secret, so a database or log reader cannot
+    enumerate the million possible codes. The row binds the session, its study,
+    its frozen release and the issuing researcher; redemption additionally
+    requires the original device proof, the same binding, a live issuer
+    authorization and the five-attempt/five-minute limits. ``superseded`` marks
+    an earlier ticket invalidated by a newer issuance for the same session.
+    """
+    session = models.ForeignKey(Session, on_delete=models.PROTECT)
+    study = models.ForeignKey(Study, on_delete=models.PROTECT, related_name='+')
+    release = models.ForeignKey(Release, on_delete=models.PROTECT, related_name='+')
+    issuer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    code_hash = models.CharField(max_length=64, unique=True)
+    expires_at = models.DateTimeField()
+    consumed = models.BooleanField(default=False)
+    superseded = models.BooleanField(default=False)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    last_attempt_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
 
 class Throttle(models.Model):
     key = models.CharField(max_length=64,primary_key=True)
