@@ -45,6 +45,7 @@ prerequisite (the scoped tunnel) records the exact blocker and exits non-zero.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import http.client
 import json
@@ -141,13 +142,35 @@ def pck_version(raw):
 
 
 def run_powershell_command(command, timeout=120):
-    return subprocess.run(["powershell", "-NoProfile", "-Command", command],
-                          capture_output=True, text=True, timeout=timeout)
+    """Run one PowerShell command and read its output as UTF-8.
+
+    A redirected PowerShell 5.1 host writes in the console output encoding, which
+    corrupts non-ASCII paths and window titles on a machine whose locale cannot
+    represent them; forcing UTF-8 on both sides keeps Chinese/space paths exact
+    (the Windows acceptance requires a real Chinese path).
+    """
+    wrapped = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;" + command
+    return subprocess.run(["powershell", "-NoProfile", "-Command", wrapped],
+                          capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          timeout=timeout)
 
 
 def ps_quote(value):
     """One PowerShell single-quoted literal; apostrophes are doubled."""
     return "'" + str(value).replace("'", "''") + "'"
+
+
+def cmd_path_quote(value):
+    """One quoted path for a ``.cmd`` redirection target.
+
+    The wrapper is a command file (never a PowerShell script file), so the
+    redirection target follows ``cmd`` rules: quote the path when it contains a
+    separator or any character the shell would interpret.
+    """
+    text = str(value)
+    if any(character in text for character in ' \t()&^<>|,"'):
+        return '"' + text.replace('"', '""') + '"'
+    return text
 
 
 def active_console_session():
@@ -195,6 +218,10 @@ class Api:
         merged = {"Host": host, "Accept": "application/json"}
         if self.cookies:
             merged["Cookie"] = "; ".join(f"{name}={value}" for name, value in sorted(self.cookies.items()))
+        if self.csrf:
+            # Session-authenticated POSTs (the authorized export) pass Django's
+            # CSRF middleware; this is the same token the browser form carries.
+            merged["X-CSRFToken"] = self.csrf
         if headers:
             merged.update(headers)
         try:
@@ -505,6 +532,7 @@ class Launch:
         self.out_path = Path(out_path)
         self.err_path = Path(err_path)
         self.script_path = Path(script_path)
+        self.wrapper_path = None
         self.interactive = interactive
         self.record = {}
         self.launcher = None
@@ -563,16 +591,106 @@ class Harness:
             return str(path)
 
     def snapshot_store(self, label, storage):
-        """Copy the native store into the run evidence for the strict gate."""
+        """Preserve the raw store bytes and derive a self-contained snapshot.
+
+        The store runs in WAL mode, so the main database file alone can miss
+        schema and rows that still live in the ``-wal`` file (a killed program
+        never checkpoints). Two artifacts are kept strictly apart:
+
+        * the **raw copies** of every store file (including ``-wal``/``-shm``)
+          are written byte for byte into the evidence directory and digested, so
+          the original evidence can never be replaced by a derived artifact;
+        * the **derived snapshot** the strict gate reads is produced with the
+          SQLite backup API from a scratch copy of those bytes, so it is
+          transaction consistent and self-contained (no ``-wal`` sidecar) even
+          though the live store was never checkpointed.
+
+        A locked, unreadable or corrupt store raises instead of yielding a
+        snapshot that silently lost committed rows: the raw copies stay in place
+        for inspection and the case fails. The live store itself is only read.
+        """
         target = self.evidence_dir(label)
-        copies = {}
-        for name in ("queue.sqlite", "writer.sqlite"):
+        working = target / "working"
+        if working.exists():
+            shutil.rmtree(working)
+        working.mkdir(parents=True)
+        copies = {"derivation": "sqlite-backup", "originals": {}}
+        for name in ("queue.sqlite", "queue.sqlite-wal", "queue.sqlite-shm", "writer.sqlite"):
             source = Path(storage) / name
-            if source.is_file():
-                destination = target / name
-                shutil.copy2(source, destination)
-                copies[name] = self.rel(destination)
+            if not source.is_file():
+                continue
+            original = target / name
+            shutil.copy2(source, original)
+            copies["originals"][name] = {"path": self.rel(original),
+                                         "sha256": sha256_file(original),
+                                         "size": original.stat().st_size}
+            shutil.copy2(source, working / name)
+        queue = working / "queue.sqlite"
+        if not queue.is_file():
+            raise HarnessError(f"native store snapshot source missing: {storage}/queue.sqlite")
+        snapshot = target / "queue.snapshot.sqlite"
+        if snapshot.exists():
+            snapshot.unlink()
+        try:
+            source = sqlite3.connect(str(queue), timeout=30)
+            try:
+                state = source.execute("PRAGMA integrity_check").fetchone()
+                if not state or str(state[0]).lower() != "ok":
+                    raise HarnessError(f"store copy failed integrity_check: {state}")
+                rows_source = [row[0] for row in source.execute("SELECT value FROM sessions ORDER BY id")]
+                derived = sqlite3.connect(str(snapshot))
+                try:
+                    source.backup(derived)
+                    derived.execute("PRAGMA journal_mode=DELETE")
+                    derived.commit()
+                    state = derived.execute("PRAGMA integrity_check").fetchone()
+                    if not state or str(state[0]).lower() != "ok":
+                        raise HarnessError(f"derived snapshot failed integrity_check: {state}")
+                    rows_derived = [row[0] for row in derived.execute("SELECT value FROM sessions ORDER BY id")]
+                finally:
+                    derived.close()
+            finally:
+                source.close()
+        except sqlite3.Error as error:
+            raise HarnessError(f"consistent snapshot derivation failed for {storage} "
+                               f"({type(error).__name__}: {error}); the preserved raw copies stay for inspection") from error
+        if rows_derived != rows_source:
+            raise HarnessError("derived snapshot does not reproduce the preserved store rows")
+        shutil.rmtree(working, ignore_errors=True)
+        copies["queue.sqlite"] = self.rel(snapshot)
+        copies["snapshot"] = {"path": self.rel(snapshot), "sha256": sha256_file(snapshot),
+                              "size": snapshot.stat().st_size, "journal_mode": "delete",
+                              "integrity_check": "ok"}
         return copies
+
+    def scoped_export(self, payload, session_id, target):
+        """Preserve the whole authorized download, then derive the session subset.
+
+        The platform export endpoint is study-scoped, while the strict gate
+        validates one session's rows (event ids, raw values, reconciliation). The
+        full download is therefore written byte for byte next to the derived file
+        (``<name>-full<suffix>``) and digested; the derived file carries exactly
+        the downloaded lines of the session under test, in download order. Nothing
+        is rewritten or synthesized, and the derivation stays re-checkable because
+        the original download is preserved.
+        """
+        target = Path(target)
+        full = target.with_name(f"{target.stem}-full{target.suffix}")
+        full.write_bytes(payload)
+        kept, selected = [], []
+        for line in payload.decode("utf-8").splitlines():
+            if not line.strip():
+                continue
+            document = json.loads(line)
+            if (document.get("record") or {}).get("session_id") == session_id:
+                kept.append(line)
+                selected.append(document)
+        target.write_bytes(("\n".join(kept) + ("\n" if kept else "")).encode("utf-8"))
+        info = {"path": self.rel(full), "sha256": sha256_file(full), "size": full.stat().st_size,
+                "rows_total": len([line for line in payload.decode("utf-8").splitlines() if line.strip()]),
+                "rows_kept": len(kept), "subset_path": self.rel(target),
+                "subset_sha256": sha256_file(target)}
+        return selected, info
 
     def host_facts(self):
         version = sys.getwindowsversion() if hasattr(sys, "getwindowsversion") else None
@@ -822,13 +940,37 @@ class Harness:
             f"$p=Start-Process -FilePath {ps_quote(entry)} -WorkingDirectory {ps_quote(workdir)} "
             f"-ArgumentList {ps_quote(arg_string)} -PassThru "
             f"-RedirectStandardOutput {ps_quote(out_path)} -RedirectStandardError {ps_quote(err_path)}",
-            "$proc=Get-Process -Id $p.Id",
-            f"[pscustomobject]@{{pid=$p.Id;path=$proc.Path;session_id=$proc.SessionId;"
-            f"start_time=$proc.StartTime.ToString('o');window_title=$proc.MainWindowTitle;"
-            f"session_name=$env:SESSIONNAME}}|ConvertTo-Json -Compress|Set-Content -Encoding UTF8 "
-            f"{ps_quote(record_path)}",
-            "$p.WaitForExit()",
-            f"[pscustomobject]@{{pid=$p.Id;exit=$p.ExitCode;exited=$true}}|ConvertTo-Json -Compress|"
+            # A program that is refused can exit within a second, and
+            # ``Start-Process -PassThru`` only reports a real exit code when
+            # event raising was enabled while the process was still alive. So it
+            # is the very first statement after the start; a failure here is not
+            # fatal, the record below reports an unknown code honestly instead.
+            "try{$p.EnableRaisingEvents=$true}catch{}",
+            "$proc=$null",
+            "try{$proc=Get-Process -Id $p.Id -ErrorAction Stop}catch{$proc=$null}",
+            "$identity=[ordered]@{pid=$p.Id;path='';session_id=$null;start_time='';window_title='';"
+            "session_name=$env:SESSIONNAME}",
+            "if($proc -ne $null){",
+            "  $identity.path=$proc.Path;$identity.session_id=$proc.SessionId;"
+            "$identity.start_time=$proc.StartTime.ToString('o')",
+            # The window title can only be enumerated from the session that owns
+            # the window, so the launcher (running in the interactive session)
+            # waits briefly for the real title; an already-exited program simply
+            # records no title.
+            "  $deadline=(Get-Date).AddSeconds(30)",
+            "  while(-not $proc.HasExited -and -not $proc.MainWindowTitle -and (Get-Date) -lt $deadline)"
+            "{Start-Sleep -Milliseconds 500;$proc.Refresh()}",
+            "  if(-not $proc.HasExited){$identity.window_title=$proc.MainWindowTitle}",
+            "}",
+            f"$identity|ConvertTo-Json -Compress|Set-Content -Encoding UTF8 {ps_quote(record_path)}",
+            # The exit record is always written: a program that ended before the
+            # identity could be read, a gone process or an unavailable exit code
+            # must never leave the harness waiting for a record that cannot come.
+            "$code=$null",
+            "try{$p.WaitForExit()}catch{}",
+            "try{$code=$p.ExitCode}catch{$code=$null}",
+            "if($code -eq $null){try{$code=(Get-Process -Id $p.Id -ErrorAction Stop).ExitCode}catch{$code=$null}}",
+            f"[pscustomobject]@{{pid=$p.Id;exit=$code;exited=$true}}|ConvertTo-Json -Compress|"
             f"Set-Content -Encoding UTF8 {ps_quote(exit_path)}",
             "",
         ])
@@ -836,14 +978,63 @@ class Harness:
         script_path.write_text("\ufeff" + script, encoding="utf-8")
         return script_path
 
-    def spawn_launcher(self, script_path):
+    def spawn_launcher(self, script_path, out_path=None, err_path=None):
         """Start our own launcher script without waiting for the program it starts.
 
         The launcher writes the launch record as soon as the program exists and
-        then waits for it; the harness never waits for the whole experiment.
+        then waits for it; the harness never waits for the whole experiment. The
+        launcher's own streams are captured next to the program's evidence, so a
+        generator/launcher failure is visible instead of silent.
         """
-        return subprocess.Popen(["powershell", "-NoProfile", "-File", str(script_path)],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        stdout = open(out_path, "ab") if out_path else subprocess.DEVNULL
+        stderr = open(err_path, "ab") if err_path else subprocess.DEVNULL
+        try:
+            return subprocess.Popen(self.launcher_command(script_path), stdout=stdout, stderr=stderr)
+        finally:
+            for stream in (stdout, stderr):
+                if hasattr(stream, "close"):
+                    stream.close()
+
+    def launcher_command(self, script_path):
+        """The real launcher invocation for one generated script body.
+
+        The generated body travels as an encoded command instead of a ``-File``
+        script file: a default Windows client runs with the PowerShell script
+        policy ``Restricted``, and the harness must not change the machine policy
+        or pass an execution-policy override. ``-EncodedCommand`` is a command,
+        not a script file, so the same owned launcher runs on a default machine;
+        the generated ``.ps1`` stays as evidence of exactly what ran.
+        """
+        script = Path(script_path).read_text(encoding="utf-8-sig")
+        encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+        return ["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
+
+    def task_command_path(self, script_path, out_path=None, err_path=None):
+        """One short ``.cmd`` vehicle for the scheduled-task action.
+
+        ``schtasks /tr`` is limited to 261 characters, so the encoded launcher
+        cannot travel in the action itself. The wrapper is a plain command file
+        (never a PowerShell script file) and carries the same owned command; the
+        launcher's own streams are redirected next to the program's evidence so a
+        generator/launcher failure is visible instead of silent.
+        """
+        wrapper = Path(script_path).with_suffix(".cmd")
+        command = " ".join(self.launcher_command(script_path))
+        if out_path is not None and err_path is not None:
+            command += f" > {cmd_path_quote(out_path)} 2> {cmd_path_quote(err_path)}"
+        wrapper.write_text("@echo off\r\n" + command + "\r\n", encoding="utf-8")
+        return wrapper
+
+    @staticmethod
+    def release_scripts(launch):
+        """Remove only the generated launcher/wrapper files of this launch."""
+        for path in (launch.script_path, launch.wrapper_path):
+            if path is None:
+                continue
+            try:
+                Path(path).unlink()
+            except OSError:
+                pass
 
     def run_os(self, command, timeout=60):
         """One owned OS command (schtasks); the seam for failure-path tests."""
@@ -880,10 +1071,7 @@ class Harness:
                     except (OSError, subprocess.TimeoutExpired):
                         pass
         self.delete_own_task(launch)
-        try:
-            launch.script_path.unlink()
-        except OSError:
-            pass
+        self.release_scripts(launch)
         launch.record["launch_exit"] = launch.launch_exit
         launch.record["launcher_closed"] = True
         launch.closed = True
@@ -911,10 +1099,7 @@ class Harness:
         if launch.launcher is not None:
             launch.launch_exit = launch.launcher.returncode
         self.delete_own_task(launch)
-        try:
-            launch.script_path.unlink()
-        except OSError:
-            pass
+        self.release_scripts(launch)
         launch.closed = True
         if launch in self.launches:
             self.launches.remove(launch)
@@ -933,6 +1118,8 @@ class Harness:
         err_path = evidence / "program.err.txt"
         record_path = evidence / "launch.json"
         exit_path = evidence / "exit.json"
+        launcher_out = evidence / "launcher.out.txt"
+        launcher_err = evidence / "launcher.err.txt"
         for path in (record_path, exit_path):
             if path.exists():
                 path.unlink()
@@ -944,14 +1131,15 @@ class Harness:
         self.launches.append(launch)
         try:
             if interactive:
-                launch.launcher = self.spawn_launcher(script_path)
+                launch.launcher = self.spawn_launcher(script_path, launcher_out, launcher_err)
             else:
                 session_id = active_console_session()
                 if session_id is None:
                     raise HarnessError("no active interactive console session; a visible window cannot be verified")
                 launch.task_name = f"GEP-Native-WN-{uuid.uuid4().hex[:8]}"
+                launch.wrapper_path = self.task_command_path(script_path, launcher_out, launcher_err)
                 create = self.run_os(["schtasks", "/create", "/tn", launch.task_name, "/tr",
-                                      f'powershell -NoProfile -File "{script_path}"',
+                                      f'cmd /c "{launch.wrapper_path}"',
                                       "/sc", "once", "/st", "00:00", "/it", "/f"])
                 if create.returncode != 0:
                     raise HarnessError(f"scheduled task creation failed: "
@@ -997,6 +1185,39 @@ class Harness:
                         return marker, text
             time.sleep(0.5)
         return None, text
+
+    def wait_for_marker_or_exit(self, out_path, exit_path, markers, timeout):
+        """Wait for one marker or for the owned program's real exit record.
+
+        A program that refuses before the boundary (a real API refusal, a damaged
+        configuration) exits instead of printing the marker; waiting out the whole
+        timeout would hide the reason and waste the run. The exit record is
+        written by our own launcher, so its presence means this program ended.
+        Returns ``(marker, text, exit_code)`` with ``exit_code`` None while the
+        program is still running.
+        """
+        deadline = time.time() + timeout
+        text = ""
+        while time.time() < deadline:
+            if Path(out_path).is_file():
+                text = Path(out_path).read_text(encoding="utf-8", errors="replace")
+                for marker in markers:
+                    if marker in text:
+                        return marker, text, None
+            if Path(exit_path).is_file():
+                try:
+                    document = read_json(exit_path)
+                except ValueError:
+                    document = None
+                if document is not None:
+                    if Path(out_path).is_file():
+                        text = Path(out_path).read_text(encoding="utf-8", errors="replace")
+                    for marker in markers:
+                        if marker in text:
+                            return marker, text, None
+                    return None, text, document.get("exit")
+            time.sleep(0.5)
+        return None, text, None
 
     def verify_identity(self, record):
         """Re-read the live process and compare the complete recorded identity.
@@ -1082,7 +1303,13 @@ class Harness:
         return None
 
     def verify_owned(self, case, record, entry, require_window=True, label=""):
-        """Prove the process really is this launch, then inspect only that PID."""
+        """Prove the process really is this launch, then inspect only that PID.
+
+        The live identity is read from this process (path, console session, start
+        time). The window title is observed by the launcher from the interactive
+        session that owns the window; when the live read cannot enumerate it
+        (a harness running over SSH), the launcher's observation is used.
+        """
         pid = record.get("pid")
         identity = self.process_identity(pid) if pid else None
         live = identity or record
@@ -1097,6 +1324,8 @@ class Harness:
         start_time = str(live.get("start_time") or record.get("start_time") or "")
         case.check(bool(start_time), f"{label}自有 PID 记录真实启动时间", start_time)
         title = str((live or {}).get("window_title") or "")
+        if not title.strip():
+            title = str(record.get("window_title") or "")
         if require_window:
             case.check(bool(title.strip()), f"{label}自有 PID 拥有真实可见窗口标题（非标题无关进程）", title or None)
         case.evidence.setdefault("processes", []).append({"pid": pid, "path": path, "session_id": session_id,
@@ -1131,18 +1360,26 @@ class Harness:
                                                      "arguments": redact(arguments),
                                                      "stdout_tail": stdout[-400:], "stderr_tail": stderr[-200:]})
         (self.evidence_dir(label) / "stdout.txt").write_text(stdout, encoding="utf-8")
-        return {"record": record, "exit": code, "stdout": stdout, "stderr": stderr, "timed_out": False}
+        return {"record": record, "exit": code, "stdout": stdout, "stderr": stderr, "timed_out": False,
+                "stdout_path": self.rel(self.evidence_dir(label) / "stdout.txt")}
 
-    def kill_program(self, case, mode, storage, arguments, label, timeout, marker):
-        """Run until a boundary marker, then hard-kill only the verified owned PID."""
+    def kill_program(self, case, mode, storage, arguments, label, timeout, marker, target=None, manifest=None):
+        """Run until a boundary marker, then hard-kill only the verified owned PID.
+
+        A program that was refused before the boundary (or that exited for any
+        other reason) ends the wait immediately: the real exit code and the
+        program's own output tail are recorded instead of an anonymous timeout.
+        """
         info = self.releases["modes"][mode]
-        target = Path(info["_target"])
-        entry = str(target / Path(info["_manifest"]["entry"]))
+        target = Path(target) if target is not None else Path(info["_target"])
+        manifest = manifest if manifest is not None else info["_manifest"]
+        entry = str(target / Path(manifest["entry"]))
         launch = self.start_program(entry, str(target), storage, arguments, label, timeout)
         record = launch.record
         self.verify_owned(case, record, entry, require_window=False, label=label)
-        found, text = self.wait_for_marker(launch.out_path, (marker,), timeout)
-        case.check(found == marker, f"{label}程序到达边界标记 {marker}", found)
+        found, text, exit_code = self.wait_for_marker_or_exit(launch.out_path, launch.exit_path, (marker,), timeout)
+        case.check(found == marker, f"{label}程序到达边界标记 {marker}",
+                   {"found": found, "exit": exit_code, "stdout_tail": text[-400:]})
         killed = self.stop_owned(record)
         case.check(killed["outcome"] == "stopped", f"{label}仅终止身份一致的自有 PID",
                    {"pid": record.get("pid"), "outcome": killed["outcome"], "problems": killed["problems"]})
@@ -1151,7 +1388,10 @@ class Harness:
         case.evidence.setdefault("kills", []).append({"label": label, "pid": record.get("pid"),
                                                       "marker": found, "stopped": killed["outcome"] == "stopped",
                                                       "stop_problems": killed["problems"],
-                                                      "exit": (exit_document or {}).get("exit")})
+                                                      "exit": (exit_document or {}).get("exit"),
+                                                      "stdout_tail": text[-400:],
+                                                      "stdout_path": self.rel(self.evidence_dir(label) / "program.stdout.txt")})
+        (self.evidence_dir(label) / "program.stdout.txt").write_text(text, encoding="utf-8")
         return {"record": record, "stdout": text}
 
     # ------------------------------------------------------------------- cases
@@ -1162,11 +1402,12 @@ class Harness:
             target = Path(info["_target"])
             entry = str(target / Path(info["_manifest"]["entry"]))
             launch = self.start_program(
-                entry, str(target), self.run_root / "wn01-storage", ["--synthetic-auto"], "WN01", 60)
+                entry, str(target), self.run_root / "wn01-storage",
+                ["--synthetic-auto", "--stop-after-trial"], "WN01", 60)
             record = launch.record
             live = self.verify_owned(case, record, entry, require_window=True, label="WN01 ")
-            case.check(record.get("session_name", "").startswith("Console")
-                       or active_console_session() is not None,
+            session_name = str(record.get("session_name") or "")
+            case.check(session_name.startswith("Console") or active_console_session() is not None,
                        "WN01 启动发生在交互会话", record.get("session_name"))
             case.check(not record.get("timed_out"), "WN01 启动记录在等待窗口内产生")
             stopped = self.stop_owned(record)
@@ -1175,8 +1416,12 @@ class Harness:
                         "problems": stopped["problems"]})
             self.close_launch(launch)
             case.evidence["launch"] = {key: value for key, value in record.items() if key != "arguments"}
-            case.evidence["launch"]["window_title"] = (live or {}).get("window_title")
-            case.evidence["launch"]["executable_path"] = (live or {}).get("path")
+            # The launcher observes the real title from the interactive session that
+            # owns the window; the harness's own live read can come back empty when
+            # it runs over SSH, so an empty re-read never erases the observed title.
+            observed = str((live or {}).get("window_title") or "").strip()
+            case.evidence["launch"]["window_title"] = observed or str(record.get("window_title") or "")
+            case.evidence["launch"]["executable_path"] = (live or {}).get("path") or record.get("path")
             case.evidence["launch"]["console_session"] = active_console_session()
         except HarnessError as error:
             case.check(False, "WN01 交互启动流程", str(error))
@@ -1184,10 +1429,12 @@ class Harness:
 
     def mode_arguments(self, case, mode, code=None):
         info = self.releases["modes"][mode]
-        code = code or info["participant_codes"][0]
         arguments = ["--synthetic-auto"]
-        if mode != "anonymous":
-            arguments.append(f"--participant-code={code}")
+        if mode == "anonymous":
+            # The anonymous release has no roster identity at all.
+            return arguments
+        code = code or info["participant_codes"][0]
+        arguments.append(f"--participant-code={code}")
         if mode == "password":
             password = self.accounts.get("participants", {}).get(mode, {}).get(code, {}).get("password")
             case.require(bool(password), f"{mode}：私有账号产物提供名单口令", None)
@@ -1224,8 +1471,11 @@ class Harness:
                    {"sessions": len(sessions), "cleaned": len(cleaned)})
         export_id, payload = self.api.export_jsonl(info["study_id"])
         target = self.evidence_dir(label) / "export.jsonl"
-        target.write_bytes(payload)
-        lines = [json.loads(line) for line in payload.decode("utf-8").splitlines() if line.strip()]
+        # The platform export is study-scoped and the study may already carry
+        # other sessions (WN01 runs first in the anonymous study); the case
+        # evidence keeps the full download and carries exactly this session's
+        # downloaded rows in the derived file.
+        lines, export_full = self.scoped_export(payload, session.get("id"), target)
         export_events = [entry["record"] for entry in lines]
         export_ids = [event.get("event_id") for event in export_events]
         export_values = sorted(float(event["payload"]["rt_ms"]) for event in export_events
@@ -1241,6 +1491,7 @@ class Harness:
                 "boundary_raw_values": raw_values(session), "export_ids": export_ids,
                 "export_values": export_values, "export_id": export_id,
                 "export_path": self.rel(target), "export_sha256": sha256_file(target),
+                "export_full": export_full,
                 "store_copy": boundary_copy, "cleaned": bool(cleaned),
                 "stdout": self.rel(self.evidence_dir(f"{label}-complete") / "stdout.txt")}
 
@@ -1332,36 +1583,55 @@ class Harness:
                                         "killed": killed["record"].get("pid"),
                                         "store_copy": offline_copy, "stdout_tail": killed["stdout"][-200:]}
             # (2) reconnect: the same session resumes and uploads the same ids.
-            resumed = self.run_program(case, mode, storage, named, "WN03-reconnect", 240)
-            case.check("SYNTHETIC_DONE" in resumed["stdout"], "WN03：重连后同一会话完成并远端确认",
-                       resumed["stdout"][-200:])
+            #     The completion acknowledgement is held back first: the retained
+            #     local state (records kept, pending cleared, completion declared,
+            #     no tombstone) is the real reconnect evidence. The retry then
+            #     confirms the completion and writes the cleaned tombstone.
+            self.set_proxy("drop-completion")
+            resumed = self.run_program(case, mode, storage, named, "WN03-reconnect", 240, expect_exit=3)
+            self.set_proxy("pass")
+            case.check("SYNTHETIC_TIMEOUT" in resumed["stdout"],
+                       "WN03：重连补传后完成声明如实等待确认（不假成功）", resumed["stdout"][-200:])
             store = read_store(storage)
-            session = [document for document in store["sessions"] if document.get("kind") == "session"][0]
+            sessions = [document for document in store["sessions"] if document.get("kind") == "session"]
+            case.require(len(sessions) == 1, "WN03：重连后保留同一条本地会话", len(sessions))
+            session = sessions[0]
             case.check(not session.get("pending"), "WN03：重连后待上传队列清空")
             case.check(set(offline_ids) <= set(store_event_ids(session)),
                        "WN03：重连后事件 ID 保持（不重新生成）")
             case.check(session.get("completion") is not None, "WN03：本地声明完成")
+            case.check(not [document for document in store["sessions"] if document.get("kind") == "cleaned"],
+                       "WN03：完成声明未被确认前不写清理墓碑")
             case.evidence["reconnect"] = {"session_id": session.get("id"), "event_ids": store_event_ids(session),
                                           "segments": session.get("segments"),
                                           "store_copy": self.snapshot_store("WN03-reconnect", storage)}
+            completed = self.run_program(case, mode, storage, named + ["--await-upload"],
+                                         "WN03-reconnect-complete", 240)
+            case.check("SYNTHETIC_DATA_ONLY_DONE" in completed["stdout"],
+                       "WN03：重试的完成被确认并写入清理墓碑", completed["stdout"][-200:])
+            store = read_store(storage)
+            case.check(any(document.get("kind") == "cleaned" for document in store["sessions"]),
+                       "WN03：确认完成后本地写入已清理墓碑")
             export_id, payload = self.api.export_jsonl(info["study_id"])
             target = self.evidence_dir("WN03") / "export.jsonl"
-            target.write_bytes(payload)
-            lines = [json.loads(line) for line in payload.decode("utf-8").splitlines() if line.strip()]
+            session_id = case.evidence["offline"]["session_id"]
+            lines, export_full = self.scoped_export(payload, session_id, target)
             export_ids = [entry["record"].get("event_id") for entry in lines]
             case.check(len(export_ids) == len(set(export_ids)), "WN03：重连补传没有产生重复事件（丢 ACK 去重）")
             case.check(set(offline_ids) <= set(export_ids), "WN03：断网期间的事件 ID 在授权导出中保持")
             case.evidence["export"] = {"export_id": export_id, "path": self.rel(target),
                                        "sha256": sha256_file(target), "event_ids": export_ids,
+                                       "session_id": session_id, "export_full": export_full,
                                        "values": sorted(float(entry["record"]["payload"]["rt_ms"]) for entry in lines
                                                         if isinstance(entry["record"].get("payload", {}).get("rt_ms"), (int, float)))}
             # (3) lost acknowledgement on a fresh session: the same batch is retried.
             self.set_proxy("lose-first-ack")
+            dropped = self.proxy
             lost = self.run_program(case, mode, storage, named, "WN03-lost-ack", 240)
             self.set_proxy("pass")
             case.check("SYNTHETIC_DONE" in lost["stdout"], "WN03：丢 ACK 后重试仍完成",
                        lost["stdout"][-200:])
-            case.check(any("losing acknowledgement" in entry["message"] for entry in (self.proxy.events if self.proxy else [])),
+            case.check(any("losing acknowledgement" in entry["message"] for entry in (dropped.events if dropped else [])),
                        "WN03：故障注入真实丢弃了一次 ACK")
             lost_export_id, lost_payload = self.api.export_jsonl(info["study_id"])
             lost_lines = [json.loads(line) for line in lost_payload.decode("utf-8").splitlines() if line.strip()]
@@ -1396,21 +1666,30 @@ class Harness:
 
     def _wn04_short_code(self, case, mode, storage, named):
         info = self.releases["modes"][mode]
-        boundary = self.run_program(case, mode, storage, named + ["--stop-after-trial"],
-                                    "WN04-boundary", 180)
+        boundary = self.kill_program(case, mode, storage, named + ["--stop-after-trial"],
+                                     "WN04-boundary", 180, "SYNTHETIC_BOUNDARY_SAVED")
         case.check("SYNTHETIC_BOUNDARY_SAVED" in boundary["stdout"], "WN04：试次边界已本地提交",
                    boundary["stdout"][-160:])
         store = read_store(storage)
-        session = [document for document in store["sessions"] if document.get("kind") == "session"][0]
-        session_id = session.get("id")
+        sessions = [document for document in store["sessions"] if document.get("kind") == "session"]
+        case.require(len(sessions) == 1, "WN04：边界后本地保留一条会话", len(sessions))
+        session_id = sessions[0].get("id")
         session_code = self.issue_short_code(info["study_id"], session_id)
         case.check(bool(session_code), "WN04：受限成员通过真实后台操作签发六位短码", session_code and "******")
+        # The completion acknowledgement is held back first, so the recovered
+        # state (same session, new segment, no replayed trial, declared
+        # completion) is still in the real local store when it is read; the
+        # confirmed retry then writes the cleaned tombstone.
+        self.set_proxy("drop-completion")
         resumed = self.run_program(case, mode, storage, ["--synthetic-auto", f"--short-code={session_code}"],
-                                   "WN04-short-code", 240)
-        case.check("SYNTHETIC_DONE" in resumed["stdout"], "WN04：短码+原设备证明恢复同一会话并完成",
+                                   "WN04-short-code", 240, expect_exit=3)
+        self.set_proxy("pass")
+        case.check("SYNTHETIC_TIMEOUT" in resumed["stdout"], "WN04：短码恢复后完成声明如实等待确认",
                    resumed["stdout"][-200:])
         store = read_store(storage)
-        session = [document for document in store["sessions"] if document.get("kind") == "session"][0]
+        sessions = [document for document in store["sessions"] if document.get("kind") == "session"]
+        case.require(len(sessions) == 1, "WN04：恢复后本地保留同一会话", len(sessions))
+        session = sessions[0]
         case.check(session.get("id") == session_id, "WN04：恢复的是同一会话（未新建）", session.get("id"))
         case.check(len(session.get("segments", [])) >= 2, "WN04：恢复产生新 epoch/segment",
                    session.get("segments"))
@@ -1424,6 +1703,13 @@ class Harness:
                                        "event_ids": store_event_ids(session),
                                        "replay_exit": replay["exit"],
                                        "store_copy": self.snapshot_store("WN04-short-code", storage)}
+        completed = self.run_program(case, mode, storage, named + ["--await-upload"],
+                                     "WN04-short-code-complete", 240)
+        case.check("SYNTHETIC_DATA_ONLY_DONE" in completed["stdout"],
+                   "WN04：短码恢复的完成被确认并写入清理墓碑", completed["stdout"][-200:])
+        store = read_store(storage)
+        case.check(any(document.get("kind") == "cleaned" for document in store["sessions"]),
+                   "WN04：短码恢复完成后写入已清理墓碑")
 
     def issue_short_code(self, study_id, session_id):
         status, payload, _ = self.api.post_form(f"/studies/{study_id}",
@@ -1433,6 +1719,12 @@ class Harness:
         return match.group(1) if match else ""
 
     def _wn04_expiry(self, case, mode, storage, named):
+        info = self.releases["modes"][mode]
+        storage = self.run_root / "wn04-expiry"
+        boundary = self.kill_program(case, mode, storage, named + ["--stop-after-trial"],
+                                     "WN04-expiry-boundary", 180, "SYNTHETIC_BOUNDARY_SAVED")
+        case.check("SYNTHETIC_BOUNDARY_SAVED" in boundary["stdout"], "WN04：过期检查前建立本地会话",
+                   boundary["stdout"][-160:])
         store = read_store(storage)
         sessions = [document for document in store["sessions"] if document.get("kind") == "session"]
         if not sessions:
@@ -1441,7 +1733,7 @@ class Harness:
         session_id = sessions[0].get("id")
         code = self.issue_short_code(info["study_id"], session_id)
         case.require(bool(code), "WN04：为过期检查签发短码", None)
-        wait = self.expiry_wait if self.expiry_wait is not None else 300
+        wait = self.expiry_wait if self.expiry_wait is not None else 310
         self.log(f"等待 {wait}s 让短码过期（真实 5 分钟 TTL）")
         time.sleep(wait)
         expired = self.run_program(case, mode, storage, ["--synthetic-auto", f"--short-code={code}"],
@@ -1496,6 +1788,18 @@ class Harness:
         case.check("SYNTHETIC_RECOVERY_EXPORTED" in resumed["stdout"],
                    "WN04：程序真实写出失败数据导出文件", resumed["stdout"][-200:])
         store = read_store(storage)
+        retained = [document for document in store["sessions"] if document.get("kind") == "session"]
+        case.check(bool(retained) and retained[0].get("completion") is not None,
+                   "WN04：失败数据导出不删除未确认队列", {"sessions": len(retained)})
+        case.evidence["data_only"] = {"exit": resumed["exit"], "stdout_tail": resumed["stdout"][-200:],
+                                      "stdout_path": resumed.get("stdout_path"),
+                                      "store_copy": self.snapshot_store("WN04-data-only", storage)}
+        self._wn04_export_binding(case, export_path, mode)
+        finished = self.run_program(case, mode, storage, named + ["--await-upload"],
+                                    "WN04-data-only-complete", 240)
+        case.check("SYNTHETIC_DATA_ONLY_DONE" in finished["stdout"],
+                   "WN04：仅数据补传完成后写入已清理墓碑", finished["stdout"][-200:])
+        store = read_store(storage)
         cleaned = [document for document in store["sessions"] if document.get("kind") == "cleaned"]
         case.check(bool(cleaned), "WN04：仅数据恢复补传完成后写入已清理墓碑",
                    [document.get("id") for document in cleaned])
@@ -1503,9 +1807,6 @@ class Harness:
             keys = set(cleaned[0])
             case.check(not ({"records", "pending", "checkpoint", "completion", "context", "proof"} & keys),
                        "WN04：墓碑不含记录/凭据/检查点", sorted(keys))
-        case.evidence["data_only"] = {"exit": resumed["exit"], "stdout_tail": resumed["stdout"][-200:],
-                                      "store_copy": self.snapshot_store("WN04-data-only", storage)}
-        self._wn04_export_binding(case, export_path, mode)
 
     def _wn04_export_binding(self, case, export_path, mode):
         case.check(export_path.is_file(), "WN04：失败数据导出文件存在",
@@ -1586,45 +1887,56 @@ class Harness:
             case.evidence["platform_side"] = "PREP_EVIDENCE"
             case.evidence["known_limitation"] = ("本地副本被篡改的 PCK 不会被程序运行时自动拒绝：运行时不做包完整性校验，"
                                                  "不冒充通过。")
-            alternate = (self.runtime.get("alternates") or {}).get("password")
-            if not alternate:
-                case.check(False, "WN06：运行时夹具缺少第二个发行（旧发行兼容输入）", None)
+            old = self.releases["modes"]["password"]
+            current = (self.runtime.get("alternates") or {}).get("password")
+            if not current:
+                case.check(False, "WN06：运行时夹具缺少第二个发行（旧发行成为非当前发行的输入）", None)
             else:
-                package = self.kit / "delivery" / "password-alternate" / f"gep-{alternate['release_id']}.zip"
-                case.require(package.is_file(), "WN06：kit 内含第二个发行完整包", alternate["release_id"])
-                target = self.extract(package, "password-alternate")
+                package = self.kit / old["delivery"]
+                case.require(package.is_file(), "WN06：kit 内含旧发行完整包", old["release_id"])
+                target = self.extract(package, "password-old-release")
                 manifest = read_json(target / "artifact_manifest.json")
                 config = read_json(target / Path(manifest["config_member"]))
-                case.check(config.get("release_id") == alternate["release_id"],
-                           "WN06：第二个发行的冻结配置绑定其发行 id", config.get("release_id"))
-                case.check(config.get("release_id") != self.releases["modes"]["password"]["release_id"],
-                           "WN06：该发行与常规流程使用的前一发行不同")
+                case.check(config.get("release_id") == old["release_id"],
+                           "WN06：旧发行的冻结配置绑定其发行 id", config.get("release_id"))
+                case.check(config.get("release_id") != current["release_id"],
+                           "WN06：该发行已不是当前发行（当前为第二个发行）",
+                           {"old": old["release_id"], "current": current["release_id"]})
                 storage = self.run_root / "wn06-storage"
-                run = self.run_program(case, "password", storage, self.mode_arguments(case, "password"),
-                                       "WN06-old-release", 240, target=target, manifest=manifest)
-                case.check("SYNTHETIC_DONE" in run["stdout"],
-                           "WN06：旧发行（已不是当前发行）仍可准入、上传并完成", run["stdout"][-200:])
+                arguments = self.mode_arguments(case, "password")
+                self.kill_program(case, "password", storage, arguments + ["--stop-after-trial"],
+                                  "WN06-old-release-boundary", 180, "SYNTHETIC_BOUNDARY_SAVED",
+                                  target=target, manifest=manifest)
                 store = read_store(storage)
                 sessions = [document for document in store["sessions"] if document.get("kind") == "session"]
-                case.check(len(sessions) == 1, "WN06：旧发行会话写入真实本地存储", len(sessions))
-                export_id, payload = self.api.export_jsonl(alternate["study_id"])
+                case.require(len(sessions) == 1, "WN06：旧发行试次边界后本地恰好一条会话", len(sessions))
+                session_id = sessions[0].get("id")
+                boundary_ids = store_event_ids(sessions[0])
+                case.check(len(boundary_ids) == 2, "WN06：旧发行边界前两个事件已本地提交", len(boundary_ids))
+                boundary_copy = self.snapshot_store("WN06-old-release-boundary", storage)
+                completed = self.run_program(case, "password", storage, arguments, "WN06-old-release", 240,
+                                             target=target, manifest=manifest)
+                case.check("SYNTHETIC_DONE" in completed["stdout"],
+                           "WN06：旧发行（已不是当前发行）仍可准入、上传并完成", completed["stdout"][-200:])
+                store = read_store(storage)
+                cleaned = [document for document in store["sessions"] if document.get("kind") == "cleaned"]
+                case.check(bool(cleaned), "WN06：旧发行完成后写入已清理墓碑", len(cleaned))
+                export_id, payload = self.api.export_jsonl(old["study_id"])
                 export_path = self.evidence_dir("WN06") / "export.jsonl"
-                export_path.write_bytes(payload)
-                lines = [json.loads(line) for line in payload.decode("utf-8").splitlines() if line.strip()]
-                old_lines = [entry for entry in lines if entry.get("release_id") == alternate["release_id"]]
-                old_ids = [entry["record"].get("event_id") for entry in old_lines]
-                case.check(len(old_lines) == EXPECTED_EVENTS_PER_SESSION,
-                           "WN06：旧发行在授权导出中保留完整四个事件", len(old_lines))
+                lines, export_full = self.scoped_export(payload, session_id, export_path)
+                old_ids = [entry["record"].get("event_id") for entry in lines]
+                case.check(len(lines) == EXPECTED_EVENTS_PER_SESSION,
+                           "WN06：旧发行在授权导出中保留完整四个事件", len(lines))
                 case.check(len(set(old_ids)) == len(old_ids), "WN06：旧发行导出没有重复事件")
-                case.check(not sessions or set(store_event_ids(sessions[0])) <= set(old_ids),
+                case.check(set(boundary_ids) <= set(old_ids),
                            "WN06：旧发行本地事件 ID 与授权导出一致")
                 case.evidence["old_release"] = {
-                    "release_id": alternate["release_id"], "study_id": alternate["study_id"],
-                    "session_id": sessions[0].get("id") if sessions else None,
-                    "event_ids": store_event_ids(sessions[0]) if sessions else [],
+                    "release_id": old["release_id"], "study_id": old["study_id"],
+                    "session_id": session_id, "event_ids": boundary_ids,
                     "export_id": export_id, "export_path": self.rel(export_path),
                     "export_sha256": sha256_file(export_path), "export_event_ids": old_ids,
-                    "store_copy": self.snapshot_store("WN06-old-release", storage),
+                    "export_full": export_full,
+                    "store_copy": boundary_copy,
                     "stdout": self.rel(self.evidence_dir("WN06-old-release") / "stdout.txt")}
         except HarnessError as error:
             case.check(False, "WN06 流程", str(error))
@@ -1641,6 +1953,49 @@ class Harness:
                                 log_path=self.run_root / "fault-proxy.json").start()
 
     def tunnel_required(self):
+        return True
+
+    def tunnel_serves(self, timeout=15):
+        """End-to-end read-only check of the scoped tunnel, from the device side.
+
+        A live listener on the forwarded port is not enough: a dead reverse
+        session can keep the Windows-side port bound while nothing answers. The
+        only honest prerequisite check is a real HTTP round trip through the
+        tunnel to the prepared instance's login page (read-only, no token), so a
+        broken tunnel becomes a precise blocked reason instead of per-case
+        ``http_0`` evidence.
+        """
+        import http.client
+        try:
+            connection = http.client.HTTPConnection("127.0.0.1", int(self.tunnel_port), timeout=timeout)
+            try:
+                connection.request("GET", "/login", headers={"Host": "admin.localhost"})
+                response = connection.getresponse()
+                response.read(4096)
+                if response.status == 200:
+                    return True, f"HTTP {response.status}"
+                return False, f"HTTP {response.status}"
+            finally:
+                connection.close()
+        except OSError as error:
+            return False, f"{type(error).__name__}: {error}"
+
+    def prerequisite_lost(self, case_id):
+        """Block one case when the scoped tunnel stopped serving mid-run."""
+        try:
+            with socket.create_connection(("127.0.0.1", self.tunnel_port), timeout=5):
+                pass
+        except OSError as error:
+            ok, detail = False, f"TCP {type(error).__name__}"
+        else:
+            ok, detail = self.tunnel_serves()
+        if ok:
+            return False
+        case = self.case(case_id)
+        case.block(f"runtime prerequisite lost: 127.0.0.1:{self.tunnel_port} no longer serves the "
+                   f"prepared instance ({detail}); the scoped tunnel must stay up for the whole run")
+        case.evidence["runtime_prerequisite"] = {"port": self.tunnel_port, "detail": detail}
+        self.log(f"{case_id}：{case.reason}")
         return True
 
     def doctor(self):
@@ -1698,11 +2053,11 @@ class Harness:
         self.authenticate_member(self.cases["WN02"])
         self.cases["WN01"].status = STATUS_NOT_RUN
         self.case_wn01()
-        self.case_wn02()
-        self.case_wn03()
-        self.case_wn04()
-        self.case_wn05()
-        self.case_wn06()
+        for case_id, runner in (("WN02", self.case_wn02), ("WN03", self.case_wn03), ("WN04", self.case_wn04),
+                                ("WN05", self.case_wn05), ("WN06", self.case_wn06)):
+            if self.prerequisite_lost(case_id):
+                continue
+            runner()
 
     def wait_owned_program(self, launch, timeout=None, poll=2.0):
         """Wait until the program this harness started has exited.

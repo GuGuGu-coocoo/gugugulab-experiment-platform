@@ -186,7 +186,7 @@ def ssh_resolved_hostname(alias):
         return None
     try:
         result = subprocess.run(
-            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6", "-G", alias],
+            [os.environ.get("GEP_SSH_BIN") or "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6", "-G", alias],
             capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
         return None
@@ -600,8 +600,15 @@ class KitBuilder:
 
     def _prepare_mode(self, mode):
         study_id = self._create_study(mode)
-        self.study_operation(study_id, [("op", "configure"), ("mode", mode), ("max_sessions", "8")])
-        self.record(True, f"{mode}：真实研究已创建并配置冻结模式", {"study_id": study_id, "mode": mode})
+        # The engineering cases create real sessions through the same roster code
+        # more than once (a fresh local store has no candidate to continue, so
+        # each admission is a new session). The frozen policy must leave room for
+        # one complete WN01-WN06 pass *and* a diagnostic rerun of a single case on
+        # the same instance; the measured budget of one full pass is 6 new
+        # sessions for the same participant, so 8 would leave no headroom.
+        self.study_operation(study_id, [("op", "configure"), ("mode", mode), ("max_sessions", "24")])
+        self.record(True, f"{mode}：真实研究已创建并配置冻结模式",
+                    {"study_id": study_id, "mode": mode, "max_sessions": 24})
 
         descriptor = read_json(DESCRIPTOR)
         self.study_operation(study_id, [("op", "native"), ("descriptor", json.dumps(descriptor))])
@@ -648,14 +655,14 @@ class KitBuilder:
         # The approved study mode is immutable: a later policy edit must be refused.
         status, payload, _ = self.http.post_form(
             f"/studies/{study_id}", [("op", "configure"), ("mode", "password" if mode != "password" else "id"),
-                                     ("max_sessions", "9")], expect_redirect=False)
+                                     ("max_sessions", "25")], expect_redirect=False)
         frozen_code = payload.decode("utf-8", "replace")
         self.require(status == 409 and "policy_frozen_after_release" in frozen_code,
                      f"{mode}：批准后参与模式不可再编辑（真实拒绝）",
                      {"status": status, "code": "policy_frozen_after_release"})
         current = self.instance.db_rows("select mode, max_sessions from core_study where id=?",
                                         [study_id.replace("-", "")])[0]
-        self.require(current[0] == mode and current[1] == 8, f"{mode}：研究策略未被越权修改",
+        self.require(current[0] == mode and current[1] == 24, f"{mode}：研究策略未被越权修改",
                      {"mode": current[0], "max_sessions": current[1]})
 
         self.study_operation(study_id, [("op", "recruitment"), ("state", "open")])

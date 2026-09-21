@@ -117,6 +117,17 @@ def canonical_json(document):
     return json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
+def ssh_client():
+    """The SSH client for every device-side command.
+
+    ``GEP_SSH_BIN`` lets the operator point at a task-local wrapper that keeps the
+    trusted alias identity (``HostKeyAlias``) while overriding the address, so the
+    scoped route never has to be hardcoded here and the global SSH config stays
+    untouched. The tunnel already honours the same variable.
+    """
+    return os.environ.get("GEP_SSH_BIN") or "ssh"
+
+
 def pe_summary(raw):
     if len(raw) < 0x40 or raw[:2] != b"MZ":
         raise PreparationError("missing MZ header")
@@ -476,7 +487,7 @@ class Preparation:
             return probe
         target = alias or aliases[0]
         probe["alias"] = target
-        resolved = subprocess.run(["ssh", *self.ssh_options(), "-G", target],
+        resolved = subprocess.run([ssh_client(), *self.ssh_options(), "-G", target],
                                   capture_output=True, text=True, timeout=30)
         probe["probes"].append({"resolve": target, "exit": resolved.returncode})
         if resolved.returncode != 0:
@@ -505,7 +516,7 @@ class Preparation:
                   "Desktop=(Test-Path ([Environment]::GetFolderPath('Desktop')));Session=$env:SESSIONNAME}"
                   "|ConvertTo-Json -Compress")
         probe_command = 'powershell -NoProfile -Command "' + remote + '"'
-        result = subprocess.run(["ssh", *self.ssh_options(), target, probe_command],
+        result = subprocess.run([ssh_client(), *self.ssh_options(), target, probe_command],
                                 capture_output=True, text=True, timeout=40)
         probe["probes"].append({"machine_facts": target, "exit": result.returncode})
         if result.returncode != 0:
@@ -540,7 +551,7 @@ class Preparation:
                    "(Get-CimInstance Win32_OperatingSystem).Caption;"
                    "(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System'"
                    " -ErrorAction SilentlyContinue).EnableLUA\"")
-        result = subprocess.run(["ssh", *self.ssh_options(), alias, command],
+        result = subprocess.run([ssh_client(), *self.ssh_options(), alias, command],
                                 capture_output=True, text=True, timeout=40)
         return {"exit": result.returncode, "stdout": (result.stdout or "")[-800:],
                 "stderr_tail": (result.stderr or "").strip().splitlines()[-1][:200] if result.stderr else ""}
@@ -672,15 +683,71 @@ def _process_start_marker(pid):
     return marker if result.returncode == 0 and marker else None
 
 
+def _expected_live_argv(argv):
+    """The argv the OS really shows for ``argv[0]``, or ``(None, None)``.
+
+    Only two explicit shapes are accepted, and the chosen transformation is
+    recorded (never a generic "ignore the first token" rule):
+
+    * ``exec`` wrapper - a script whose last command is exactly one
+      ``exec <program> <fixed arguments...> "$@"``: the image is replaced, so the
+      live argv is ``[program, *fixed, *argv[1:]]`` (the task-local
+      ``GEP_SSH_BIN`` route);
+    * shebang script - a script with a single-interpreter ``#!`` line that is not
+      exec-replaced: the kernel runs it through that interpreter, so the live
+      argv is ``[interpreter, argv[0], *argv[1:]]`` (the project virtualenv's
+      ``gunicorn`` console script).
+
+    Anything else - a binary, a script with extra shebang arguments, a script
+    whose last command is not the explicit ``exec`` - keeps the strict full-argv
+    comparison of the recorded argv.
+    """
+    path = Path(str(argv[0]))
+    try:
+        if not path.is_file() or path.stat().st_size > 1_000_000:
+            return None, None
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None, None
+    import shlex
+    joined = text.replace("\\\r\n", " ").replace("\\\n", " ")
+    commands = [line.strip() for line in joined.splitlines()
+                if line.strip() and not line.strip().startswith("#")]
+    if commands:
+        try:
+            tokens = shlex.split(commands[-1])
+        except ValueError:
+            tokens = None
+        if tokens and len(tokens) >= 3 and tokens[0] == "exec" and tokens[-1] == "$@":
+            transformation = {"kind": "exec", "script": str(path), "program": tokens[1],
+                              "fixed_arguments": tokens[2:-1]}
+            return transformation, [tokens[1], *tokens[2:-1], *argv[1:]]
+    lines = text.splitlines()
+    if lines and lines[0].startswith("#!"):
+        parts = lines[0][2:].strip().split()
+        if len(parts) == 1:
+            transformation = {"kind": "shebang", "script": str(path), "program": parts[0],
+                              "fixed_arguments": [str(path)]}
+            return transformation, [parts[0], str(path), *argv[1:]]
+    return None, None
+
+
 def _recorded_argv(document):
-    """The recorded argv tokens, or None when the record is malformed."""
+    """The argv as recorded (resolved argv when the recorder stored one).
+
+    A record without ``resolved_argv`` is compared as recorded; the stop path
+    derives the explicit live transform from it in that case.
+    """
     if not isinstance(document, dict):
         return None
-    argv = document.get("argv")
-    if isinstance(argv, list):
-        if not argv or not all(isinstance(item, str) and item for item in argv):
+    for key in ("resolved_argv", "argv"):
+        value = document.get(key)
+        if isinstance(value, list):
+            if not value or not all(isinstance(item, str) and item for item in value):
+                return None
+            return [str(item) for item in value]
+        if value is not None:
             return None
-        return [str(item) for item in argv]
     command = str(document.get("command") or "").strip()
     if not command:
         return None
@@ -692,20 +759,20 @@ def _recorded_argv(document):
 
 
 def _command_tokens_match(argv, live):
-    """The recorded argv must appear in the live command line.
+    """The recorded argv must equal the live command line, token for token.
 
     ``ps`` joins argv with single spaces and does not quote arguments, so both
-    sides are whitespace-normalised and the recorded argument vector must appear
-    as an ordered, contiguous run. The run may be preceded by an interpreter
-    path when the OS exec'd a script through its shebang (the real gunicorn
-    command is recorded from its own Popen argv, never guessed).
+    sides are whitespace-normalised and then compared as a whole. A substring of
+    the recorded command line is never enough: a different program, a different
+    port or an extra suffix argument must fail. The comparison refuses an empty
+    vector and an empty live command line instead of matching them loosely.
     """
-    wanted = " ".join(str(item) for item in argv)
-    if not wanted.strip():
+    tokens = [str(item) for item in argv]
+    if not tokens or not all(token for token in tokens):
         return False
-    normalized_wanted = " ".join(wanted.split())
-    normalized_live = " ".join(str(live).split())
-    return normalized_wanted in normalized_live
+    wanted = " ".join(" ".join(tokens).split())
+    observed = " ".join(str(live).split())
+    return bool(wanted) and wanted == observed
 
 
 def _stop_recorded_runtime(run_dir, prep_dir):
@@ -733,6 +800,13 @@ def _stop_recorded_runtime(run_dir, prep_dir):
             stopped.append({"pid": None, "outcome": "refused",
                             "reason": "malformed pid record (no pid/command line); refusing to signal it"})
             continue
+        expected, derivation = argv, None
+        if not isinstance(document.get("resolved_argv"), list):
+            # A record written before the resolved argv existed: derive the same
+            # restricted transformation now, and report it with the outcome.
+            _transformation, resolved = _expected_live_argv(argv)
+            if resolved:
+                expected, derivation = resolved, "derived from the recorded argv at stop time"
         try:
             pid = int(document.get("pid") or 0)
         except (TypeError, ValueError):
@@ -747,8 +821,10 @@ def _stop_recorded_runtime(run_dir, prep_dir):
             stopped.append({"pid": pid, "outcome": "gone"})
             record_path.unlink()
             continue
-        if not _command_tokens_match(argv, command):
-            stopped.append({"pid": pid, "outcome": "refused", "reason": "command line changed"})
+        if not _command_tokens_match(expected, command):
+            stopped.append({"pid": pid, "outcome": "refused",
+                            "reason": "command line changed (strict argv comparison, never a substring)",
+                            "expected": " ".join(expected)[:200]})
             continue
         recorded_marker = str(document.get("started") or "").strip()
         live_marker = _process_start_marker(pid)
@@ -756,22 +832,38 @@ def _stop_recorded_runtime(run_dir, prep_dir):
             stopped.append({"pid": pid, "outcome": "refused", "reason": "pid was reused (start time changed)"})
             continue
         os.kill(pid, signal.SIGTERM)
-        stopped.append({"pid": pid, "outcome": "stopped", "command": command[:200]})
+        entry = {"pid": pid, "outcome": "stopped", "command": command[:200]}
+        if derivation:
+            entry["derivation"] = derivation
+            entry["expected"] = " ".join(expected)[:200]
+        stopped.append(entry)
         record_path.unlink()
     return stopped
 
 
 def _record_pid(path, process, command=None):
-    """Record the *real* Popen argv plus a start marker, never a guessed command."""
+    """Record the *real* Popen argv plus a start marker, never a guessed command.
+
+    When the real argv starts with a script the OS runs differently (an ``exec``
+    wrapper or a shebang interpreter script), the argv the OS will actually show
+    is recorded next to it together with that exact transformation, so the later
+    stop can compare the live command line strictly instead of approximating it.
+    """
     args = getattr(process, "args", None)
     argv = [str(part) for part in args] if isinstance(args, (list, tuple)) else None
     if not argv:
         argv = [str(part) for part in (command or [])]
     if not argv:
         raise PreparationError("无法记录真实进程命令行（argv 为空）；拒绝写入畸形 PID 记录")
-    path.write_text(json.dumps({"pid": process.pid, "argv": argv, "command": " ".join(argv),
-                                "started": _process_start_marker(process.pid)},
-                               ensure_ascii=False), encoding="utf-8")
+    document = {"pid": process.pid, "argv": argv, "command": " ".join(argv),
+                "started": _process_start_marker(process.pid)}
+    transformation, resolved = _expected_live_argv(argv)
+    if transformation is not None:
+        document["wrapper_transform"] = transformation
+        document["resolved_argv"] = resolved
+    path.write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")
+
+
 class Tunnel:
     """One scoped reverse SSH forward owned by this process.
 
@@ -793,7 +885,7 @@ class Tunnel:
     def __init__(self, spec, alias=None, ssh_binary=None, log=print, quiet=False, stderr_path=None):
         self.spec = spec or {}
         self.alias = alias or self.spec.get("windows_alias")
-        self.ssh_binary = ssh_binary or os.environ.get("GEP_SSH_BIN") or "ssh"
+        self.ssh_binary = ssh_binary or ssh_client()
         self.log = log
         self.quiet = quiet
         self.stderr_path = stderr_path
@@ -972,6 +1064,9 @@ def serve_runtime(run_dir, prep_dir=None, foreground=False, device_alias=None, t
     """
     run_dir = Path(run_dir).resolve()
     prep_dir = Path(prep_dir).resolve() if prep_dir else run_dir.parent
+    if not run_dir.is_dir():
+        raise PreparationError(f"运行目录不存在：{display_path(run_dir)}；先建立该目录再提供服务，"
+                               "以免把隧道记录写进别处")
     candidates = [run_dir / "private" / "runtime.json", run_dir / "kit" / "operator" / "runtime.json",
                   prep_dir / "private" / "runtime.json"]
     runtime = None
@@ -1071,8 +1166,29 @@ def _read_store_copy(path):
 
 
 def _canonical_record(record):
-    """One event envelope as canonical JSON; nested payload, units and values included."""
-    return json.dumps(record, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    """One event envelope as canonical JSON; nested payload, units and values included.
+
+    Numbers are compared by value, so a whole number written as ``1`` in the
+    native store and as ``1.0`` in the server envelope is the same integer-valued
+    field (the client re-reads its own store, which turns integers back into
+    floats, and the protocol validates ``sequence == int(sequence)``). A real
+    value difference - a changed raw value, unit, source, schema or nested
+    payload - still refuses, because every other token stays byte-exact.
+    """
+    return json.dumps(_canonical_numbers(record), sort_keys=True, ensure_ascii=False,
+                      separators=(",", ":"))
+
+
+def _canonical_numbers(value):
+    if isinstance(value, bool) or value is None or isinstance(value, str):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, dict):
+        return {key: _canonical_numbers(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_canonical_numbers(item) for item in value]
+    return value
 
 
 def _db_session_release(db_path, session_id):
@@ -1358,7 +1474,15 @@ def _validate_case(problems, case_id, case, run_dir, studies, kit_releases, prep
         _problem(problems, f"{case_id} has no passing check")
     if case_id == "WN01":
         launch = evidence.get("launch") or {}
-        if not launch.get("pid") or not str(launch.get("window_title") or "").strip():
+        observed = [entry for entry in (evidence.get("processes") or []) if isinstance(entry, dict)]
+        title = str(launch.get("window_title") or "").strip()
+        if not title:
+            # The launch record carries the title the interactive launcher saw; the
+            # verified process observation is the same real reading and covers a
+            # record written before that field was reported.
+            title = next((str(entry.get("window_title") or "").strip() for entry in observed
+                          if str(entry.get("window_title") or "").strip()), "")
+        if not launch.get("pid") or not title:
             _problem(problems, "WN01 launch evidence lacks an owned pid or a real window title")
         if not str(launch.get("executable_path") or "").endswith(".exe"):
             _problem(problems, "WN01 launch evidence lacks the verified executable path")
@@ -1402,6 +1526,7 @@ def _validate_case(problems, case_id, case, run_dir, studies, kit_releases, prep
             _problem(problems, "WN03 lost-ack evidence does not prove server-side deduplication")
         _validate_store_copy(problems, run_dir, "WN03 offline", offline)
         _validate_store_copy(problems, run_dir, "WN03 reconnect", reconnect)
+        _validate_export_derivation(problems, run_dir, "WN03 export", export)
         release = (studies.get("password") or {}).get("release_id")
         _reconcile_entry(problems, "WN03 offline", run_dir, prep_root, offline, release,
                          session_id=offline.get("session_id"), export_path=export.get("path"))
@@ -1422,7 +1547,9 @@ def _validate_case(problems, case_id, case, run_dir, studies, kit_releases, prep
         if not shared.get("holder_pid") or shared.get("second_exit") != 2:
             _problem(problems, "WN04 shared-writer evidence is incomplete")
         data_only = evidence.get("data_only") or {}
-        if data_only.get("exit") != 2 or "SYNTHETIC_DATA_ONLY" not in str(data_only.get("stdout_tail") or ""):
+        if data_only.get("exit") != 2 or not _program_marker(
+                run_dir, data_only, str((data_only.get("store_copy") or {}).get("queue.sqlite") or ""),
+                "SYNTHETIC_DATA_ONLY"):
             _problem(problems, "WN04 data-only recovery evidence is incomplete")
         recovery = evidence.get("recovery_export") or {}
         path = _evidence_file(run_dir, str(recovery.get("path") or ""))
@@ -1487,6 +1614,7 @@ def _validate_case(problems, case_id, case, run_dir, studies, kit_releases, prep
                 if not set(old.get("event_ids") or []) <= set(old.get("export_event_ids") or []):
                     _problem(problems, "WN06 old-release evidence records inconsistent event ids")
         _validate_store_copy(problems, run_dir, "WN06 old release", old)
+        _validate_export_derivation(problems, run_dir, "WN06 old release", old)
         _reconcile_entry(problems, "WN06 old release", run_dir, prep_root, old, old.get("release_id"))
         if old.get("release_id") and not _release_is_superseded(prep_root, old.get("release_id")):
             _problem(problems, "WN06 old-release evidence is not bound to a release that stopped being current")
@@ -1600,18 +1728,149 @@ def _validate_export(problems, run_dir, label, entry):
         _problem(problems, f"{label} authorized export contains duplicate event ids")
     if not set(entry.get("boundary_event_ids") or []) <= set(ids):
         _problem(problems, f"{label} authorized export lost locally committed event ids")
+    _validate_export_derivation(problems, run_dir, label, entry)
+
+
+def _validate_export_derivation(problems, run_dir, label, entry):
+    """The derived session file must be the preserved download's own rows.
+
+    The platform export is study-scoped; the case file is a session subset. The
+    whole download is preserved and digested by the harness, so the derivation is
+    re-checked here from those bytes: the subset must carry exactly the download
+    lines of this session (same rows, same order) and nothing may have been
+    rewritten.
+    """
+    full = entry.get("export_full") or {}
+    if not full:
+        _problem(problems, f"{label} has no preserved full authorized download")
+        return
+    full_path = _evidence_file(run_dir, str(full.get("path") or ""))
+    if full_path is None or sha256_file(full_path) != full.get("sha256"):
+        _problem(problems, f"{label} preserved full authorized download is missing or changed")
+        return
+    full_rows, error = _export_rows(full_path)
+    if error:
+        _problem(problems, f"{label} preserved full download {error}")
+        return
+    derived_path = _evidence_file(run_dir, str(full.get("subset_path") or ""))
+    if derived_path is None or sha256_file(derived_path) != full.get("subset_sha256"):
+        _problem(problems, f"{label} derived session export is missing or changed")
+        return
+    rows, error = _export_rows(derived_path)
+    if error:
+        _problem(problems, f"{label} derived session export {error}")
+        return
+    claimed = str(entry.get("export_path") or "")
+    if claimed and _evidence_file(run_dir, claimed) != derived_path:
+        _problem(problems, f"{label} case entry and preserved derivation disagree on the derived file")
+        return
+    session = str(entry.get("session_id") or "")
+    if not session:
+        _problem(problems, f"{label} has no session id for the export derivation")
+        return
+    selected = [row for row in full_rows if (row.get("record") or {}).get("session_id") == session]
+    if [_row_key(row) for row in selected] != [_row_key(row) for row in rows]:
+        _problem(problems, f"{label} derived export is not the preserved download's session rows")
+
+
+def _row_key(row):
+    return json.dumps(row, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
+
+
+def _program_marker(run_dir, evidence, store_relative, marker):
+    """True when the real program output carries ``marker``.
+
+    The full stdout captured by the harness is authoritative; a recorded
+    ``stdout_path`` wins, and the documented evidence layout (``stdout.txt`` next
+    to the store copy of the same label) is used when the run predates that field.
+    A missing file is a refusal, never a silent pass.
+    """
+    candidates = []
+    recorded = str(evidence.get("stdout_path") or "")
+    if recorded:
+        candidates.append(_evidence_file(run_dir, recorded))
+    if store_relative:
+        candidates.append((_evidence_file(run_dir, store_relative) or Path("/nonexistent")).parent / "stdout.txt")
+    for path in candidates:
+        if path is not None and path.is_file():
+            return marker in path.read_text(encoding="utf-8", errors="replace")
+    return False
 
 
 def _validate_store_copy(problems, run_dir, label, evidence):
     copy = evidence.get("store_copy") or {}
+    originals = copy.get("originals") or {}
+    if not originals:
+        _problem(problems, f"{label} native store snapshot has no preserved raw copy")
+    for name, entry in originals.items():
+        entry = entry or {}
+        path = _evidence_file(run_dir, str(entry.get("path") or ""))
+        if path is None or sha256_file(path) != entry.get("sha256"):
+            _problem(problems, f"{label} preserved native store copy {name} is missing or changed")
     queue = _evidence_file(run_dir, str(copy.get("queue.sqlite") or ""))
     documents, error = _read_store_copy(queue)
     if error:
         _problem(problems, f"{label} {error}")
         return
+    snapshot = copy.get("snapshot") or {}
+    if not snapshot:
+        _problem(problems, f"{label} has no derived self-contained store snapshot")
+    else:
+        path = _evidence_file(run_dir, str(snapshot.get("path") or ""))
+        if path is None or sha256_file(path) != snapshot.get("sha256"):
+            _problem(problems, f"{label} derived store snapshot is missing or changed")
+        else:
+            sidecar = path.parent / f"{path.name}-wal"
+            if sidecar.exists():
+                _problem(problems, f"{label} derived store snapshot still depends on a WAL sidecar")
+            if snapshot.get("integrity_check") != "ok":
+                _problem(problems, f"{label} derived store snapshot did not report a clean integrity check")
+    preserved, error = _read_preserved_store(run_dir, originals)
+    if error:
+        _problem(problems, f"{label} {error}")
+    elif [json.dumps(document, sort_keys=True, ensure_ascii=False) for document in preserved] \
+            != [json.dumps(document, sort_keys=True, ensure_ascii=False) for document in documents]:
+        _problem(problems, f"{label} derived store snapshot does not reproduce the preserved store bytes")
     expected_ids = evidence.get("event_ids") or evidence.get("boundary_event_ids") or []
     if expected_ids and not set(expected_ids) <= {record.get("event_id") for record in _store_events(documents)}:
         _problem(problems, f"{label} native store copy does not contain the recorded event ids")
+
+
+def _read_preserved_store(run_dir, originals):
+    """Read the preserved raw store copy without touching the evidence.
+
+    The preserved files are copied into a scratch directory and opened there, so
+    the committed rows (including anything still in the ``-wal`` file of a killed
+    program) can be compared with the derived snapshot while the evidence bytes
+    and their digests stay exactly as recorded - the check never writes next to
+    the evidence and never creates a WAL file there.
+    """
+    import tempfile
+    with tempfile.TemporaryDirectory() as scratch:
+        for name in ("queue.sqlite", "queue.sqlite-wal", "queue.sqlite-shm"):
+            entry = originals.get(name) or {}
+            path = _evidence_file(run_dir, str(entry.get("path") or ""))
+            if path is not None:
+                shutil.copy2(path, Path(scratch) / name)
+        queue = Path(scratch) / "queue.sqlite"
+        if not queue.is_file():
+            return None, "preserved native store copy has no queue.sqlite"
+        try:
+            connection = sqlite3.connect(str(queue), timeout=20)
+            try:
+                rows = [row[0] for row in connection.execute("SELECT value FROM sessions ORDER BY id")]
+            finally:
+                connection.close()
+        except sqlite3.Error as error:
+            return None, f"preserved native store copy is unreadable ({error})"
+    documents = []
+    for raw in rows:
+        try:
+            document = json.loads(raw)
+        except ValueError as error:
+            return None, f"preserved native store copy holds malformed JSON ({error})"
+        documents.append(document)
+    return documents, None
 
 
 def gate_verdict(run_dir=None, prep_dir=None):
