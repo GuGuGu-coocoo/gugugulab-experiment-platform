@@ -1,6 +1,6 @@
 # 合成工程验收记录
 
-更新：2026-09-12。全部使用隔离合成数据。Phase 01、02 的有限工程门槛通过；Phase 03 工程回归通过，**T17 独立人类验收未运行**。真实研究尚未启用。
+更新：2026-09-21。全部使用隔离合成数据。Phase 01、02 的有限工程门槛通过；Phase 03 工程回归与 Windows x64 实机工程门槛于 2026-09-21 通过，**原设计者自主体验与 T17 独立人类验收未运行**。真实研究尚未启用。
 
 ## 实际环境
 
@@ -12,6 +12,7 @@
 | 服务端 | Python 3.12.13 / Django 5.2.17 / SQLite 3.53.1 |
 | 自动回归 | Node 24.18.0 / Playwright 1.58.2 |
 | 第二实体设备 | Windows 11 build 26200；9 月 8 日 Chrome 152.0.7977.76，9 月 12 日 Chrome 152.0.7977.83 |
+| Windows 原生实机 | Windows 11 Pro build 26200，AMD64，交互控制台会话（2026-09-21 实机运行） |
 | Compose | Lima 2.2.0 / Ubuntu 26.04 arm64 / Docker 29.1.3 / Compose 2.40.3，独立合成卷 |
 | CSV 查看 | Excel 16.112.3，UTF-8 与逗号导入 |
 
@@ -91,9 +92,11 @@ Phase 04 的真实研究协议、伦理/同意、隐私/保留/撤回、备份�
 
 2026-09-20 构建证据接受纠正（P0306WR）：`cross_build` 与引擎声明导出不再以“产物存在”判定成功，Godot 子进程必须以真实退出码 0 通过；导出失败时保留其完整日志（崩溃运行的产物一律不接受），用受支持的 `--import` 预热导入缓存且重试必须退出 0，之后才允许一次完整导出重试，仍以退出码 0 为准。冷缓存首次编辑器进程在写出导入缓存后于自身关闭阶段崩溃（本机 Godot 4.7.2/macOS）作为本地证据保留，`--rendering-driver dummy`、`--rendering-method forward_plus` 与直接冷导出均实测不能避免，因此不隐瞒、不把崩溃运行转绿。Windows 模板来源固定：官方 `Godot_v4.7.2-stable_export_templates.tpz`（SHA-512 与同一 release 的官方 `SHA512-SUMS.txt` 一致）内 `templates/windows_release_x86_64.exe` 的 SHA-256 `d34d36f3…0562`（109,268,480 字节）为固定值，`tools/build.py` 与验证工具共用 `tools/windows_template.py` 在复制/导出前校验，`GEP_GODOT_TEMPLATES` 覆盖目录存在但字节不符时直接失败而不是改用未校验模板。纠正后工作区真实运行：导出与引擎声明子进程退出码均为 0，工具共 118 项检查 0 失败（`windows_package_verify/20260920T133114Z`，本地忽略证据目录），构建门槛四文件命令 146 项通过。
 
-**Windows 实机执行始终记为 NOT_RUN**：本轮是交叉构建与冻结包本机工程验证，未在真实 Windows 主机上运行任何程序，也没有用模拟程序替代真实构建；Windows 原生版本、实机三种准入、GEC 参与/收尾、断网补传、关闭重开、检查点恢复、失败数据导出与完整对账仍待真实 Windows 验收（03F）。包未做代码签名，SmartScreen/杀毒提示状态未知，未购买签名，也未自动关闭系统防护或添加信任。
+**该轮 Windows 实机执行记为 NOT_RUN**：本轮是交叉构建与冻结包本机工程验证，未在真实 Windows 主机上运行任何程序，也没有用模拟程序替代真实构建；当时仍待真实 Windows 验收的 Windows 原生版本、实机三种准入、GEC 参与/收尾、断网补传、关闭重开、检查点恢复、失败数据导出与完整对账，已于 2026-09-21 完成真实实机工程运行（见文末）。包未做代码签名，SmartScreen/杀毒提示状态未知，未购买签名，也未自动关闭系统防护或添加信任。
 
 ## Phase 03 03F Windows 原生实机准备与探测（P0307W）
+
+**本小节及其后的 P0307W/P0307WR/P0308 早期小节均为历史轮次记录：其中“实机未运行 / `BLOCKED` / 未接受实机结论”属于当时回合的状态。2026-09-21 的真实实机运行与当前状态见文末“Phase 03 03F Windows x64 真实实机运行（P0308 报告收尾轮）”。**
 
 2026-09-20：新增准备门槛工具 `tools/phase03_verify_windows_native.py` 与实机 harness `tools/windows_native_harness.py`。定向命令 `pytest -q tests/test_phase03_windows_acceptance.py` 31 项通过，覆盖：描述缺少显式程序元数据/错平台/错引擎版本失败、程序归档篡改入口、路径逃逸、错误 PCK 版本与摘要不符全部拒绝、kit 按成员哈希可复现且 sidecar 不自引用、篡改 kit 成员即失败、凭据样式内容被拒绝、私有账号文件 0600 且不在 kit 内、不可达/无别名/非 Windows/无桌面主机记为精确 BLOCKED、可达 Windows 桌面记录机器事实、报告把准备状态与运行状态分开且人工验收固定 NOT_RUN、harness 无 kit 时失败并输出机器可读报告、指南与模板覆盖 WN01–WN06 且人类无需输入命令，以及严格最终门槛在“仅准备”“无报告”“探测未验证准备”三种情况下都拒绝、只有真实设备运行 PASS 才通过。
 
@@ -151,4 +154,25 @@ browser=PASS（6 个规格 exit 0）, windows_preparation=PASS（229 项检查 0
 
 **一次真实 flake 及其修复**：编排器首轮运行记录到 `tests/test_phase03_releases_browser.py::test_actual_chrome_publication_and_stable_entry` 间歇失败（真实 Chrome 页面在 `shell.js` 请求上得到 400；服务端定位为测试线程写入的发行行对 live-server 线程短暂不可见，属共享内存 SQLite 测试库的跨线程可见性竞态，不是产品缺陷）。修复使用项目既有的真实文件测试库机制（`GEP_TEST_DB_FILE`，与并发探针相同），编排器 pytest 步骤显式设置该变量；随后同一 358 项套件连续两轮通过。首轮失败证据保留在 `acceptance_20260921T080000Z/`、`acceptance_20260921T083000Z/`，不删除。
 
-**仍为 NOT_RUN**：真实 Windows x64 WN01–WN06、原设计者自主体验、独立 T17。`tools/phase03_acceptance.py --verify` 在缺实机证据时保持非 0；03F 与 Phase 03 均未完成。
+## Phase 03 03F Windows x64 真实实机运行（P0308 报告收尾轮）
+
+2026-09-21：真实 Windows x64 实机工程运行与集成门槛在同一个 P0308 内完成。全部使用隔离合成数据；准备主机与 Windows 之间是作用域反向 SSH 隧道（仅公钥、严格主机密钥；不改 DNS/防火墙/证书信任），主机名、地址与进程细节只保留在本机忽略目录的交接证据中。
+
+- **准备**：`tools/phase03_verify_windows_native.py --verify-preparation --probe-device` → 229 项检查 0 失败、`preparation_status=PREPARED`，设备探针 READY。
+- **实机运行**（同一冻结 kit、摘要绑定；三个冻结研究/发行共用同一不可变 Windows 构建）：kit 内 `tools/windows_native_harness.py --run` → **236 项检查 0 失败**、`runtime_acceptance=PASS`，WN01–WN06 全部通过（三种模式准入、错误凭据/错误绑定、断网本地提交与重连补传、丢 ACK 去重、进程终止重开、检查点恢复与短码+原设备证明、重放/过期拒绝、共享写锁、清理与仅数据恢复、无秘密失败导出、本地 SQLite／服务器数据库／授权 JSONL 逐事件 ID 逐值对账、旧发行兼容）。
+- **严格门槛与集成**：`tools/phase03_acceptance.py --verify --windows-run <运行目录> --windows-prep <准备目录>`（显式选择运行/准备对）→ 全部步骤与子项明确 PASS（`integrity/pytest/shell/package/browser/windows_preparation/windows_runtime`，无 `step_errors`），整体退出 0；pytest 步 423 项通过（其中 `tests/test_phase03_windows_acceptance.py` 119 项）；`acceptance.json` 的 `windows.runtime_items` WN01–WN06 全 `PASS`。证据目录 `acceptance_20260921T052103Z/`，原始运行日志见忽略目录交接记录。
+- **本轮真实缺陷与修复**（先在真机复现再修复）：launcher 在程序快速失败/提前退出时可能不写 `exit.json`（真机定位为进程已退出后设事件抛异常，修复为先容错开启事件、身份读取与无条件写出退出记录，不可得如实记为 `null`）；严格门槛的数值表示比较（整数化浮点视为同一数值，真实数值变化仍拒绝）、WN01 标题在 launch 记录缺失时使用已记录的进程观测、WN04「仅数据」标记从完整 stdout 文件读取；每个用例开始前只读探测作用域隧道，丢失时精确 `BLOCKED`；`snapshot_store` 保留原始副本+摘要并用 SQLite backup 派生自包含快照；授权导出先保存整份下载（含摘要）再派生 session 子集并复验派生关系；`--stop-runtime` 按整条 argv 严格比对（wrapper 的 exec/shebang 变换显式记录）。
+- **保留**：attempt1（1 项失败）与 attempt2 现场、各轮 `--verify` FAIL/BLOCKED 证据、全部诊断日志原样保留；旧 `run.json` 未修改；受保护旧验收库内容摘要在运行前后一致。
+- **范围**：交叉构建工具 `tools/phase03_verify_windows_package.py --verify` 仍不执行 Windows 程序；包未做代码签名，SmartScreen/杀毒未验；本地被篡改的 PCK 不被运行时自动拒绝（已知限制）；236/423 只代表该次运行作用域，不为之后的新改动背书。
+- **设计者入口的工程侧绑定（同日只读实测）**：`tools/phase03_designer_kit.py --serve` 就绪（其就绪判定包含 Windows 侧只读远端探针），并从 Windows 侧只读请求 `localhost:<冻结端口>` 的 admin 登录页与 experiment 门户页，归一化后与本机同页逐字节一致；随后只停止本次自有的服务与隧道。Windows 上的实际双击与人工体验仍未运行。
+
+## Phase 03 03F 设计者 Windows 交付轮（P0308R，同日）
+
+2026-09-21：在 P0308 交付轮基础上补齐设计者 Windows 交付与**可重复的启动/停止生命周期**；全部为隔离合成数据，主机、地址与进程细节只保留在本机忽略目录的交接证据中，不写入公开文档。
+
+- **真实缺陷与修复（先复现再修复）**：交付验证脚本的 `--serve` 停止路径原先只在收到 SIGINT 时优雅退出。当调用方以非交互/后台方式启动（子进程把 SIGINT 继承为忽略）时 SIGINT 成为空操作，调用方只能超时后强杀，导致自有作用域 `ssh -N -R` 子进程成为孤儿，Windows 侧冻结端口继续被占用。修复：`--serve` 的前台等待显式接管 SIGINT 与 SIGTERM（SIGINT 被继承为忽略时也会重新安装处理），调用方按 SIGINT→SIGTERM→（如实标记的）最后手段顺序停止，并**持续排空**子进程输出（有界日志；读取不再可能阻塞，就绪截止时间真实有效）；停止后按严格身份只回收本任务自己的遗留隧道客户端，本地与 Windows 侧冻结端口都必须确认释放，否则如实失败；非本任务占用只报告、不停止。
+- **交付验证**：忽略目录中的交付验证脚本连续两次真实运行均 **37 项检查 0 失败、退出 0** —— 一次为前台启动，一次模拟非交互/后台启动使子进程继承 SIGINT 忽略；两次都干净启动、正常停止（退出码 0，无强杀），无遗留自有进程，本地与 Windows 侧冻结端口均已释放。失败轮次（原第 35 项）的门槛输出、每次独立原始报告与服务日志原样保留，不覆盖。
+- **不变项**：已交付文件逐字节摘要、私有账号文件、冻结包与设计者实例数据在修复前后保持不变；工程侧只停止身份一致的自有进程。
+- **边界**：工程侧启动成功不等于设计者体验通过；原设计者自主体验与独立 T17 仍为 `NOT_RUN`。
+
+**状态边界**：Windows x64 实机工程门槛已通过；原设计者自主体验与独立 T17 仍为 `NOT_RUN`。`tools/phase03_acceptance.py --verify` 未显式选择有效 Windows 运行/准备对时保持非 0；03F 工程产物已交付，但 **Phase 03 仍未完成**（需先完成原设计者自主体验，再由未参与开发的人执行独立 T17）。

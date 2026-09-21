@@ -1,6 +1,32 @@
 # Windows x64 原生完整包验收要求
 
-状态：2026-09-20用户确认纳入Phase03D/03F必需范围。当前真实工程数字（2026-09-21 P0308）：Windows 工具链与平台契约测试 `pytest -q tests/test_phase03_windows_acceptance.py tests/test_phase03_windows_packages.py tests/test_phase03_windows_build.py` **183 项通过**；准备/实机探测命令 `tools/phase03_verify_windows_native.py --verify-preparation --probe-device` 在 03F 编排运行中为 **229 项检查 0 失败**、`preparation_status=PREPARED`、`runtime_status=BLOCKED`（外部设备当前不可达；具体主机与地址只保留在本机忽略目录的交接证据中，不公开）。但**冻结程序在真实 Windows 上的完整 WN01–WN06 执行仍未通过**，实机验收状态为 NOT_RUN/BLOCKED（未接受任何启动或界面结论）。本文是验收要求，不是通过报告。macOS原生成果和Windows浏览器结果分别保留。原设计者自主体验与独立 T17 均为 NOT_RUN。
+状态：2026-09-20用户确认纳入Phase03D/03F必需范围。当前状态（2026-09-21 P0308）：真实 Windows x64（Windows 11 Pro 26200，AMD64，交互控制台会话）上一次完整实机工程运行 **WN01–WN06 共 236 项检查 0 失败**、`runtime_acceptance=PASS`；严格门槛 `tools/phase03_acceptance.py --verify --windows-run <运行目录> --windows-prep <准备目录>` 的全部步骤与子项明确 PASS（`windows_runtime=RUNTIME_PASS`，退出 0）；同批本机受影响套件 423 项通过（其中 Windows 接受测试 `tests/test_phase03_windows_acceptance.py` 119 项），准备门槛 `--verify-preparation --probe-device` 229 项检查 0 失败。工具链与平台契约测试现包含在上面的 423 项作用域内。但**人工验收仍未运行：原设计者自主体验与独立 T17 均为 `NOT_RUN`**；实机工程证据不替代人的体验结论。本文是验收要求与工程记录，不是人工验收通过报告；macOS 原生成果和 Windows 浏览器结果分别保留。
+
+## 2026-09-21 P0308 真实 Windows x64 实机运行（当前状态）
+
+2026-09-21：在真实 Windows x64 桌面上，用与准备 kit 严格绑定的**同一不可变 Windows x64 构建**（三个冻结研究/发行共用该构建；程序摘要以 `releases.json`/`artifact_manifest.json` 记录为准）完成一次完整实机工程运行。准备主机与 Windows 之间是**作用域反向 SSH 隧道**（仅公钥、严格主机密钥；不改 DNS、防火墙或证书信任），主机名、地址与端口隧道细节只保留在本机忽略目录的交接证据中，不写入公开文档。
+
+- **准备门槛**：`tools/phase03_verify_windows_native.py --verify-preparation --probe-device` → 229 项检查 0 失败、`preparation_status=PREPARED`；设备探针 READY 后才进入运行。
+- **实机运行**：kit 内 `tools/windows_native_harness.py --run` → **236 项检查 0 失败**、`runtime_acceptance=PASS`，WN01–WN06 全部通过（解压直接启动与首屏、三种冻结模式准入、错误凭据/错误绑定、断网本地提交与重连补传、丢 ACK 去重、进程终止重开、检查点恢复与短码+原设备证明、重放/过期拒绝、共享写锁、清理与仅数据恢复、无秘密失败导出，以及本地 SQLite／服务器数据库／授权 JSONL 逐事件 ID 逐值对账、旧发行兼容）。
+- **严格门槛与集成**：`tools/phase03_acceptance.py --verify --windows-run <运行目录> --windows-prep <准备目录>`（显式选择运行/准备对）→ 所有步骤与子项明确 PASS（含 `windows_runtime=RUNTIME_PASS`），整体退出 0；同批本机受影响套件 423 项通过。
+- **本轮修复的三类真实缺陷**（均先在真机复现再修复并重跑）：启动器在程序快速失败或提前退出时可能不写退出记录；严格门槛的整数/浮点数值表示比较、WN01 窗口标题来源与 WN04「仅数据」标记的读取位置；每个用例开始前必须确认作用域隧道仍在服务，否则精确 `BLOCKED` 而不是继续。
+- **保留**：早期失败与重试运行（attempt1 记录 1 项失败、attempt2）以及全部诊断证据、旧 `run.json` 原样保留、不被后续成功覆盖；受保护旧验收库内容摘要在运行前后一致。
+- **边界**：包未做代码签名，SmartScreen/杀毒提示状态未验；本地被篡改的 PCK 不会被运行时自动拒绝（已知限制）；236/423 只代表该次运行作用域，不为之后的新改动背书；**原设计者自主体验与独立 T17 仍为 `NOT_RUN`**。
+- **设计者交付与入口的工程侧实测（2026-09-21 P0308R）**：设计者冻结包已按 Windows 平台选取复制到设计者 Windows
+  机器的 GEP 专用目录，含 Windows 完整包／Web 上传样例／sidecar／许可证／双语清单与模板／自导指南／构建描述
+  样例与 schema/codebook，以及 `OPEN-ADMIN-WINDOWS.cmd`（后台）与 `RUN-DESIGNER-WINDOWS.cmd`（原生参与：先校验
+  交付包摘要与包内清单逐成员，再解压到独立目录并用本轮独立本地存储启动，绑定包内冻结设计者实例/研究/发行/模式）
+  两个双击入口；私有账号在交付目录与参与者包之外的受保护文件，Windows 侧用真实 ACL 限制到指定用户与必要
+  系统/管理员账号。工程侧 `--serve` 就绪（其就绪判定本身包含 Windows 侧只读远端探针）后，从 Windows 真实执行
+  两个交付入口：后台登录页与 experiment 门户页归一化后与本机同页逐字节一致；原生入口记录 PID／EXE 路径／窗口
+  标题／独立存储对象，且与包内清单成员摘要一致，服务端访问日志留痕而设计者实例会话/事件数不变；本机忽略目录的
+  交付验证脚本逐文件核对本地/Windows SHA256、必需指南/模板/入口、冻结绑定、私有文件 ACL、当前端点与入口执行
+  证据并真实退出 0。**仍未运行**：设计者本人双击后的实际操作、界面体验与填写结论。
+- **设计者入口的历史只读实测（2026-09-21 P0308，保留）**：`tools/phase03_designer_kit.py --serve` 就绪后，从
+  Windows 侧只读请求 `localhost:<冻结端口>` 的 admin 登录页与 experiment 门户页归一化后与本机同页一致；该轮
+  只做只读端点核对。
+
+**以下小节为历史轮次记录（2026-09-20 至 2026-09-21 早期）；其中“实机未运行 / `BLOCKED` / 未接受实机结论”的描述属于当时回合的状态，当前状态以上方本节与顶部状态行为准。**
 
 研究者目标：上传Windows构建、批准并下载冻结完整包，直接发给被试。开发者需交付EXE、实验资源、GEC与Windows原生存储依赖；包由平台绑定公开配置、完整性清单和许可声明。维护者在独立合成环境核对包及目标实例，保留旧会话与失败现场。
 
