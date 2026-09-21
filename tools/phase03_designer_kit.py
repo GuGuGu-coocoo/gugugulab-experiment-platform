@@ -1167,7 +1167,7 @@ def write_environment_files(root, verifier, seed, freeze, stamp, record, quiet=F
 # resolve to a real file/directory (or to a real frozen package member).
 DOCUMENT_PATH_TOKEN = re.compile(
     r"(?<![A-Za-z0-9_./-])("
-    r"(?:local_data|build|tools|tests|examples|public_docs|server|deploy)/[A-Za-z0-9_./\u4e00-\u9fff-]+"
+    r"(?:local_data|build|tools|tests|examples|docs|server|deploy)/[A-Za-z0-9_./\u4e00-\u9fff-]+"
     r"|[A-Za-z0-9_-]+\.(?:command|cmd|py|json|md|txt|zip)"
     r")")
 ENTRY_EXEC = "exec "
@@ -1228,7 +1228,7 @@ def document_reference_problems(texts, root, freeze, manifest):
             if token.startswith("packages/"):
                 candidates = [freeze / token, root / token]
             elif token.split("/")[0] in ("local_data", "build", "tools", "tests", "examples",
-                                         "public_docs", "server", "deploy"):
+                                         "docs", "server", "deploy"):
                 candidates = [ROOT / token]
                 # An environment token names this environment: resolve it against
                 # the environment root even when it lives outside the project root.

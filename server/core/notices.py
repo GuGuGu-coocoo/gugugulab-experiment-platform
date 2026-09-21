@@ -135,7 +135,7 @@ def third_party_notices():
         '{rule}\n'
         '\n'
         'godot-sqlite bundles SQLite. SQLite is in the public domain; see\n'
-        'https://www.sqlite.org/copyright.html (source: public_docs/third_party.md).\n'
+        'https://www.sqlite.org/copyright.html (source: docs/third_party.md).\n'
     ).format(
         version=document['engine_version']['string'],
         engine=document['engine_license'].rstrip(),

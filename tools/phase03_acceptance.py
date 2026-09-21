@@ -374,14 +374,14 @@ EXTERNAL_STEPS = frozenset({"windows_runtime"})
 
 HISTORICAL_COVERAGE = (
     {"scope": "Phase 01/02 平台矩阵（T01/02/05/06/09）", "status": "RETAINED",
-     "evidence": "public_docs/verification.md", "note": "未受影响，不在本次重跑范围"},
+     "evidence": "docs/verification.md", "note": "未受影响，不在本次重跑范围"},
     {"scope": "Windows 浏览器 LAN 验收", "status": "RETAINED",
-     "evidence": "docs/phase_reports/lan_windows_acceptance.md",
+     "evidence": "docs/internal/completed/reports/lan_windows_acceptance.md",
      "note": "Windows 浏览器证据不等于 Windows 原生 WN01–06"},
     {"scope": "macOS arm64 原生完整包（T20 平台覆盖）", "status": "FRESH",
      "evidence": "package 步骤", "note": "本次重新运行完整包验证"},
     {"scope": "历史 14 项浏览器通过记录", "status": "RETAINED",
-     "evidence": "docs/phase_reports/phase_01_03_acceptance_20260912.md",
+     "evidence": "docs/internal/completed/reports/phase_01_03_acceptance_20260912.md",
      "note": "本次按新 GUI 契约重跑受影响的 6 个规格"},
 )
 
