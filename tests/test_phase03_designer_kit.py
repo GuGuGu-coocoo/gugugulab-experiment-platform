@@ -499,6 +499,80 @@ def test_generated_service_reports_identity_mismatch_as_not_ready(tmp_path):
     assert payload["identity"]["expected"] == "11111111-1111-1111-1111-111111111111"
 
 
+# ------------------------------------------- serve foreground shutdown signals
+def _serve_wait_process(ignore_sigint):
+    """A real child that runs the kit's foreground wait, with a bounded READY gate.
+
+    ``--serve`` used to end in a bare ``time.sleep(3600)``: SIGINT/SIGTERM then fell
+    back to the inherited/default disposition, and a caller whose stop path relied
+    on the signal had to SIGKILL, which orphans the scoped ssh child. The child
+    announces READY only after the handlers are installed, so the test signals a
+    known-good state.
+    """
+    lines = [
+        "import signal, sys, threading, time",
+        f"sys.path.insert(0, {str(TOOLS)!r})",
+        "import phase03_designer_kit as kit",
+    ]
+    if ignore_sigint:
+        lines.append("signal.signal(signal.SIGINT, signal.SIG_IGN)")
+    lines += [
+        "handler = signal.getsignal(signal.SIGINT)",
+        "label = ('ignored' if handler is signal.SIG_IGN else 'sig_dfl' if handler is signal.SIG_DFL",
+        "         else 'default' if handler is signal.default_int_handler else repr(handler))",
+        "print('DISPOSITION %s' % label, flush=True)",
+        "def announce():",
+        "    time.sleep(0.5)",
+        "    print('READY', flush=True)",
+        "threading.Thread(target=announce, daemon=True).start()",
+        "kit.wait_for_shutdown(poll=0.05)",
+        "print('CLEAN', flush=True)",
+    ]
+    return subprocess.Popen([sys.executable, "-c", "\n".join(lines)], cwd=str(designer.ROOT),
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+
+def _line_within(process, timeout=30):
+    import threading
+
+    box = {}
+    reader = threading.Thread(target=lambda: box.setdefault("line", process.stdout.readline()), daemon=True)
+    reader.start()
+    reader.join(timeout)
+    return box.get("line", "")
+
+
+def _assert_serve_wait_stops(process, signal_number, expected_disposition, timeout=30):
+    try:
+        first = _line_within(process)
+        assert "DISPOSITION" in first, first
+        assert first.split()[-1] == expected_disposition, first
+        ready = _line_within(process)
+        assert "READY" in ready, ready
+        process.send_signal(signal_number)
+        output, _ = process.communicate(timeout=timeout)
+        assert process.returncode == 0, f"exit={process.returncode} output={output!r}"
+        assert "CLEAN" in output, output
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=10)
+
+
+def test_serve_foreground_wait_stops_cleanly_on_sigterm():
+    """SIGTERM must be a graceful stop path for the foreground wait (never SIGKILL-only)."""
+    import signal
+
+    _assert_serve_wait_stops(_serve_wait_process(ignore_sigint=False), signal.SIGTERM, "default")
+
+
+def test_serve_foreground_wait_rearms_sigint_ignored_by_the_parent():
+    """A non-interactive launch inherits SIGINT ignored: the wait must re-arm it and stop cleanly."""
+    import signal
+
+    _assert_serve_wait_stops(_serve_wait_process(ignore_sigint=True), signal.SIGINT, "ignored")
+
+
 def test_protected_digest_detects_a_same_length_mutation(tmp_path, monkeypatch):
     volume = tmp_path / "protected"
     volume.mkdir()

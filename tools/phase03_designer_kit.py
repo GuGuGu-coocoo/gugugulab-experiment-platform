@@ -1855,6 +1855,41 @@ def verify(root, record, quiet=False):
     return finish()
 
 
+def request_shutdown_on_signals():
+    """Turn SIGINT/SIGTERM into a clean shutdown request; return the previous handlers.
+
+    A serve process launched non-interactively (or in the background) inherits
+    SIGINT as *ignored*, so Python never installs its default handler and the
+    signal is a silent no-op. Installing an explicit handler for both signals
+    keeps the only stop left to the caller from being SIGKILL, which would orphan
+    the scoped ssh child and leave the Windows-side forward bound.
+    """
+    def request(_signum, _frame):
+        raise KeyboardInterrupt
+
+    previous = {signum: signal.getsignal(signum) for signum in (signal.SIGINT, signal.SIGTERM)}
+    for signum in previous:
+        signal.signal(signum, request)
+    return previous
+
+
+def restore_signals(previous):
+    for signum, handler in previous.items():
+        signal.signal(signum, handler)
+
+
+def wait_for_shutdown(poll=1.0):
+    """Block until SIGINT/SIGTERM asks for shutdown, then return (cleanup stays with the caller)."""
+    previous = request_shutdown_on_signals()
+    try:
+        while True:
+            time.sleep(poll)
+    except KeyboardInterrupt:
+        return "signal"
+    finally:
+        restore_signals(previous)
+
+
 def serve(root, record, foreground=True, quiet=False):
     """Engineer-managed route: service + scoped reverse tunnel for the Windows entry."""
     import phase03_verify_windows_native as native
@@ -1878,8 +1913,7 @@ def serve(root, record, foreground=True, quiet=False):
         record(True, "作用域反向隧道就绪（Windows 侧端口与冻结端口一致）", spec)
         if not foreground:
             return {"port": spec["listen_port"], "tunnel": tunnel.detail}
-        while True:
-            time.sleep(3600)
+        wait_for_shutdown()
     except KeyboardInterrupt:
         pass
     finally:
