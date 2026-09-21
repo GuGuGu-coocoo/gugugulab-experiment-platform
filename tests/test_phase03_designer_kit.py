@@ -500,32 +500,34 @@ def test_generated_service_reports_identity_mismatch_as_not_ready(tmp_path):
 
 
 # ------------------------------------------- serve foreground shutdown signals
-def _serve_wait_process(ignore_sigint):
-    """A real child that runs the kit's foreground wait, with a bounded READY gate.
+def _serve_wait_process(sigint_input):
+    """A real child that runs the kit's foreground wait with an explicit stop-path input.
 
     ``--serve`` used to end in a bare ``time.sleep(3600)``: SIGINT/SIGTERM then fell
     back to the inherited/default disposition, and a caller whose stop path relied
     on the signal had to SIGKILL, which orphans the scoped ssh child. The child
-    announces READY only after the handlers are installed, so the test signals a
-    known-good state.
+    *constructs* its SIGINT input instead of trusting the parent: ``default``
+    installs Python's default handler, ``ignored`` reproduces a non-interactive
+    launch. READY is printed from the kit's ready callback, i.e. only after the
+    stop handlers are really installed, so the test signals a known-good state
+    instead of sleeping.
     """
+    assert sigint_input in ("default", "ignored"), sigint_input
+    input_handler = "signal.SIG_IGN" if sigint_input == "ignored" else "signal.default_int_handler"
     lines = [
-        "import signal, sys, threading, time",
+        "import signal, sys",
         f"sys.path.insert(0, {str(TOOLS)!r})",
         "import phase03_designer_kit as kit",
-    ]
-    if ignore_sigint:
-        lines.append("signal.signal(signal.SIGINT, signal.SIG_IGN)")
-    lines += [
+        f"signal.signal(signal.SIGINT, {input_handler})",
         "handler = signal.getsignal(signal.SIGINT)",
         "label = ('ignored' if handler is signal.SIG_IGN else 'sig_dfl' if handler is signal.SIG_DFL",
         "         else 'default' if handler is signal.default_int_handler else repr(handler))",
         "print('DISPOSITION %s' % label, flush=True)",
-        "def announce():",
-        "    time.sleep(0.5)",
-        "    print('READY', flush=True)",
-        "threading.Thread(target=announce, daemon=True).start()",
-        "kit.wait_for_shutdown(poll=0.05)",
+        "def armed():",
+        "    handler = signal.getsignal(signal.SIGINT)",
+        "    ok = handler is not signal.SIG_IGN and handler is not signal.SIG_DFL and callable(handler)",
+        "    print('READY' if ok else 'NOT_ARMED', flush=True)",
+        "kit.wait_for_shutdown(poll=0.05, ready=armed)",
         "print('CLEAN', flush=True)",
     ]
     return subprocess.Popen([sys.executable, "-c", "\n".join(lines)], cwd=str(designer.ROOT),
@@ -563,14 +565,14 @@ def test_serve_foreground_wait_stops_cleanly_on_sigterm():
     """SIGTERM must be a graceful stop path for the foreground wait (never SIGKILL-only)."""
     import signal
 
-    _assert_serve_wait_stops(_serve_wait_process(ignore_sigint=False), signal.SIGTERM, "default")
+    _assert_serve_wait_stops(_serve_wait_process("default"), signal.SIGTERM, "default")
 
 
 def test_serve_foreground_wait_rearms_sigint_ignored_by_the_parent():
-    """A non-interactive launch inherits SIGINT ignored: the wait must re-arm it and stop cleanly."""
+    """A non-interactive launch runs with SIGINT ignored: the wait must re-arm it and stop cleanly."""
     import signal
 
-    _assert_serve_wait_stops(_serve_wait_process(ignore_sigint=True), signal.SIGINT, "ignored")
+    _assert_serve_wait_stops(_serve_wait_process("ignored"), signal.SIGINT, "ignored")
 
 
 def test_protected_digest_detects_a_same_length_mutation(tmp_path, monkeypatch):

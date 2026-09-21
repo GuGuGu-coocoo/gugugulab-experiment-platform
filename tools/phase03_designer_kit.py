@@ -1878,10 +1878,18 @@ def restore_signals(previous):
         signal.signal(signum, handler)
 
 
-def wait_for_shutdown(poll=1.0):
-    """Block until SIGINT/SIGTERM asks for shutdown, then return (cleanup stays with the caller)."""
+def wait_for_shutdown(poll=1.0, ready=None):
+    """Block until SIGINT/SIGTERM asks for shutdown, then return (cleanup stays with the caller).
+
+    ``ready``, when given, is called once the stop handlers are installed, so a
+    caller that must not signal before the stop path is armed gets a real
+    handshake instead of guessing with a sleep; a signal delivered from then on
+    is caught by this function.
+    """
     previous = request_shutdown_on_signals()
     try:
+        if ready is not None:
+            ready()
         while True:
             time.sleep(poll)
     except KeyboardInterrupt:
