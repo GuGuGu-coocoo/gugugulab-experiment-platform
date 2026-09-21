@@ -71,6 +71,31 @@ def test_body_limit_before_parsing_and_wrong_program_version(setup):
     assert c.post('/v1/participant/sessions',data,content_type='application/json').status_code==422
 
 
+def test_export_host_follows_the_configured_admin_origin(setup, settings):
+    """P0309: exports authorize the configured admin origin exactly like the GUI,
+    keep the explicit local hosts, and never open another origin."""
+    settings.ADMIN_HOST = 'admin.synthetic.test'
+    settings.EXPERIMENT_HOST = 'experiment.synthetic.test'
+    settings.WWW_HOST = 'www.synthetic.test'
+    settings.ALLOWED_HOSTS = settings.ALLOWED_HOSTS + [settings.ADMIN_HOST, settings.EXPERIMENT_HOST, settings.WWW_HOST]
+    client = Client()
+    client.force_login(setup['owner'])
+    Grant.objects.create(user=setup['owner'], study=setup['study'], action='study.view')
+    Grant.objects.create(user=setup['owner'], study=setup['study'], action='data.export_raw')
+    payload = {'study_id': str(setup['study'].id)}
+    # testserver (client default) and localhost stay explicitly local.
+    assert client.post('/v1/admin/exports', payload, content_type='application/json').status_code == 201
+    assert client.post('/v1/admin/exports', payload, content_type='application/json', HTTP_HOST='localhost').status_code == 201
+    configured = client.post('/v1/admin/exports', payload, content_type='application/json', HTTP_HOST=settings.ADMIN_HOST)
+    assert configured.status_code == 201
+    download = f"/v1/admin/exports/{configured.json()['export_id']}/download"
+    assert client.get(download, HTTP_HOST=settings.ADMIN_HOST).status_code == 200
+    for refused in ('admin.localhost', settings.EXPERIMENT_HOST, settings.WWW_HOST):
+        assert client.post('/v1/admin/exports', payload, content_type='application/json', HTTP_HOST=refused).status_code == 403
+        assert client.get(download, HTTP_HOST=refused).status_code == 403
+    assert client.get(download, HTTP_HOST='unknown.synthetic.test').status_code == 400
+
+
 def test_lan_experiment_host_does_not_open_admin(settings):
     settings.EXPERIMENT_HOST = '192.168.50.213'
     settings.ALLOWED_HOSTS = ['192.168.50.213', 'experiment.localhost']

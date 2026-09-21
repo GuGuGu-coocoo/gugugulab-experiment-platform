@@ -41,7 +41,7 @@ The stable study entry on the experiment origin reports the current release and 
 
 ## Public participation links
 
-The personal site only links to the participation portal; the portal and experiment resources are served on the experiment origin, and the researcher workbench stays on its own origin with a host-only management cookie. Real domain, DNS and TLS deployment remain future work and are not part of this implementation.
+The personal site only links to the participation portal; the portal and experiment resources are served on the experiment origin, and the researcher workbench stays on its own origin with a host-only management cookie. `GEP_ADMIN_HOST` (default `admin.localhost`) configures that workbench origin, and every admin route, including raw-data export creation and download, accepts exactly the configured origin plus the explicit local `localhost`/`testserver` links instead of every entry of `ALLOWED_HOSTS`, so changing the configured origin also closes the previous one. Real domain, DNS and TLS deployment remain future work and are not part of this implementation.
 
 ## Complete native distribution artifact (03D engineering)
 

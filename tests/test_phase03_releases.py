@@ -4,6 +4,7 @@ Every assertion states an independently specified expectation about the real
 database, HTTP API, files and audit rows; release availability, roles and portal
 visibility are explicit fixture state, never a copy of implementation output.
 """
+import csv
 import hashlib
 import html
 import io
@@ -740,6 +741,110 @@ def test_hosts_and_admin_cookie_are_isolated(settings):
     assert settings.WWW_HOST not in (settings.ADMIN_HOST, settings.EXPERIMENT_HOST)
     assert 'www.localhost' in settings.ALLOWED_HOSTS
     assert Client().get('/', HTTP_HOST='study.localhost').status_code == 400
+
+
+@pytest.mark.django_db
+def test_configured_admin_origin_owns_gui_export_snapshots_and_downloads(settings):
+    """P0309 regression: the configured admin origin, not the built-in default,
+    authorizes the GUI and the export routes; no other origin is opened.
+
+    Before the fix a researcher could log in on the configured admin origin
+    (``gui.admin_host`` reads ``settings.ADMIN_HOST``) but every export request
+    hardcoded ``admin.localhost`` and was refused with ``wrong_host`` (403).
+    Fixed expected state: the same configured origin creates and downloads the
+    fixed snapshot in all three formats, revocation still applies, the explicit
+    local hosts keep working, CSRF and the host-only cookie are unchanged, and
+    the legacy default/admin-adjacent origins stay closed.
+    """
+    settings.ADMIN_HOST = 'admin.synthetic.test'
+    settings.EXPERIMENT_HOST = 'experiment.synthetic.test'
+    settings.WWW_HOST = 'www.synthetic.test'
+    settings.ALLOWED_HOSTS = settings.ALLOWED_HOSTS + [settings.ADMIN_HOST, settings.EXPERIMENT_HOST, settings.WWW_HOST]
+    # The legacy name stays resolvable by ALLOWED_HOSTS: only the route check may refuse it.
+    assert 'admin.localhost' in settings.ALLOWED_HOSTS
+
+    context = world(title='Configured admin origin synthetic')
+    study, first, owner = context['study'], context['first'], context['owner']
+    grant(owner, study, 'data.export_raw')
+    publication.select_current_release(owner, study, '0', str(first.id))
+    study.refresh_from_db()
+    session, token = admit_request(entry_request(context, first, study.revision))
+    event = event_for(session)
+    assert receive(session.id, token, {'batch_id': str(uuid.uuid4()), 'events': [event]})['accepted'] == [event['event_id']]
+
+    admin = settings.ADMIN_HOST
+    client = Client()
+    login = client.post('/login', {'username': owner.username, 'password': OWNER_PASSWORD}, HTTP_HOST=admin)
+    assert login.status_code == 302
+    cookie_header = login.cookies['gep_admin'].output()
+    assert 'Domain=' not in cookie_header and 'HttpOnly' in cookie_header
+    assert client.get(f'/studies/{study.id}', HTTP_HOST=admin).status_code == 200
+
+    created = client.post('/v1/admin/exports', {'study_id': str(study.id)}, content_type='application/json', HTTP_HOST=admin)
+    assert created.status_code == 201
+    export_id = created.json()['export_id']
+    item = Export.objects.get(pk=export_id)
+    assert [row['record'] for row in item.snapshot['records']] == [event]
+    assert item.snapshot['builds'] == {str(first.build_id): first.build.descriptor}
+    assert item.snapshot['sessions'] == {str(session.id): {'state': 'active', 'task_finished': False}}
+    assert item.snapshot['format_version'] == '1'
+
+    download = f'/v1/admin/exports/{export_id}/download'
+    jsonl = client.get(download, HTTP_HOST=admin)
+    assert jsonl.status_code == 200 and jsonl['Content-Type'].startswith('application/x-ndjson')
+    assert jsonl['Content-Disposition'] == f'attachment; filename="{export_id}.jsonl"'
+    assert jsonl.content.decode().splitlines() == [json.dumps({'study_id': str(study.id), 'release_id': str(first.id),
+                                                               'build_id': str(first.build_id), 'record': event}, ensure_ascii=False,
+                                                              allow_nan=False)]
+    assert b'password' not in jsonl.content and b'token' not in jsonl.content
+
+    csv_download = client.get(download + '?format=csv', HTTP_HOST=admin)
+    assert csv_download.status_code == 200 and csv_download['Content-Type'].startswith('text/csv')
+    assert csv_download['Content-Disposition'] == f'attachment; filename="{export_id}.csv"'
+    assert csv_download.content.startswith(b'\xef\xbb\xbf')
+    rows = list(csv.DictReader(io.StringIO(csv_download.content.decode('utf-8-sig'))))
+    assert len(rows) == 1 and rows[0]['study_id'] == str(study.id) and rows[0]['release_id'] == str(first.id)
+    assert rows[0]['build_id'] == str(first.build_id) and rows[0]['record_json'].startswith('json:')
+    assert json.loads(rows[0]['record_json'][5:]) == event
+
+    described = client.get(download + '?format=metadata', HTTP_HOST=admin)
+    assert described.status_code == 200
+    assert described['Content-Disposition'] == f'attachment; filename="{export_id}.metadata.json"'
+    metadata = described.json()
+    assert 'records' not in metadata and metadata['format_version'] == '1'
+    assert metadata['builds'] == {str(first.build_id): first.build.descriptor}
+    assert metadata['sessions'] == {str(session.id): {'state': 'active', 'task_finished': False}}
+
+    # The explicit local compatibility hosts keep working on a configured instance.
+    for local in ('localhost', 'testserver'):
+        assert client.post('/v1/admin/exports', {'study_id': str(study.id)}, content_type='application/json',
+                           HTTP_HOST=local).status_code == 201
+
+    # CSRF still guards the export create route on the configured origin.
+    enforced = Client(enforce_csrf_checks=True)
+    enforced.force_login(owner)
+    challenged = enforced.post('/v1/admin/exports', {'study_id': str(study.id)}, content_type='application/json', HTTP_HOST=admin)
+    assert challenged.status_code == 403 and 'CSRF' in challenged.content.decode()
+    enforced.get('/login', HTTP_HOST=admin)
+    allowed = enforced.post('/v1/admin/exports', {'study_id': str(study.id)}, content_type='application/json',
+                            HTTP_HOST=admin, HTTP_X_CSRFTOKEN=enforced.cookies['csrftoken'].value)
+    assert allowed.status_code == 201
+
+    # Revocation still closes every format on the configured origin.
+    Grant.objects.filter(user=owner, study=study, action='data.export_raw').delete()
+    for url in (download, download + '?format=csv', download + '?format=metadata'):
+        assert client.get(url, HTTP_HOST=admin).status_code == 403
+
+    # The legacy default and every other configured origin stay closed to admin routes.
+    for refused in ('admin.localhost', settings.EXPERIMENT_HOST, settings.WWW_HOST):
+        assert Client().get('/login', HTTP_HOST=refused).status_code == 403
+        assert client.post('/v1/admin/exports', {'study_id': str(study.id)}, content_type='application/json',
+                           HTTP_HOST=refused).status_code == 403
+        assert client.get(download, HTTP_HOST=refused).status_code == 403
+    assert client.get(download, HTTP_HOST='unknown.synthetic.test').status_code == 400
+    # Admission stays bound to the experiment origin.
+    assert Client().post('/v1/participant/sessions', entry_request(context, first, study.revision),
+                         content_type='application/json', HTTP_HOST=admin).status_code == 403
 
 
 @pytest.mark.django_db

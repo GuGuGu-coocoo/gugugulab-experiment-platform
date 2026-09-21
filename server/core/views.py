@@ -80,7 +80,9 @@ def recovery(request):
 
 @endpoint
 def exports(request, export_id=None):
-    require(request.get_host().split(':')[0] in ('admin.localhost','localhost','testserver'), 'wrong_host',403)
+    # Same source of truth as gui.admin_host: the configured admin origin plus the
+    # explicit local compatibility hosts, never every ALLOWED_HOSTS entry.
+    require(request.get_host().split(':')[0] in (settings.ADMIN_HOST,'localhost','testserver'), 'wrong_host',403)
     if export_id:
         require(request.method=='GET','method',405)
         item=Export.objects.get(pk=export_id)
