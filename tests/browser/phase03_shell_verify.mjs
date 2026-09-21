@@ -32,6 +32,9 @@ async function poll(fn, timeout = 20000, interval = 250) {
   }
   throw new Error('poll timeout, last=' + JSON.stringify(last));
 }
+function withTimeout(promise, timeout, label) {
+  return Promise.race([promise, sleep(timeout).then(() => { throw new Error('timeout waiting for ' + label); })]);
+}
 const store = page => page.evaluate(() => new Promise((resolve, reject) => {
   const r = indexedDB.open('gec-1');
   r.onsuccess = () => {
@@ -154,30 +157,51 @@ async function liveSessions(page) {
 async function sessionById(page, id) {
   return (await store(page)).find(s => s.id === id) ?? null;
 }
-async function waitRecords(page, id, count, timeout = 25000) {
+async function waitDeclared(page, id, count, timeout = 25000) {
+  // Durable finished evidence: the session keeps exactly the expected records
+  // and a completion declaration that names every one of them. A short record
+  // set or a truncated declaration is never accepted, so this wait cannot be
+  // satisfied by a partial session or by a UI state alone. The pre-cleanup
+  // snapshot is only observable while the receipt is withheld.
   return poll(async () => {
     const s = (await store(page)).find(x => x.id === id);
-    return s && s.kind === 'session' && s.records.length === count ? {records: s.records, segments: s.segments, pending: s.pending} : null;
+    if (!s || s.kind !== 'session' || s.records.length !== count || !s.completion) return null;
+    const ids = s.records.map(e => e.event_id);
+    const declared = s.completion.event_ids ?? [];
+    return declared.length === ids.length && ids.every(event_id => declared.includes(event_id))
+      ? {records: s.records, segments: s.segments, pending: s.pending, completion: s.completion}
+      : null;
   }, timeout);
 }
 async function waitCleaned(page, id, timeout = 25000) {
   return poll(async () => (await store(page)).find(s => s.id === id && s.kind === 'cleaned'), timeout);
 }
 async function waitFinished(page, timeout = 25000) {
-  await poll(async () => (await page.evaluate(() => globalThis.GECBridge.status().state)) === 'finished', timeout);
+  // This observation is only deterministic while the completion ACK is
+  // withheld (see holdCompletion): once the receipt is delivered the SDK moves
+  // on to remote_acknowledged and the finished state is gone. Callers must
+  // await holdCompletion(...).held first.
+  return poll(async () => {
+    const state = await page.evaluate(() => globalThis.GECBridge.status().state);
+    return state === 'finished' ? state : false;
+  }, timeout);
 }
 async function holdCompletion(page) {
-  // Hold the completion ACK until the local store snapshot is taken, so the
-  // pre-cleanup records are observable deterministically.
+  // Withhold the first completion ACK until the caller has confirmed the
+  // durable finished state. `held` resolves only after the response is really
+  // being withheld, so the pre-release observation is deterministic and a
+  // release can never race the request into existence.
   let release;
   const gate = new Promise(resolve => { release = resolve; });
-  let held = false;
+  let blocked;
+  const held = new Promise(resolve => { blocked = resolve; });
+  let armed = false;
   await page.route('**/completion', async route => {
     const response = await route.fetch();
-    if (!held) { held = true; await gate; }
+    if (!armed) { armed = true; blocked(); await gate; }
     await route.fulfill({response});
   });
-  return release;
+  return {held: withTimeout(held, 30000, 'the completion ACK to be withheld'), release: () => release()};
 }
 async function dropFirstAck(page) {
   let dropped = false;
@@ -240,11 +264,15 @@ async function webAnonymous(page, context, study) {
   check(offlineSession.pending.length > 0, 'offline local commit stays pending', offlineSession.pending.length);
   check(offlineSession.checkpoint.next_trial === 1, 'offline local commit keeps the first trial boundary');
   await context.setOffline(false);
-  const releaseCompletion = await holdCompletion(page);
+  const completion = await holdCompletion(page);
   await page.locator('#canvas').press('ArrowRight');
-  const saved = await waitRecords(page, offlineSession.id, 4);
-  releaseCompletion();
-  await waitFinished(page);
+  const saved = await waitDeclared(page, offlineSession.id, 4);
+  await completion.held;
+  const finished = await waitFinished(page);
+  check(finished === 'finished' && saved.completion.event_ids.length === 4,
+        'anonymous session finished before the receipt while the completion ACK was withheld',
+        {state: finished, records: saved.records.length, declared: saved.completion.event_ids.length, ack: 'withheld'});
+  completion.release();
   check(saved.records.length === 4, 'anonymous session committed four records', saved.records.length);
   await poll(() => ackDropped(), 20000);
   const cleaned = await waitCleaned(page, offlineSession.id);
@@ -291,11 +319,15 @@ async function webIdFull(page, study) {
   await waitTrial(page, 2);
   const saved = await sessionRecord(page);
   check(saved.checkpoint.next_trial === 1, 'id-mode session keeps the first trial boundary');
-  const releaseCompletion = await holdCompletion(page);
+  const completion = await holdCompletion(page);
   await page.locator('#canvas').press('ArrowRight');
-  const committed = await waitRecords(page, saved.id, 4);
-  releaseCompletion();
-  await waitFinished(page);
+  const committed = await waitDeclared(page, saved.id, 4);
+  await completion.held;
+  const finished = await waitFinished(page);
+  check(finished === 'finished' && committed.completion.event_ids.length === 4,
+        'id-mode session finished before the receipt while the completion ACK was withheld',
+        {state: finished, records: committed.records.length, declared: committed.completion.event_ids.length, ack: 'withheld'});
+  completion.release();
   await waitCleaned(page, saved.id);
   check(committed.records.length === 4, 'id-mode session committed four records', committed.records.length);
   return {session_id: saved.id, records: committed.records, segments: committed.segments};
@@ -334,11 +366,15 @@ async function webPasswordFlows(page, context, admin, study) {
   check(!!sessionB && sessionB.id !== sessionA.id, 'starting a new session creates a different session');
   await page.locator('#canvas').press('ArrowLeft');
   await waitTrial(page, 2);
-  const releaseB = await holdCompletion(page);
+  const completionB = await holdCompletion(page);
   await page.locator('#canvas').press('ArrowRight');
-  await waitRecords(page, sessionB.id, 4);
-  releaseB();
-  await waitFinished(page);
+  const declaredB = await waitDeclared(page, sessionB.id, 4);
+  await completionB.held;
+  const finishedB = await waitFinished(page);
+  check(finishedB === 'finished' && declaredB.completion.event_ids.length === 4,
+        'password session B finished before the receipt while the completion ACK was withheld',
+        {state: finishedB, records: declaredB.records.length, declared: declaredB.completion.event_ids.length, ack: 'withheld'});
+  completionB.release();
   await waitCleaned(page, sessionB.id);
   // 3. The abandoned session is now front-locked; named recovery refuses it.
   await page.reload();
@@ -373,11 +409,15 @@ async function webPasswordFlows(page, context, admin, study) {
   await page.click('#gec-confirm-continue');
   await waitTrial(page, 2);
   check((await sessionById(page, sessionA.id)).segments.length === 2, 'continued session opened a second segment');
-  const releaseA = await holdCompletion(page);
+  const completionA = await holdCompletion(page);
   await page.locator('#canvas').press('ArrowRight');
-  const resumed = await waitRecords(page, sessionA.id, 4);
-  releaseA();
-  await waitFinished(page);
+  const resumed = await waitDeclared(page, sessionA.id, 4);
+  await completionA.held;
+  const finishedA = await waitFinished(page);
+  check(finishedA === 'finished' && resumed.completion.event_ids.length === 4,
+        'recovered session A finished before the receipt while the completion ACK was withheld',
+        {state: finishedA, records: resumed.records.length, declared: resumed.completion.event_ids.length, ack: 'withheld'});
+  completionA.release();
   await waitCleaned(page, sessionA.id);
   check(resumed.records.length === 4 && resumed.segments.length === 2, 'code recovery keeps the original session with a second segment', {records: resumed.records.length, segments: resumed.segments.length});
   check(resumed.records.filter(e => e.payload?.trial_id === 't1').length === 1, 'recovered session never replays trial 1');
@@ -392,11 +432,15 @@ async function webPasswordFlows(page, context, admin, study) {
   check(!!sessionC, 'cleaned device state starts a fresh session');
   await page.locator('#canvas').press('ArrowLeft');
   await waitTrial(page, 2);
-  const releaseC = await holdCompletion(page);
+  const completionC = await holdCompletion(page);
   await page.locator('#canvas').press('ArrowRight');
-  await waitRecords(page, sessionC.id, 4);
-  releaseC();
-  await waitFinished(page);
+  const declaredC = await waitDeclared(page, sessionC.id, 4);
+  await completionC.held;
+  const finishedC = await waitFinished(page);
+  check(finishedC === 'finished' && declaredC.completion.event_ids.length === 4,
+        'password session C finished before the receipt while the completion ACK was withheld',
+        {state: finishedC, records: declaredC.records.length, declared: declaredC.completion.event_ids.length, ack: 'withheld'});
+  completionC.release();
   await waitCleaned(page, sessionC.id);
   await page.screenshot({path: path.join(job.run_dir, 'web_password.png')});
   const data_only = await webNamedDataOnly(context, page, url);
@@ -461,6 +505,119 @@ async function webNamedDataOnly(context, page, url) {
   return {session_id: declared.id, records: beforeConfirm.records, segments: beforeConfirm.segments};
 }
 
+/* Fast/delayed ACK regression for the completion observation protocol.
+ *
+ * Runs against a probe page (served by tests/test_phase03_shell.py) that drives
+ * the shipped SDK exactly like the Godot shell does: admission, records,
+ * commit, finish. The driver owns the completion ACK with the same helpers the
+ * shell flows use, so a regression in the observation order or in the strict
+ * durable-declaration predicate fails here as well as in the real shell flow.
+ */
+async function probeOpen(page, job) {
+  // A transient error response for one module keeps the page from ever
+  // becoming ready; keep what the server actually answered in the failure.
+  const failures = [];
+  const onResponse = async response => {
+    if (response.status() >= 400) {
+      let body = '';
+      try { body = (await response.text()).slice(0, 300); } catch {}
+      failures.push({url: response.url(), status: response.status(), body});
+    }
+  };
+  page.on('response', onResponse);
+  try {
+    await page.goto(job.probe_url);
+    await poll(async () => page.evaluate(() => globalThis.GECProbe?.ready === true), 30000, 100);
+  } catch (error) {
+    throw new Error(error.message + ' | probe responses: ' + JSON.stringify(failures));
+  } finally {
+    page.off('response', onResponse);
+  }
+}
+async function probeRun(page, spec) {
+  const result = await page.evaluate(async input => globalThis.GECProbe.run(input), spec);
+  if (!result || !result.session_id) throw new Error('probe run produced no session: ' + JSON.stringify(result));
+  return result;
+}
+async function completionProbe(page, job) {
+  const evidence = {scenarios: {}};
+
+  // 1. Delayed receipt: the ACK is withheld while the durable finished state
+  //    and the full declaration are observed; only then is it released.
+  await probeOpen(page, job);
+  const delayedHold = await holdCompletion(page);
+  await page.evaluate(() => globalThis.GECProbe.watch());
+  const delayed = await probeRun(page, {records: 4});
+  const delayedDeclared = await waitDeclared(page, delayed.session_id, 4);
+  await delayedHold.held;
+  const delayedFinished = await waitFinished(page);
+  check(delayedFinished === 'finished' && delayedDeclared.completion.event_ids.length === 4,
+        'probe: delayed receipt observes finished with the full declaration while the ACK is withheld',
+        {state: delayedFinished, records: delayedDeclared.records.length, declared: delayedDeclared.completion.event_ids.length, ack: 'withheld'});
+  await page.evaluate(() => globalThis.GECProbe.mark('release'));
+  delayedHold.release();
+  const delayedCleaned = await waitCleaned(page, delayed.session_id);
+  await poll(async () => (await page.evaluate(() => globalThis.GECBridge.status().state)) === 'remote_acknowledged', 20000);
+  const delayedTimeline = await page.evaluate(() => globalThis.GECProbe.timeline());
+  check(delayedCleaned.kind === 'cleaned' && delayedCleaned.state === 'remote_acknowledged',
+        'probe: delayed receipt reaches the cleaned remote-acknowledged tombstone', delayedCleaned.state);
+  evidence.scenarios.delayed = {session_id: delayed.session_id, records: delayedDeclared.records.length,
+                                declared: delayedDeclared.completion.event_ids.length, timeline: delayedTimeline};
+
+  // 2. Fast receipt: nothing is withheld. The finished transient may be gone
+  //    before it can be observed, so the regression waits for the durable
+  //    receipt and the cleaned tombstone instead.
+  await probeOpen(page, job);
+  const fast = await probeRun(page, {records: 4});
+  const fastCleaned = await waitCleaned(page, fast.session_id);
+  await poll(async () => (await page.evaluate(() => globalThis.GECBridge.status().state)) === 'remote_acknowledged', 20000);
+  check(fastCleaned.kind === 'cleaned' && fastCleaned.state === 'remote_acknowledged',
+        'probe: fast receipt reaches the cleaned remote-acknowledged tombstone without the transient',
+        fastCleaned.state);
+  evidence.scenarios.fast = {session_id: fast.session_id, records: 4};
+
+  // 3. Fewer events: a two-record finished session satisfies its own
+  //    declaration but must never satisfy the four-record declaration wait.
+  await probeOpen(page, job);
+  const shortHold = await holdCompletion(page);
+  const short = await probeRun(page, {records: 2});
+  const shortDeclared = await waitDeclared(page, short.session_id, 2);
+  let shortRejected = false;
+  try { await waitDeclared(page, short.session_id, 4, 3000); }
+  catch (error) { shortRejected = /poll timeout/.test(String(error.message)); }
+  check(shortRejected && shortDeclared.records.length === 2 && shortDeclared.completion.event_ids.length === 2,
+        'probe: a two-record session is never accepted as a full four-record finish',
+        {records: shortDeclared.records.length, declared: shortDeclared.completion.event_ids.length,
+         full_wait: shortRejected ? 'rejected' : 'accepted'});
+  shortHold.release();
+  await waitCleaned(page, short.session_id);
+  evidence.scenarios.short = {session_id: short.session_id, records: shortDeclared.records.length};
+
+  // 4. Missing receipt: the completion response is refused before it reaches
+  //    the server. The declared session stays local and unfinished; once the
+  //    refusal stops, the retained declaration retransmits and cleans.
+  await probeOpen(page, job);
+  const refuse = route => route.abort();
+  await page.route('**/completion', refuse);
+  const missing = await probeRun(page, {records: 4});
+  await waitDeclared(page, missing.session_id, 4);
+  const refused = await poll(async () => {
+    const s = await sessionById(page, missing.session_id);
+    return s && (s.attempts ?? 0) >= 1 ? s : null;
+  }, 20000);
+  const missingState = await page.evaluate(() => globalThis.GECBridge.status().state);
+  check(missingState === 'finished' && refused.complete_ack == null && refused.kind === 'session',
+        'probe: a refused receipt stays local, finished and unacknowledged, with no tombstone',
+        {state: missingState, attempts: refused.attempts, ack: refused.complete_ack, kind: refused.kind});
+  await page.unroute('**/completion', refuse);
+  const missingCleaned = await waitCleaned(page, missing.session_id);
+  check(missingCleaned.kind === 'cleaned' && missingCleaned.state === 'remote_acknowledged',
+        'probe: the retained declaration retransmits after the refusal and cleans', missingCleaned.state);
+  evidence.scenarios.missing = {session_id: missing.session_id, attempts: refused.attempts};
+
+  return evidence;
+}
+
 async function exportJsonl(page, study, out) {
   // New GUI contract (P0307 module pages): exports live on the /exports module.
   await page.goto(study.study_url + '/exports');
@@ -476,8 +633,11 @@ async function main() {
   const {browser, context} = await launch();
   const page = await context.newPage();
   try {
-    await login(page);
-    if (command === 'all') {
+    // The probe drives an anonymous release and needs no researcher session.
+    if (command !== 'completion-probe') await login(page);
+    if (command === 'completion-probe') {
+      results.evidence.probe = await completionProbe(page, job);
+    } else if (command === 'all') {
       results.evidence.studies = await runSetup(page);
       const studies = results.evidence.studies;
       if (job.web_checks !== false) {

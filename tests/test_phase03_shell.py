@@ -7,11 +7,15 @@ They are non-interactive and fail (never skip) when the pinned Godot toolchain i
 missing.
 """
 import hashlib
+import io
 import json
 import re
 import shutil
+import sqlite3
 import subprocess
+import sys
 import uuid
+import zipfile
 from datetime import timedelta
 from pathlib import Path
 
@@ -388,3 +392,151 @@ def test_native_recovery_export_entry_writes_the_gui_document_without_secrets(tm
         cwd=ROOT, capture_output=True, text=True, timeout=180, env=environment)
     assert 'NATIVE_RECOVERY_EXPORT_VERIFIED' in result.stdout, result.stdout + result.stderr
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+# ---------------------------------------------------------------------------
+# Fast/delayed completion-receipt regression (real Chrome + shipped Web client)
+# ---------------------------------------------------------------------------
+
+PROBE_PAGE = b'''<!doctype html>
+<html><head><meta charset="utf-8"><title>GEC completion probe</title></head><body>
+<script type="module">
+import "./gec/bridge.js";
+const call = async (op, args) => {
+  const key = "probe-" + Math.random().toString(36).slice(2);
+  await globalThis.GECBridge.call(key, op, JSON.stringify(args));
+  return JSON.parse(globalThis.GECBridge.take(key));
+};
+const states = [];
+let watching = false;
+let last = null;
+const sample = () => {
+  const state = globalThis.GECBridge.status().state;
+  if (state !== last) { states.push([Math.round(performance.now()), state]); last = state; }
+};
+setInterval(() => { if (watching) sample(); }, 5);
+globalThis.GECProbe = {
+  ready: false, error: null,
+  async run(spec = {}) {
+    if (!globalThis.GECProbe.ready) throw new Error("probe_not_ready");
+    const total = spec.records ?? 4;
+    const started = await call("start", [{}]);
+    if (started.error) throw new Error("start:" + started.error);
+    for (let index = 0; index < total; index++) {
+      const recorded = await call("record", ["exp.rt", {rt_ms: 100 + index, choice: "left"}, {id: "rt", version: "1"}, null]);
+      if (recorded.error) throw new Error("record:" + recorded.error);
+    }
+    const committed = await call("commit", [null]);
+    if (committed.error) throw new Error("commit:" + committed.error);
+    const finished = await call("finish", []);
+    if (finished.error) throw new Error("finish:" + finished.error);
+    return {session_id: started.session_id, records: total};
+  },
+  watch() { states.length = 0; last = null; watching = true; sample(); },
+  mark(label) { states.push([Math.round(performance.now()), "mark:" + label]); },
+  timeline() { watching = false; return states.slice(); },
+};
+(async () => {
+  for (let attempt = 0; attempt < 400; attempt++) {
+    if (globalThis.GECBridge.status().state === "ready") { globalThis.GECProbe.ready = true; return; }
+    if (globalThis.GECBridge.prepare_error) { globalThis.GECProbe.error = globalThis.GECBridge.prepare_error; return; }
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  globalThis.GECProbe.error = "probe_timeout";
+})();
+</script></body></html>'''
+
+
+def completion_probe_package() -> bytes:
+    target = io.BytesIO()
+    with zipfile.ZipFile(target, 'w') as archive:
+        archive.writestr('web/index.html', PROBE_PAGE)
+        for name in ('sdk.js', 'bridge.js', 'inputs.js', 'shell.js'):
+            archive.writestr('web/gec/' + name, (ROOT / 'packages' / 'gec_web' / name).read_bytes())
+    return target.getvalue()
+
+
+def probe_release_code() -> str:
+    descriptor = {'platform': 'godot_web', 'version': 'completion-probe',
+                  'schemas': {'exp.rt': {'id': 'rt', 'version': '1', 'schema': {
+                      'type': 'object', 'properties': {'rt_ms': {'type': 'number'}, 'choice': {'type': 'string'}},
+                      'required': ['rt_ms', 'choice'], 'additionalProperties': False}}}}
+    return (
+        "import django\n"
+        "django.setup()\n"
+        "from core.models import Build, Release, Study\n"
+        f"descriptor = {descriptor!r}\n"
+        "study = Study.objects.create(title='Shell completion probe', mode='anonymous', recruitment='open', max_sessions=8)\n"
+        "build = Build.objects.create(study=study, descriptor=descriptor, digest='e' * 64, package_path='completion-probe.zip')\n"
+        "release = Release.objects.create(study=study, build=build, approved=True, "
+        "config={'purpose': 'synthetic', 'mode': 'anonymous', 'max_sessions': 8})\n"
+        "print('PROBE_RELEASE', release.id)\n"
+    )
+
+
+def test_completion_receipt_fast_delayed_truncated_and_refused(tmp_path):
+    """The receipt observation must not race a transient UI state.
+
+    Real Chrome runs the shipped Web client against the verifier's own isolated
+    gunicorn instance (its own data directory, database and fresh port), so the
+    test needs no live-server database sharing. While the completion receipt is
+    withheld, the durable declaration and the finished state are observable;
+    after release the session cleans. A refused receipt must stay local,
+    finished and unacknowledged, a two-record declaration must never satisfy the
+    four-record wait, and the fast path must reach the same cleaned receipt
+    without depending on the transient.
+    """
+    if str(ROOT / 'tools') not in sys.path:
+        sys.path.insert(0, str(ROOT / 'tools'))
+    import phase03_verify_shell as shell_verify
+
+    verify = shell_verify.Verify(tmp_path / 'instance')
+    verify.init_instance()
+    verify.start_server()
+    try:
+        packages = verify.data / 'packages'
+        packages.mkdir(parents=True, exist_ok=True)
+        (packages / 'completion-probe.zip').write_bytes(completion_probe_package())
+        created = verify.run_python(probe_release_code())
+        match = re.search(r'PROBE_RELEASE ([0-9a-f-]{36})', created.stdout)
+        assert match, created.stdout + created.stderr
+        release_id = match.group(1)
+        job_path = tmp_path / 'completion_probe_job.json'
+        job_path.write_text(json.dumps({
+            'probe_url': f'http://experiment.localhost:{verify.port}/run/{release_id}/web/index.html',
+            'run_dir': str(tmp_path)}))
+        result = subprocess.run(['node', str(ROOT / 'tests' / 'browser' / 'phase03_shell_verify.mjs'),
+                                 'completion-probe', str(job_path)],
+                                cwd=ROOT, capture_output=True, text=True, timeout=600)
+        assert result.returncode == 0, result.stdout + result.stderr
+        payload = json.loads(result.stdout)
+        assert payload['failures'] == [], payload['failures']
+        labels = [entry['label'] for entry in payload['checks']]
+        for label in ('probe: delayed receipt observes finished with the full declaration while the ACK is withheld',
+                      'probe: delayed receipt reaches the cleaned remote-acknowledged tombstone',
+                      'probe: fast receipt reaches the cleaned remote-acknowledged tombstone without the transient',
+                      'probe: a two-record session is never accepted as a full four-record finish',
+                      'probe: a refused receipt stays local, finished and unacknowledged, with no tombstone',
+                      'probe: the retained declaration retransmits after the refusal and cleans'):
+            assert label in labels, labels
+        timeline = payload['evidence']['probe']['scenarios']['delayed']['timeline']
+        values = [value for _, value in timeline]
+        release_at = values.index('mark:release')
+        assert 'finished' in values[:release_at], timeline
+        assert 'remote_acknowledged' in values[release_at:], timeline
+        scenarios = payload['evidence']['probe']['scenarios']
+        sessions = {}
+        connection = sqlite3.connect(f'file:{verify.db_path}?mode=ro', uri=True)
+        try:
+            for session_id, completion in connection.execute(
+                    'select id, completion from core_session where release_id=?', [release_id.replace('-', '')]):
+                events = connection.execute('select count(*) from core_event where session_id=?',
+                                            [session_id]).fetchone()[0]
+                sessions[session_id] = (events, len(json.loads(completion)['event_ids']) if completion else None)
+        finally:
+            connection.close()
+        assert len(sessions) == 4
+        assert sessions[scenarios['short']['session_id'].replace('-', '')] == (2, 2)
+        assert sorted(sessions.values()) == [(2, 2), (4, 4), (4, 4), (4, 4)]
+    finally:
+        verify.stop_server()
