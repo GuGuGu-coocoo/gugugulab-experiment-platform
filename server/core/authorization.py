@@ -74,6 +74,13 @@ LEGACY_ONLY_ACTIONS = frozenset({'member.manage', 'permission.delegate'})
 
 ROLES = ('user', 'admin')
 
+# Exactly the supported stored policy/authorization versions. Anything else -
+# a future version, a string, a bool or a malformed row - is unsupported and
+# resolves to a fail-closed denial; it is never silently downgraded to v1 and
+# never treated as v2 by a ``>=`` comparison.
+SUPPORTED_POLICY_VERSIONS = (1, 2)
+
+
 # Platform defaults per role; Owner holds every catalog entry.
 ROLE_PLATFORM_DEFAULTS = {
     'user': frozenset({'study.create'}),
@@ -111,6 +118,26 @@ def _study_key(study_uuid):
         return str(uuid.UUID(study_uuid))
     except (AttributeError, TypeError, ValueError):
         raise PolicyError('invalid_study', study_uuid) from None
+
+
+def exact_version(value):
+    """The stored value when it is exactly 1 or 2, else ``None``.
+
+    Deliberately rejects bools, strings, floats, ``None`` and every future
+    integer: callers must fail closed instead of guessing what an unknown
+    version would mean.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if value in SUPPORTED_POLICY_VERSIONS else None
+
+
+def state_flag(value, label):
+    """Identity/state flags must be real booleans, never truthy stand-ins."""
+    if not isinstance(value, bool):
+        raise PolicyError('invalid_state_flag', f'{label}: {value!r}')
+    return value
+
 
 
 def validate_actions(actions, catalog, *, label='actions'):
@@ -228,11 +255,11 @@ class SubjectPolicy:
     def __post_init__(self):
         if not isinstance(self.role, str) or self.role not in ROLES:
             raise PolicyError('unknown_role', repr(self.role))
-        object.__setattr__(self, 'is_instance_owner', bool(self.is_instance_owner))
-        object.__setattr__(self, 'authenticated', bool(self.authenticated))
-        object.__setattr__(self, 'active', bool(self.active))
-        object.__setattr__(self, 'must_change_password', bool(self.must_change_password))
-        object.__setattr__(self, 'deleted', bool(self.deleted))
+        object.__setattr__(self, 'is_instance_owner', state_flag(self.is_instance_owner, 'is_instance_owner'))
+        object.__setattr__(self, 'authenticated', state_flag(self.authenticated, 'authenticated'))
+        object.__setattr__(self, 'active', state_flag(self.active, 'active'))
+        object.__setattr__(self, 'must_change_password', state_flag(self.must_change_password, 'must_change_password'))
+        object.__setattr__(self, 'deleted', state_flag(self.deleted, 'deleted'))
         object.__setattr__(self, 'platform_overrides', validate_platform_overrides(self.platform_overrides))
         object.__setattr__(self, 'study_overrides', validate_study_overrides(self.study_overrides))
         object.__setattr__(self, 'future_study_actions', validate_future_study_actions(self.future_study_actions))
@@ -362,7 +389,13 @@ def writable_permission_target(*, target_is_self, target_is_owner):
 
 
 def can_take_over(actor, target_before, target_after, study_uuids):
-    """Whole-account takeover guard (reset, enable, role change, delete, ...).
+    """Whole-account takeover dominance guard (reset, enable, role change, ...).
+
+    This is a *permission comparison helper*, not a lifecycle authorization:
+    R02C must additionally require the actor's role/platform target eligibility
+    (for example only the Owner may appoint or demote an Admin) before applying
+    any lifecycle operation. Passing this comparison alone must never authorize a
+    lifecycle action.
 
     The actor must dominate the target's stored platform and study permissions
     before and after the operation, including the target's future default for

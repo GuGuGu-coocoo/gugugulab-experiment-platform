@@ -56,3 +56,40 @@ def test_run_chrome_tokens_normal_nonzero_quiet_and_timeout_are_bounded(evidence
     evidence('run_chrome_tokens.json', {'normal': tokens, 'nonzero': nonzero[0].returncode,
                                         'quiet': quiet[1], 'timeout': 'bounded',
                                         'descriptors_before': before, 'descriptors_after': after})
+
+import importlib
+from django.apps import apps as django_apps
+from django.contrib.auth import get_user_model
+from core.models import Audit, Principal, Study
+
+OWNER_PASSWORD = 'synthetic-p03r02b-owner-password'
+
+def make_user(username, **kwargs):
+    return get_user_model().objects.create_user(username, password=OWNER_PASSWORD, **kwargs)
+
+def make_study(title):
+    return Study.objects.create(title=title)
+
+def test_migration_backfills_principals_and_audit_without_guessing_creator(db, evidence):
+    User = get_user_model()
+    users = [make_user('p03r02b_backfill_a'), make_user('p03r02b_backfill_b')]
+    studies = [make_study('P03R02B backfill A'), make_study('P03R02B backfill B')]
+    audits = [Audit.objects.create(actor=user, action='permission.matrix_changed', target=f'{user.pk}:{studies[0].pk}')
+              for user in users]
+    Audit.objects.create(actor=None, action='recovery.named_redeemed', target=str(studies[1].pk))
+
+    migration = importlib.import_module('core.migrations.0010_policy_principal')
+    migration.create_principals_and_backfill_audit(django_apps, None)
+    migration.create_principals_and_backfill_audit(django_apps, None)  # idempotent
+
+    principals = {principal.user_id: principal for principal in Principal.objects.all()}
+    assert set(principals) == {user.pk for user in users}
+    assert len(principals) == len(users)
+    for audit in audits:
+        audit.refresh_from_db()
+        assert audit.actor_principal_id == principals[audit.actor_id].pk
+    assert Audit.objects.filter(actor__isnull=True, actor_principal__isnull=True).count() == 1
+    assert not Study.objects.exclude(creator_principal__isnull=True).exists()
+    evidence('principal_backfill.json', {
+        'principals': len(principals), 'backfilled_audits': len(audits),
+        'device_audit_without_principal': 1, 'legacy_creator_null': True})

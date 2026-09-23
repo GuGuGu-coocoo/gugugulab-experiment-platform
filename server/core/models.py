@@ -7,11 +7,29 @@ class Identified(models.Model):
     class Meta:
         abstract = True
 
+class Principal(models.Model):
+    """Stable, non-login identity that survives account deletion.
+
+    A Principal stores only its own UUID, at most one live user reference and the
+    deletion timestamp. Usernames, passwords and profile data are never copied
+    here, and migration 0010 creates exactly one Principal per existing account
+    without guessing anything else.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, null=True, blank=True,
+                                on_delete=models.SET_NULL, related_name='gep_principal')
+    deleted_at = models.DateTimeField(null=True, blank=True)
+
 class Instance(models.Model):
     id = models.PositiveSmallIntegerField(primary_key=True, default=1)
     instance_id = models.UUIDField(unique=True)
     owner = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
     governance_revision = models.PositiveIntegerField(default=0)
+    # Exact authorization version. Existing databases extended by migration 0010
+    # stay at 1 and are never enlarged automatically; only the Owner-confirmed
+    # enablement writes 2. Unknown/future/malformed values fail closed in
+    # ``core.access`` and are never treated as v2.
+    authorization_version = models.PositiveIntegerField(default=1)
 
 class AccountProfile(models.Model):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='gep_profile')
@@ -19,6 +37,16 @@ class AccountProfile(models.Model):
     must_change_password = models.BooleanField(default=False)
     auth_version = models.PositiveIntegerField(default=1)
     revision = models.PositiveIntegerField(default=0)
+    # Vocabulary revision of the stored v2 policy fields below. Both values are
+    # accepted by the canonical policy builder; anything else fails closed.
+    policy_version = models.PositiveIntegerField(default=2)
+    # Owner-set finite boolean map of platform actions, e.g. {"accounts.view": false}.
+    platform_overrides = models.JSONField(default=dict, blank=True)
+    # study UUID -> the complete selected list of study actions for that study.
+    study_overrides = models.JSONField(default=dict, blank=True)
+    # Owner-set Admin bound for studies without an explicit override; null keeps
+    # the fixed v2 role default and is never treated as "no restriction".
+    future_study_actions = models.JSONField(null=True, blank=True)
 
 class AccountInvitation(Identified):
     issuer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
@@ -34,6 +62,11 @@ class Study(Identified):
     mode = models.CharField(max_length=16, default='anonymous')
     recruitment = models.CharField(max_length=16, default='paused')
     max_sessions = models.PositiveIntegerField(default=1)
+    # Stable creator reference, nullable on purpose: migration 0010 never guesses
+    # a legacy creator, so old studies keep NULL and list the missing evidence as
+    # unknown in the enablement preview.
+    creator_principal = models.ForeignKey('Principal', null=True, blank=True,
+                                          on_delete=models.SET_NULL, related_name='+')
     # Explicit publication policy. Public listing is a separate researcher
     # decision, never inferred from mode or recruitment, and the current release
     # is nullable on purpose: legacy studies get no guessed release.
@@ -114,8 +147,11 @@ class Export(Identified):
 class Audit(models.Model):
     study = models.ForeignKey(Study, on_delete=models.PROTECT, null=True, blank=True)
     # Device-initiated recovery carries no human actor; every governance and
-    # administrative action still names one.
-    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True)
+    # administrative action still names one. The user reference is SET_NULL so a
+    # deleted account leaves its history intact, while ``actor_principal`` keeps
+    # the stable identity (PROTECT: never blanked by accident).
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    actor_principal = models.ForeignKey(Principal, on_delete=models.PROTECT, null=True, blank=True, related_name='+')
     action = models.CharField(max_length=48)
     target = models.CharField(max_length=128)
     before = models.JSONField(null=True)
