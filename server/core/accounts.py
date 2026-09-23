@@ -16,7 +16,9 @@ from django.utils import timezone
 from . import access, researcher_passwords
 from .access import (ROLES, allowed_platform, effective_role, ensure_principal,
                      is_instance_owner)
-from .models import AccountInvitation, AccountProfile, Audit, Grant, Instance
+from .models import (AccountInvitation, AccountProfile, Audit, Grant, Instance,
+                     Invitation, PermissionPreview, Principal, RecoveryCode,
+                     RecoveryPermit)
 from .protocol import Rejected, require
 from .services import digest
 
@@ -75,7 +77,15 @@ def instance_revision():
 
 
 def audit(actor, action, target, before=None, after=None, study=None):
-    Audit.objects.create(study=study, actor=actor, action=action, target=str(target), before=before, after=after)
+    """Write one secret-free audit with the actor's stable subject.
+
+    The principal is created on demand (migration 0010 backfilled existing
+    accounts), so an audit written now still names the stable subject after the
+    account is deleted and its username may be reused.
+    """
+    principal = ensure_principal(actor) if getattr(actor, 'pk', None) else None
+    Audit.objects.create(study=study, actor=actor, actor_principal=principal, action=action,
+                         target=str(target), before=before, after=after)
 
 
 def _rand_password():
@@ -371,6 +381,11 @@ def activate_account(token, password, confirm):
         invitation.save(update_fields=['consumed'])
         audit(issuer, 'account.invitation_activated', user.pk,
               after={'username': invitation.username, 'role': invitation.role,
+                     # The invitation UUID is the independent application identity:
+                     # it is recorded with the created account so a later
+                     # same-name application can never be confused with this one.
+                     'application': str(invitation.pk),
+                     'principal': str(ensure_principal(user).pk),
                      'bound_policy': bound_fields or None})
         _bump(instance)
     return user
@@ -410,3 +425,203 @@ def apply_reconcile(actor, choice, rows):
         audit(actor, 'access.conflict_resolved', f'{user_id}:{study_id}', before={'actions': actions, 'choice': choice}, after={'actions': after})
         resolved.append({'user_id': str(user_id), 'study_id': str(study_id), 'actions': after})
     return resolved
+
+
+# --------------------------------------------------------------------------- permanent deletion (R03)
+
+def deletion_after_policy(before_policy):
+    """The empty whole-account policy a permanent deletion projects to.
+
+    Deletion removes every platform and study permission, so the whole-account
+    takeover comparison must dominate the target before *and* after. In
+    particular a non-Owner actor can never remove one of the Owner-controlled
+    Admin switches, even while holding both switches themselves.
+    """
+    return access.project_policy(before_policy, role='user', platform_overrides={},
+                                 study_overrides={}, future_study_actions=None)
+
+
+def _preview_operates_on(preview, target_key, username):
+    """Does one preview summary/staged payload name this account?
+
+    Only explicit account keys count: the stable UUID under ``user``/
+    ``user_id``/``target_user``, or the username under ``username``. A roster
+    code that merely equals a username is never an account operation.
+    """
+    def scan(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key == 'username' and item == username:
+                    return True
+                if key in ('user', 'user_id', 'target_user') and str(item) == target_key:
+                    return True
+                if scan(item):
+                    return True
+        elif isinstance(value, (list, tuple)):
+            return any(scan(item) for item in value)
+        return False
+    return scan(preview.summary) or scan(preview.staged)
+
+
+def invalidate_target_previews(target):
+    """Drop the target's own previews and expire previews that operate on it.
+
+    The target's own rows are removed (the account reference is PROTECT and a
+    deleted account has no previews at all). Every other actor's unconsumed
+    preview that names this account is expired and its private staged intent
+    cleared, so a later commit can never apply a staged operation to a username
+    that no longer belongs to that subject. Returns (deleted, invalidated).
+    """
+    deleted, _ = PermissionPreview.objects.filter(actor_id=target.pk).delete()
+    now = timezone.now()
+    target_key, username = str(target.pk), target.username
+    invalidated = 0
+    for preview in PermissionPreview.objects.filter(consumed=False).iterator():
+        if preview.staged is None and preview.expires_at <= now:
+            continue
+        if _preview_operates_on(preview, target_key, username):
+            PermissionPreview.objects.filter(pk=preview.pk).update(staged=None, expires_at=now)
+            invalidated += 1
+    return deleted, invalidated
+
+
+def _delete_account_sessions(user_id):
+    """Remove every live Django session authenticated as this account.
+
+    Session rows are opaque and carry no user column, so each live row is
+    decoded and matched by its stored ``_auth_user_id``. The account therefore
+    cannot keep a usable session through a request already in flight.
+    """
+    from django.contrib.sessions.models import Session as DjangoSession
+    key = str(user_id)
+    removed = 0
+    for row in DjangoSession.objects.filter(expire_date__gt=timezone.now()).iterator():
+        if row.get_decoded().get('_auth_user_id') == key:
+            row.delete()
+            removed += 1
+    return removed
+
+
+def delete_account(actor, password, expected_revision, target_id, confirm_username=None):
+    """Permanently delete one non-Owner account (R03; R00 contract section C).
+
+    One atomic transaction: re-authenticate the actor and check the governance
+    revision, lock the target, require the exact platform action(s) for the
+    target role and the whole-account takeover guard over the target's stored
+    policy projected to the empty policy, then require the typed username
+    confirmation, invalidate every credential bound to the account (issued
+    account/study invitations, recovery permits and codes; unconsumed previews
+    and previews operating on the target; pending username-bound invitations),
+    delete the login sessions, mark the stable Principal deleted without ever
+    removing it, write the audit and delete the User (profile and grants
+    cascade). Studies, participants, sessions, events and earlier audits stay
+    untouched. An audit failure raises inside the same transaction and rolls
+    the whole deletion, credential invalidation and session removal back.
+    """
+    with transaction.atomic():
+        instance, actor, _ = _reauth(actor, password, expected_revision)
+        target = get_user_model().objects.select_for_update().get(pk=target_id)
+        _mutable_target(actor, target, instance=instance)
+        profile = AccountProfile.objects.select_for_update().filter(user_id=target.pk).first()
+        role = profile.role if profile is not None else 'user'
+        require(role in ROLES, 'role')
+        _require_lifecycle_platform(instance, actor, 'delete', target_role=role)
+        version = access.authorization_version(instance)
+        require(version in (1, 2), 'forbidden', 403)
+        before = _account_state(target, profile)
+        after_policy = None
+        if version == 2:
+            try:
+                before_policy = access.canonical_policy(target, instance=instance)
+            except ValueError:
+                raise Rejected('unsupported_policy_version', 409) from None
+            before['policy'] = access.policy_snapshot(before_policy)
+            after_policy = deletion_after_policy(before_policy)
+        require(access.takeover_allowed(actor, target, instance=instance, after=after_policy),
+                'higher_privilege_target', 403)
+        require((confirm_username or '') == target.username, 'delete_confirm_mismatch', 409)
+
+        principal = ensure_principal(target)
+        principal.deleted_at = timezone.now()
+        principal.user = None
+        principal.save(update_fields=['deleted_at', 'user'])
+
+        issued = {
+            'account_invitations': AccountInvitation.objects.filter(issuer_id=target.pk).delete()[0],
+            'study_invitations': Invitation.objects.filter(issuer_id=target.pk).delete()[0],
+            'recovery_permits': RecoveryPermit.objects.filter(issuer_id=target.pk).delete()[0],
+            'recovery_codes': RecoveryCode.objects.filter(issuer_id=target.pk).delete()[0],
+        }
+        # Every pending credential bound to the released username *or* to the
+        # target's stable Principal is revoked before the username can be reused.
+        # A version-2 invitation for this account carries the Principal binding;
+        # a legacy username-only row is caught by the username filter.
+        pending = {
+            'account_invitations_revoked': AccountInvitation.objects.filter(
+                username=target.username, consumed=False, revoked=False).update(revoked=True),
+            'study_invitations_revoked': Invitation.objects.filter(
+                username=target.username, consumed=False, revoked=False).update(revoked=True),
+            'study_invitations_principal_revoked': Invitation.objects.filter(
+                principal_id=principal.pk, consumed=False, revoked=False).update(revoked=True),
+        }
+        # Historical audit rows written by a path that did not store the stable
+        # subject are rebound from the exact, still-present actor foreign key --
+        # never from a username guess -- before the account row is removed.
+        audits_rebound = Audit.objects.filter(actor_id=target.pk,
+                                              actor_principal__isnull=True).update(
+            actor_principal_id=principal.pk)
+        previews_deleted, previews_invalidated = invalidate_target_previews(target)
+        sessions_removed = _delete_account_sessions(target.pk)
+        after = {'username': target.username, 'role': role, 'deleted': True,
+                 'principal': str(principal.pk),
+                 'principal_deleted_at': principal.deleted_at.isoformat(),
+                 'issued_credentials_removed': issued,
+                 'pending_credentials_revoked': pending,
+                 'audits_rebound': audits_rebound,
+                 'previews_deleted': previews_deleted,
+                 'previews_invalidated': previews_invalidated,
+                 'sessions_removed': sessions_removed}
+        audit(actor, 'account.deleted', target.pk, before=before, after=after)
+        target.delete()
+        _bump(instance)
+    return {'username': after['username'], 'principal': after['principal']}
+
+
+def audit_actor_display(entry):
+    """Stable subject label for one audit row.
+
+    A deleted account is shown as ``已删除账号 <principal uuid>``; a username is
+    only shown while its account still exists, so a reused username never
+    re-labels an older audit row.
+    """
+    if getattr(entry, 'actor_id', None):
+        actor = getattr(entry, 'actor', None)
+        if actor is None:
+            actor = get_user_model().objects.filter(pk=entry.actor_id).first()
+        if actor is not None:
+            return actor.username
+    principal_id = getattr(entry, 'actor_principal_id', None)
+    if principal_id:
+        principal = getattr(entry, 'actor_principal', None)
+        if principal is None or getattr(principal, 'pk', None) is None:
+            principal = Principal.objects.filter(pk=principal_id).first()
+        if principal is not None and principal.deleted_at is not None:
+            return f'已删除账号 {principal_id}'
+        return f'账号 {principal_id}'
+    return ''
+
+
+def recent_account_audits(limit=10):
+    """Bounded account-lifecycle audit view rows with stable actor labels.
+
+    Only ``account.*`` events are shown, newest first, and the stable principal
+    label is rendered through :func:`audit_actor_display`, so the page never
+    maps an old event onto an account that reused the username.
+    """
+    rows = (Audit.objects.filter(action__startswith='account.')
+            .select_related('actor', 'actor_principal').order_by('-created_at', '-id')[:limit])
+    return [{'action': entry.action, 'target': str(entry.target),
+             'created_at': entry.created_at, 'actor': audit_actor_display(entry),
+             'actor_principal': str(entry.actor_principal_id or ''),
+             'actor_deleted': bool(entry.actor_id is None and entry.actor_principal_id)}
+            for entry in rows]

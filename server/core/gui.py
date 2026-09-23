@@ -18,7 +18,7 @@ from django.db import transaction
 from django.http import JsonResponse, HttpResponse, FileResponse
 from django.shortcuts import render, redirect
 from django.utils import timezone
-from .models import Study, Grant, Instance, Participant, Build, Release, Session, Audit, Invitation, Export, RecoveryPermit, AccountProfile
+from .models import Study, Grant, Instance, Participant, Build, Release, Session, Audit, Invitation, Export, RecoveryPermit, AccountProfile, Principal
 from .access import guard, allowed, allowed_platform, ACTIONS, STUDY_V2_ACTIONS, authority_actions, authorization_version, ensure_principal, viewable_studies
 from .protocol import require, parse, Rejected
 from .views import endpoint
@@ -327,7 +327,7 @@ def home(request):
                     profile.revision+=1
                     profile.save(update_fields=['study_overrides','revision'])
                 Grant.objects.bulk_create([Grant(user=request.user,study=study,action=action,delegable=False) for action in STUDY_V2_ACTIONS])
-                Audit.objects.create(study=study,actor=request.user,action='study.created',target=str(study.id))
+                Audit.objects.create(study=study,actor=request.user,actor_principal=ensure_principal(request.user),action='study.created',target=str(study.id))
             else:
                 require(instance.owner_id==request.user.pk,'create_forbidden',403)
                 study=Study.objects.create(title=title)
@@ -525,8 +525,17 @@ def study_page(request,study_id,module='overview'):
                 require('study.view' in actions,'visibility_required',409)
                 require(set(actions)<=authority_actions(request.user,study),'delegation_forbidden',403)
                 username=request.POST['username'];require(0<len(username)<=150,'username')
+                # Identity contract: an invitation for an existing account binds
+                # that account's stable Principal, so a later username reuse can
+                # never attach it to another subject. A free username stays a
+                # new-account application whose own invitation UUID is the
+                # application identity (identity_version=2).
+                invitee=get_user_model().objects.filter(username=username).first()
                 token=secrets.token_urlsafe(32)
-                Invitation.objects.create(study=study,issuer=request.user,username=username,actions=actions,token_hash=digest(token),expires_at=timezone.now()+timedelta(hours=24))
+                Invitation.objects.create(study=study,issuer=request.user,username=username,actions=actions,
+                                          principal=ensure_principal(invitee) if invitee is not None else None,
+                                          identity_version=2,token_hash=digest(token),
+                                          expires_at=timezone.now()+timedelta(hours=24))
                 notice=ui.notice(lang, '邀请密钥（请通过可信渠道交付）：'+token,
                                  'Invitation key (deliver through a trusted channel): '+token)
                 _bump(instance)
@@ -551,7 +560,7 @@ def study_page(request,study_id,module='overview'):
             else:
                 raise Rejected('unknown_operation')
             if not audited:
-                Audit.objects.create(study=study,actor=request.user,action=op,target=str(study.id))
+                Audit.objects.create(study=study,actor=request.user,actor_principal=ensure_principal(request.user),action=op,target=str(study.id))
       context=study_context(request,study,notice,module)
       context.update(workbench.module_context(request,study,module))
       if request.method=='POST' and not notice:
@@ -633,14 +642,30 @@ def activate(request):
             require('study.view' in invite.actions,'delegation_changed',403)
             require(set(invite.actions)<=authority_actions(invite.issuer,invite.study),'delegation_changed',403)
             user=get_user_model().objects.filter(username=invite.username).first()
-            if user:
+            if invite.identity_version>=2 and invite.principal_id is not None:
+                # Existing-account target: only the bound stable subject may
+                # accept, through its own login. A deleted account or a reused
+                # username never resolves back to the bound Principal.
+                require(user is not None and user.is_active,'invitation_inactive',403)
+                require(request.user.is_authenticated and request.user.pk==user.pk,'existing_account_login_required',403)
+                require(Principal.objects.filter(pk=invite.principal_id,user_id=user.pk,deleted_at__isnull=True).exists(),'invitation_inactive',403)
+            elif invite.identity_version>=2:
+                # New-account application: the invitation's own UUID is the
+                # application identity, so an account that appeared through
+                # another path is never adopted by this invitation.
+                require(user is None,'invitation_inactive',403)
+                password=request.POST.get('password','');researcher_passwords.require_acceptable(password)
+                user=get_user_model().objects.create_user(invite.username,password=password)
+                ensure_principal(user)
+            elif user:
                 require(request.user.is_authenticated and request.user.pk==user.pk and user.is_active,'existing_account_login_required',403)
             else:
                 password=request.POST.get('password','');researcher_passwords.require_acceptable(password)
                 user=get_user_model().objects.create_user(invite.username,password=password)
+                ensure_principal(user)
             for action in invite.actions:
                 Grant.objects.get_or_create(study=invite.study,user=user,action=action)
             invite.consumed=True;invite.save()
-            Audit.objects.create(study=invite.study,actor=invite.issuer,action='invite.accepted',target=str(user.id))
+            Audit.objects.create(study=invite.study,actor=invite.issuer,actor_principal=ensure_principal(invite.issuer),action='invite.accepted',target=str(user.id))
         return redirect('/login')
     return render(request,'core/activate.html')

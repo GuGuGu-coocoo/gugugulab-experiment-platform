@@ -288,17 +288,17 @@ def _matrix_page_v2(actor, search='', page=1, lang='zh'):
         actor_policy = access.canonical_policy(actor)
     except ValueError:
         raise Rejected('unsupported_policy_version', 409) from None
-    accounts = User.objects.order_by('id')
+    account_rows = User.objects.order_by('id')
     if search:
-        accounts = accounts.filter(username__icontains=search)
-    total = accounts.count()
+        account_rows = account_rows.filter(username__icontains=search)
+    total = account_rows.count()
     pages = max(1, math.ceil(total / MATRIX_PAGE_SIZE))
     try:
         page = int(page)
     except (TypeError, ValueError):
         page = 1
     page = min(max(page, 1), pages)
-    window = list(accounts[(page - 1) * MATRIX_PAGE_SIZE: page * MATRIX_PAGE_SIZE])
+    window = list(account_rows[(page - 1) * MATRIX_PAGE_SIZE: page * MATRIX_PAGE_SIZE])
     page_ids = [user.pk for user in window]
     profiles = {profile.user_id: profile for profile in AccountProfile.objects.filter(user_id__in=page_ids)}
     owner_scope = actor_policy.is_instance_owner
@@ -354,11 +354,26 @@ def _matrix_page_v2(actor, search='', page=1, lang='zh'):
                             'checks': [{'action': action, 'label': action_label(action, lang),
                                         'checked': action in current, 'delegable': False}
                                        for action in sorted(manageable) if action != 'study.view']})
+        # The red permanent-delete entry is offered exactly where the delete
+        # transaction would accept it (platform switches and whole-account
+        # scope); every value comes from the canonical policies already loaded
+        # for this page, so the hint adds no query. The server re-checks
+        # everything on submission.
+        can_delete = False
+        if not (is_owner_row or own_row) and target_policy is not None:
+            required = accounts.lifecycle_platform_actions(
+                'delete', profile.role if profile is not None else 'user')
+            can_delete = (
+                all(action in access.platform_actions_of(actor_policy) for action in required)
+                and access.takeover_allowed_from(actor_policy, target_policy,
+                                                 accounts.deletion_after_policy(target_policy),
+                                                 sorted(all_keys)))
         rows.append({'id': user.pk, 'username': user.username, 'is_owner': is_owner_row,
                      'role': profile.role if profile is not None else 'user',
                      'is_active': user.is_active,
                      'must_change_password': bool(profile.must_change_password) if profile is not None else False,
-                     'hidden_studies': len(hidden), 'studies': entries})
+                     'hidden_studies': len(hidden), 'studies': entries,
+                     'can_delete': can_delete})
     return {'rows': rows, 'search': search, 'page': page, 'pages': pages, 'total': total,
             'page_links': _pager_links('page', page, pages, {'q': search}), 'owner_scope': owner_scope}
 
@@ -399,17 +414,17 @@ def _matrix_page_v1(actor, search='', page=1, lang='zh'):
     User = get_user_model()
     owner_id = Instance.objects.get(pk=1).owner_id
     search = (search or '').strip()
-    accounts = User.objects.order_by('id')
+    account_rows = User.objects.order_by('id')
     if search:
-        accounts = accounts.filter(username__icontains=search)
-    total = accounts.count()
+        account_rows = account_rows.filter(username__icontains=search)
+    total = account_rows.count()
     pages = max(1, math.ceil(total / MATRIX_PAGE_SIZE))
     try:
         page = int(page)
     except (TypeError, ValueError):
         page = 1
     page = min(max(page, 1), pages)
-    window = list(accounts[(page - 1) * MATRIX_PAGE_SIZE: page * MATRIX_PAGE_SIZE])
+    window = list(account_rows[(page - 1) * MATRIX_PAGE_SIZE: page * MATRIX_PAGE_SIZE])
     page_ids = [user.pk for user in window]
     profiles = {profile.user_id: profile for profile in AccountProfile.objects.filter(user_id__in=page_ids)}
     owner, manageable_by_study = _matrix_study_scope(actor)
@@ -458,11 +473,28 @@ def _matrix_page_v1(actor, search='', page=1, lang='zh'):
                             'checks': [{'action': action, 'label': action_label(action, lang),
                                         'checked': action in current, 'delegable': bool(current.get(action, False))}
                                        for action in sorted(manageable) if action != 'study.view']})
+        # The v1 hint reuses the page's own grant rows and the actor's delegable
+        # scope (already loaded), so it adds no query; the write path re-checks.
+        can_delete = False
+        if not (is_owner_row or own_row):
+            actor_profile = profiles.get(actor.pk) or AccountProfile.objects.filter(user_id=actor.pk).first()
+            actor_role = actor_profile.role if actor_profile is not None else 'user'
+            required = accounts.lifecycle_platform_actions(
+                'delete', profile.role if profile is not None else 'user')
+            platform_ok = owner or (actor_role == 'admin'
+                                    and set(required) <= access.LEGACY_PLATFORM_ADMIN)
+            target_privileges = {(study_id, action)
+                                 for (user_id, study_id), actions in grants.items()
+                                 if user_id == user.pk for action in actions}
+            actor_authority = {(study_id, action)
+                               for study_id, actions in manageable_by_study.items()
+                               for action in actions}
+            can_delete = platform_ok and (owner or actor_authority >= target_privileges)
         rows.append({'id': user.pk, 'username': user.username, 'is_owner': is_owner_row,
                      'role': profile.role if profile is not None else 'user',
                      'is_active': user.is_active,
                      'must_change_password': bool(profile.must_change_password) if profile is not None else False,
-                     'studies': entries})
+                     'studies': entries, 'can_delete': can_delete})
     return {'rows': rows, 'search': search, 'page': page, 'pages': pages, 'total': total,
             'page_links': _pager_links('page', page, pages, {'q': search}), 'owner_scope': owner}
 

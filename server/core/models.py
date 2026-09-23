@@ -49,6 +49,13 @@ class AccountProfile(models.Model):
     future_study_actions = models.JSONField(null=True, blank=True)
 
 class AccountInvitation(Identified):
+    """New-account invitation; its own UUID is the independent application identity.
+
+    Activation resolves exactly this row by token and consumes it, so a replayed
+    token can never open a second account, and a later account with the same
+    username is a different application with a fresh Principal. ``bound_policy``
+    is the explicit finite Admin bound for a non-Owner issuer (v2).
+    """
     issuer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
     token_hash = models.CharField(max_length=64, unique=True)
     username = models.CharField(max_length=150)
@@ -166,6 +173,17 @@ class Audit(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
 class Invitation(Identified):
+    """Legacy (v1) study-member invitation.
+
+    ``identity_version`` separates the rows written before the R03 identity
+    contract (1, the original username-only boundary) from rows written by the
+    current issuance path (2). A version-2 row either binds ``principal`` -- the
+    stable subject of an account that already existed when the invitation was
+    issued -- or is a new-account application whose own UUID is the application
+    identity; acceptance therefore never resolves back through a username that
+    appeared after issuance. ``principal`` is PROTECT: a bound stable subject is
+    never silently blanked.
+    """
     study = models.ForeignKey(Study, on_delete=models.PROTECT)
     issuer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
     token_hash = models.CharField(max_length=64, unique=True)
@@ -174,6 +192,9 @@ class Invitation(Identified):
     expires_at = models.DateTimeField()
     consumed = models.BooleanField(default=False)
     revoked = models.BooleanField(default=False)
+    principal = models.ForeignKey('Principal', null=True, blank=True,
+                                  on_delete=models.PROTECT, related_name='+')
+    identity_version = models.PositiveSmallIntegerField(default=1)
 
 class RecoveryPermit(Identified):
     session = models.ForeignKey(Session, on_delete=models.PROTECT)

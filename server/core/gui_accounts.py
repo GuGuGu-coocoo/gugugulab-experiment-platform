@@ -28,7 +28,7 @@ MESSAGES = {
     'admin_appointment_owner_only': '只有 Owner 可以任命或降级 Admin。',
     'owner_only': '只有 Owner 可以执行此操作。',
     'self_target': '不能对自己的账号执行此操作；请使用修改密码。',
-    'higher_privilege_target': '目标账号拥有操作者无法支配的研究权限（含不可委派权限），不能重置密码、停用、启用或调整其权限。',
+    'higher_privilege_target': '目标账号拥有操作者无法支配的研究权限（含不可委派权限），不能重置密码、停用、启用、调整其权限或永久删除。',
     'password_change_required': '必须先修改临时密码，才能执行账号治理操作。',
     'password_reused': '新密码不能与当前密码相同。',
     'role': '角色不合法。',
@@ -37,6 +37,7 @@ MESSAGES = {
     'invitation_active': '该账号已有未使用的邀请，请先撤销或等待过期。',
     'account_missing': '目标账号不存在。',
     'no_change': '目标状态没有变化。',
+    'delete_confirm_mismatch': '确认用户名与目标账号不一致，永久删除未执行，账号保持原状。',
     'no_conflicts': '当前没有需要收敛的授权矛盾。',
     'choice': '请选择处理方式。',
     'current_password_wrong': '当前密码不正确。',
@@ -146,6 +147,17 @@ def _apply(request):
         result = accounts.set_account_role(request.user, password, revision, _target(username).pk, request.POST.get('role', ''))
         return {'notice': ui.notice(lang, f"已将 {result['username']} 的角色设为 {result['role']}。",
                                     f"Role of {result['username']} set to {result['role']}.")}
+    if op == 'delete':
+        # Permanent, irreversible: the red entry posts the typed username and
+        # the actor password; the service re-checks everything atomically.
+        target = _target(username)
+        result = accounts.delete_account(request.user, password, revision, target.pk,
+                                         request.POST.get('confirm_username', ''))
+        return {'notice': ui.notice(
+                    lang,
+                    f"已永久删除账号 {result['username']}（稳定主体 {result['principal']}）。登录、邀请、预览与恢复签发均已失效；研究、被试、会话数据与历史审计保留。",
+                    f"Account {result['username']} was permanently deleted (stable subject {result['principal']}). Its login, invitations, previews and recovery issuances no longer work; studies, participants, session data and the audit history are kept."),
+                'deleted_principal': result['principal'], 'deleted_username': result['username']}
     if op == 'revoke_invitation':
         result = accounts.revoke_invitation(request.user, password, revision, request.POST.get('invitation_id'))
         return {'notice': ui.notice(lang, f"已撤销账号邀请：{result['username']}。",
@@ -221,6 +233,9 @@ def _users_context(request):
             'invitations': AccountInvitation.objects.filter(consumed=False, revoked=False, expires_at__gt=timezone.now()).order_by('username'),
             'conflicts': conflicts, 'revision': accounts.instance_revision(),
             'matrix': matrix, 'action_labels': ACTION_LABELS,
+            # Bounded account-lifecycle audit view: a deleted actor is rendered
+            # as its stable principal id, never as a reused username.
+            'account_audit': accounts.recent_account_audits(),
             # Owner-only, read-only v1 -> v2 enablement difference (nothing is
             # written here); an ordinary Admin never sees or can trigger it.
             'migration': governance_migration.page_state() if owned else None,
@@ -236,7 +251,8 @@ def users_page(request):
     # v2 needs the finite accounts.view platform action from the stored policy.
     require(allowed_platform(request.user, 'accounts.view'), 'forbidden', 403)
     extra = {'notice': '', 'error': '', 'secret': None, 'secret_username': '',
-             'invitation_username': '', 'preview': None, 'invitation_tokens': [], 'import_result': None}
+             'invitation_username': '', 'preview': None, 'invitation_tokens': [], 'import_result': None,
+             'deleted_principal': '', 'deleted_username': ''}
     status = 200
     if request.method == 'POST':
         try:

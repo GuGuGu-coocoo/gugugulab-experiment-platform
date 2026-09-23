@@ -11,7 +11,7 @@ from django.utils import timezone
 from jsonschema import Draft202012Validator
 from .models import Audit, Instance, Participant, RecoveryCode, Session, Event, Release, Study
 from .protocol import require, Rejected, uuid_text, equal, validate_tree, MAX_BATCH, MAX_EVENTS, PROTOCOL
-from .access import guard
+from .access import guard, ensure_principal
 from .artifacts import require_release_artifact
 from .throttle import check
 
@@ -280,7 +280,7 @@ def recover(session_id, proof, permit):
         require(hmac.compare_digest(session.proof_hash,digest(proof)) and not session.revoked,'recovery_denied',403)
         session.expires_at=timezone.now()+timedelta(days=7);session.save(update_fields=['expires_at'])
         ticket.consumed=True;ticket.save(update_fields=['consumed'])
-        Audit.objects.create(study=session.release.study,actor=ticket.issuer,action='session.recovered',target=str(session.id))
+        Audit.objects.create(study=session.release.study,actor=ticket.issuer,actor_principal=ensure_principal(ticket.issuer),action='session.recovered',target=str(session.id))
     return {'session_id':str(session.id),'token':token_for(session),'task_finished':session.completion is not None}
 
 
@@ -368,7 +368,7 @@ def issue_recovery_code(issuer, session_id):
             raise Rejected('recovery_code_unavailable', 503)
         ticket = RecoveryCode.objects.create(session=session, study=study, release=session.release, issuer=actor,
                                              code_hash=code_hash, expires_at=timezone.now() + RECOVERY_CODE_TTL)
-        Audit.objects.create(study=study, actor=actor, action='recovery.code_issued', target=str(session.id),
+        Audit.objects.create(study=study, actor=actor, actor_principal=ensure_principal(actor), action='recovery.code_issued', target=str(session.id),
                              after={'capability': RECOVERY_CODE_CAPABILITY, 'expires_at': ticket.expires_at.isoformat()})
         return {'capability': RECOVERY_CODE_CAPABILITY, 'code': code, 'session_id': str(session.id),
                 'expires_at': ticket.expires_at, 'attempts_allowed': RECOVERY_CODE_MAX_ATTEMPTS}
@@ -426,7 +426,7 @@ def redeem_recovery_code(data, client_key=None):
                 _renew_session(session)
                 ticket.consumed = True
                 ticket.save(update_fields=['consumed'])
-                Audit.objects.create(study=ticket.study, actor=ticket.issuer, action='recovery.code_redeemed', target=str(session.id),
+                Audit.objects.create(study=ticket.study, actor=ticket.issuer, actor_principal=ensure_principal(ticket.issuer), action='recovery.code_redeemed', target=str(session.id),
                                      after={'capability': RECOVERY_CODE_CAPABILITY})
                 denied = False
                 payload = {'capability': RECOVERY_CODE_CAPABILITY, 'session_id': str(session.id), 'token': token_for(session),

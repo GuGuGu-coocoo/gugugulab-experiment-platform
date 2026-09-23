@@ -390,6 +390,28 @@ def takeover_creation_allowed(actor, after_policy, *, instance=None):
     return authorization.can_take_over(actor_policy, empty, after_policy, study_uuids)
 
 
+def platform_actions_of(policy):
+    """Effective v2 platform actions of an already-canonical policy.
+
+    Pure (no database access); callers that already hold a canonical policy use
+    it for display hints, and the write entries keep re-reading stored rows.
+    """
+    if policy is None:
+        return frozenset()
+    return authorization.platform_actions(policy)
+
+
+def takeover_allowed_from(actor_policy, target_before, after, study_uuids):
+    """Pure whole-account comparison for callers that already hold policies.
+
+    Used only for read-only display hints (for example whether the red delete
+    entry is offered); it never authorizes a write by itself.
+    """
+    if actor_policy is None or target_before is None:
+        return False
+    return authorization.can_take_over(actor_policy, target_before, after, study_uuids)
+
+
 def policy_snapshot(policy, *, studies=None):
     """Redacted complete policy description for previews and audits.
 

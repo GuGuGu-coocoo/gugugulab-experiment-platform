@@ -2,7 +2,7 @@
 <h1>{{ui.users_title}}</h1>
 <p>{{ui.users_intro}}</p>
 <p><a href="/">{{ui.back_to_studies}}</a> · <a href="/account/password">{{ui.nav_password}}</a></p>
-{% if notice %}<div class="notice">{{notice}}</div>{% endif %}
+{% if notice %}<div class="notice"{% if deleted_principal %} data-deleted-principal="{{deleted_principal}}" data-deleted-username="{{deleted_username}}"{% endif %}>{{notice}}</div>{% endif %}
 {% if secret %}<div class="notice" data-one-time-secret="1">{{ui.users_secret_note}} {{secret_username}} <code>{{secret}}</code></div>{% endif %}
 {% if invitation_link %}<div class="notice" data-one-time-invitation="1">{{ui.users_invitation_note}} {{invitation_username}} · {{ui.users_invitation_link_note}} <a href="{{invitation_link}}" data-invitation-link="{{invitation_link}}">{{invitation_link}}</a> <small>{{ui.users_invitation_help}}</small></div>{% endif %}
 {% for invite in invitation_tokens %}<div class="notice" data-one-time-invitation="1">{{ui.users_import_invitation_note}} {{invite.username}} · {{ui.users_invitation_link_note}} <a href="{{invite.link}}" data-invitation-link="{{invite.link}}">{{invite.link}}</a> <small>{{ui.users_invitation_help}}</small></div>{% endfor %}
@@ -34,8 +34,17 @@
 <form method="post">{% csrf_token %}<input type="hidden" name="op" value="reset_password"><input type="hidden" name="username" value="{{row.username}}"><input type="hidden" name="revision" value="{{revision}}"><input type="password" name="password" placeholder="{{ui.users_your_password}}" required><button>{{ui.users_reset_password}}</button></form>
 {% if is_owner %}<form method="post">{% csrf_token %}<input type="hidden" name="op" value="set_role"><input type="hidden" name="username" value="{{row.username}}"><input type="hidden" name="revision" value="{{revision}}"><select name="role"><option value="user"{% if row.role == 'user' %} selected{% endif %}>user</option><option value="admin"{% if row.role == 'admin' %} selected{% endif %}>admin</option></select><input type="password" name="password" placeholder="{{ui.users_your_password}}" required><button>{{ui.users_save_role}}</button></form>{% endif %}
 {% if row.is_active %}<form method="post">{% csrf_token %}<input type="hidden" name="op" value="disable"><input type="hidden" name="username" value="{{row.username}}"><input type="hidden" name="revision" value="{{revision}}"><input type="password" name="password" placeholder="{{ui.users_your_password}}" required><button>{{ui.users_disable}}</button></form>{% else %}<form method="post">{% csrf_token %}<input type="hidden" name="op" value="enable"><input type="hidden" name="username" value="{{row.username}}"><input type="hidden" name="revision" value="{{revision}}"><input type="password" name="password" placeholder="{{ui.users_your_password}}" required><button>{{ui.users_enable}}</button></form>{% endif %}
+{% if row.can_delete %}<details data-delete-account="{{row.id}}"><summary style="color:var(--danger)">{{ui.users_delete_summary}}</summary>
+<p class="muted">{{ui.users_delete_warning}}</p>
+<form method="post" data-delete-form="1">{% csrf_token %}<input type="hidden" name="op" value="delete"><input type="hidden" name="username" value="{{row.username}}"><input type="hidden" name="revision" value="{{revision}}">
+<label>{{ui.users_delete_confirm_username}}<input name="confirm_username" maxlength="150" autocomplete="off" required></label>
+<label>{{ui.users_confirm_password}}<input type="password" name="password" autocomplete="off" required></label>
+<button class="error" data-danger="1">{{ui.users_delete_submit}}</button></form></details>{% endif %}
 {% endif %}</td></tr>{% endfor %}</table></div>
 {% if matrix.page_links %}<nav class="pager" data-account-pager aria-label="{{ui.users_account_pager}}">{% for link in matrix.page_links %}<a href="{{link.url}}"{% if link.current %} aria-current="page"{% endif %}>{{link.number}}</a>{% endfor %}</nav>{% endif %}</section>
+<section data-account-audit><h2>{{ui.users_audit_title}}</h2><p class="muted">{{ui.users_audit_note}}</p>
+{% if account_audit %}<div class="table-wrap"><table><tr><th>{{ui.users_audit_time}}</th><th>{{ui.users_audit_actor}}</th><th>{{ui.users_audit_action}}</th><th>{{ui.users_audit_target}}</th></tr>
+{% for item in account_audit %}<tr data-audit-row="{{item.action}}" data-audit-actor="{{item.actor}}"{% if item.actor_principal %} data-audit-principal="{{item.actor_principal}}"{% endif %} data-audit-deleted="{{item.actor_deleted|yesno:'1,0'}}"><td>{{item.created_at}}</td><td>{{item.actor}}</td><td>{{item.action}}</td><td>{{item.target}}</td></tr>{% endfor %}</table></div>{% else %}<p data-account-audit-empty="1">{{ui.users_audit_empty}}</p>{% endif %}</section>
 <section data-permission-matrix><h2>{{ui.users_matrix}}</h2><p>{{ui.users_matrix_help}}</p>
 {% if not matrix.owner_scope %}<p class="muted" data-matrix-scope="1">{{ui.users_matrix_scope_note}}</p>{% endif %}
 <form method="get" data-matrix-search="1"><label>{{ui.users_matrix_search}} <input name="q" value="{{matrix.search}}" maxlength="150"></label><button>{{ui.common_search}}</button>{% if matrix.search %} <a href="/users">{{ui.users_matrix_clear}}</a>{% endif %}</form>
