@@ -468,10 +468,83 @@ def _wal_source(root, name='wal_source'):
     return source, database
 
 
+def test_wal_source_copy_is_sidecar_free_and_self_contained(evidence_root, evidence):
+    tool = load_tool()
+    source, database = _wal_source(evidence_root, 'wal_self_contained')
+    writer = sqlite3.connect(database)
+    writer.execute('PRAGMA journal_mode=WAL')
+    writer.execute('PRAGMA wal_autocheckpoint=0')
+    writer.execute("INSERT OR REPLACE INTO gep_throttle VALUES ('wal_only', 1, 7)")
+    writer.commit()
+    try:
+        main_before = tool.sha256_file(database)
+        destination = evidence_root / 'wal_copy_self_contained'
+        report = tool.copy_consistent(source, destination)
+        main_after = tool.sha256_file(database)
+        assert {'gep.sqlite3-wal', 'gep.sqlite3-shm'} <= set(report['sidecars_skipped'])
+        assert sorted(path.name for path in destination.iterdir()) == ['gep.sqlite3']
+        assert main_before == main_after  # the WAL write itself never touched the main file
+        copy = sqlite3.connect(f'file:{destination / "gep.sqlite3"}?mode=ro', uri=True)
+        try:
+            assert copy.execute("SELECT count FROM gep_throttle WHERE key='wal_only'").fetchone() == (7,)
+            assert copy.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
+        finally:
+            copy.close()
+        manifest = tool.file_manifest(source)
+        assert 'gep.sqlite3-wal' not in manifest and 'gep.sqlite3' in manifest
+    finally:
+        writer.close()
+    evidence('wal_self_contained.json', {'sidecars_skipped': report['sidecars_skipped'],
+                                         'wal_data_in_copy': True,
+                                         'main_file_stable': main_before == main_after})
 
 
+def test_concurrent_wal_commit_refuses_the_copy(evidence_root, evidence):
+    tool = load_tool()
+    source, database = _wal_source(evidence_root, 'wal_contention')
+    writer = sqlite3.connect(database)
+    writer.execute('PRAGMA journal_mode=WAL')
+    writer.execute('PRAGMA wal_autocheckpoint=0')
+    writer.execute("INSERT OR REPLACE INTO gep_throttle VALUES ('seed2', 1, 2)")
+    writer.commit()
+    main_before = tool.sha256_file(database)
+
+    def commit_during_copy():
+        writer.execute("INSERT OR REPLACE INTO gep_throttle VALUES ('contention', 1, 1)")
+        writer.commit()
+
+    destination = evidence_root / 'wal_contention_copy'
+    with pytest.raises(tool.RehearsalError) as info:
+        tool.copy_consistent(source, destination, on_start=commit_during_copy)
+    assert 'inconsistent file set' in str(info.value)
+    # The main database file never changed, so the refusal is the WAL/data_version
+    # probe doing its job, not the file manifest.
+    assert tool.sha256_file(database) == main_before
+    assert not (destination / 'gep.sqlite3-wal').exists()
+    writer.close()
+    evidence('wal_contention.json', {'refusal': str(info.value),
+                                     'main_file_byte_identical': True,
+                                     'copy_sidecars': sorted(path.name for path in destination.iterdir())})
 
 
+def test_source_sidecars_are_never_part_of_the_copied_set(evidence_root, evidence):
+    tool = load_tool()
+    source, database = _wal_source(evidence_root, 'sidecar_policy')
+    writer = sqlite3.connect(database)
+    writer.execute('PRAGMA journal_mode=WAL')
+    writer.execute("INSERT OR REPLACE INTO gep_throttle VALUES ('seed3', 1, 3)")
+    writer.commit()
+    assert {'gep.sqlite3-wal', 'gep.sqlite3-shm'} <= set(tool.sidecars(source))
+    try:
+        report = tool.copy_consistent(source, evidence_root / 'sidecar_copy')
+        assert report['copied']
+        assert not any(tool.is_sqlite_sidecar(name) for name in report['copied'])
+        assert not any(tool.is_sqlite_sidecar(path.name)
+                       for path in (evidence_root / 'sidecar_copy').iterdir())
+    finally:
+        writer.close()
+    evidence('sidecar_policy.json', {'sidecars_skipped': report['sidecars_skipped'],
+                                     'copied': sorted(report['copied'])})
 
 
 # --- real Chrome: blank refusal, explicit choice, final strategy, confirm ---

@@ -18,4 +18,6 @@ v2 研究列表与直接访问使用同一规则，显式隐藏覆盖默认权�
 
 定向工程回归：`GEP_T17_BROWSER=1 .venv/bin/pytest -q tests/remediation/test_p03r02b.py tests/remediation/test_p03r02br.py tests/remediation/test_p03r02c.py tests/remediation/test_p03r02cr.py`。需要本机 Chrome 和项目依赖；测试使用隔离数据库与新的证据目录，浏览器自动化不代表人工验收。
 
+v2 合成迁移演练：`.venv/bin/python tools/remediation_migration.py --verify`。工具创建旧结构合成源及唯一证据目录，用 SQLite 备份接口制作一致副本，只迁移副本，并核对数据引用、权限投影、Owner 确认与重复拒绝。WAL 内容由备份接口纳入，不复制 sidecar；复制期间发现源变化则拒绝。若本地存在工具登记的历史合成验收源，还会只读复制其数据库与实例配置进行扩展检查，不启用源实例；该附加检查不包含原生大文件，不能据此声称整个目录已完整验证。源目录不存在时该项明确记录为未运行，不影响独立合成演练。
+
 真实研究、VPS/DNS/TLS、独立备份恢复与科学验收仍需另行授权。发布不得包含内部开发文档、数据库、凭据、下载或恢复文件。

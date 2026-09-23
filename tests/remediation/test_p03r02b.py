@@ -600,3 +600,22 @@ def test_run_chrome_tokens_normal_nonzero_quiet_and_timeout_are_bounded(evidence
 
 
 # --- the migration tool refuses to overwrite or escape ---------------------
+
+def test_migration_tool_root_and_path_safety(evidence_root, evidence):
+    spec = importlib.util.spec_from_file_location('remediation_migration',
+                                                  REPO_ROOT / 'tools' / 'remediation_migration.py')
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    base = evidence_root / 'roots'
+    first = tool.new_unique_root(base)
+    second = tool.new_unique_root(base)
+    assert first != second and first.is_dir() and second.is_dir()
+    assert re.fullmatch(r'\d{8}T\d{6}Z-[0-9a-f]{8}', first.name)
+    with pytest.raises(ValueError):
+        tool.resolve_within(base, '../escape')
+    with pytest.raises(ValueError):
+        tool.resolve_within(base, '/etc/passwd')
+    inside = tool.resolve_within(base, 'nested/file.json')
+    assert base in inside.parents
+    evidence('tool_safety.json', {'unique_roots': [first.name, second.name],
+                                  'escape_refused': True, 'absolute_refused': True})
