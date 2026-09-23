@@ -12,6 +12,7 @@ R07 guarded review and requirement U09 §5.3), never the implementation:
   / duplicate ids are refused, and unrelated routes keep their original bounds;
 * the frozen selection is nested in ``limits.scope`` of the preview and of the
   snapshot metadata and is never derived from the current database at download;
+* capacity evidence roots must be brand new, symlink-free and never cleaned.
 """
 import csv
 import io
@@ -27,6 +28,7 @@ from django.test import Client
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root: tools.*
 sys.path.insert(0, str(Path(__file__).resolve().parent))       # sibling fixtures
 
+import tools.remediation_export_capacity as capacity  # noqa: E402
 from test_p03r07 import (METADATA_WHITELIST, create_v2, csv_rows,  # noqa: E402
                          download, sign_in, world)
 
@@ -323,3 +325,41 @@ def test_metadata_carries_frozen_scope_and_never_reads_current_db(world):
     world['add_session'](world['participants']['c'])
     assert download(client, scoped_item.id, 'metadata').json() == scoped_meta
     assert download(client, full_item.id, 'metadata').json() == full_meta
+
+
+def test_capacity_evidence_root_guard_uses_new_tmp_fixtures(tmp_path, monkeypatch):
+    """The capacity root guard: a brand-new root is created, an existing root
+    (even empty) is refused, a symlinked component or leaf is refused before
+    anything is resolved or created, and the default root stays inside the base."""
+    base = tmp_path / 'evidence_base'
+    base.mkdir()
+    monkeypatch.setattr(capacity, 'EVIDENCE_BASE', base)
+
+    fresh = capacity.evidence_root(str(base / 'task' / 'run-1'))
+    assert fresh.is_dir() and list(fresh.iterdir()) == []
+    with pytest.raises(SystemExit):
+        capacity.evidence_root(str(base / 'task' / 'run-1'))
+    with pytest.raises(SystemExit):
+        capacity.evidence_root(str(base / 'task' / '..' / 'run-2'))
+
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (base / 'link').symlink_to(outside)
+    with pytest.raises(SystemExit):
+        capacity.evidence_root(str(base / 'link' / 'run-3'))
+    (base / 'task' / 'run-4').symlink_to(outside)
+    with pytest.raises(SystemExit):
+        capacity.evidence_root(str(base / 'task' / 'run-4'))
+    assert list(outside.iterdir()) == []
+    with pytest.raises(SystemExit):
+        capacity.evidence_root(str(tmp_path / 'elsewhere' / 'run-5'))
+
+    default = capacity.evidence_root(None)
+    assert default.parent.name == 'p03r07r' and default.parent.parent == base
+    assert default.is_dir() and list(default.iterdir()) == []
+
+    link_base = tmp_path / 'link_base'
+    link_base.symlink_to(outside)
+    monkeypatch.setattr(capacity, 'EVIDENCE_BASE', link_base)
+    with pytest.raises(SystemExit):
+        capacity.evidence_root(str(link_base / 'run-6'))
