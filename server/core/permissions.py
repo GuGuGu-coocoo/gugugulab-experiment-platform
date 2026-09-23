@@ -209,14 +209,19 @@ def preview_payload(row, lang='zh'):
     """Safe view context: redacted summary, per-row errors, no staged secrets.
 
     Row errors carry a Chinese message and its English counterpart; the active
-    language is resolved here so templates stay language-agnostic.
+    language is resolved here so templates stay language-agnostic. Preview hints
+    are secret-free ambiguity notices (for example leading/trailing whitespace
+    that is preserved) and are resolved the same way.
     """
     errors = [{'row': item.get('row'), 'code': item.get('code'),
                'message': (item.get('message_en') or item.get('message')) if lang == 'en' else item.get('message')}
               for item in (row.errors or [])]
+    hints = [{'code': item.get('code'), 'count': item.get('count'),
+              'message': (item.get('message_en') or item.get('message')) if lang == 'en' else item.get('message')}
+             for item in ((row.summary or {}).get('hints') or [])]
     return {'preview_id': str(row.id), 'preview_kind': row.kind, 'preview_scope': row.scope,
             'preview_summary': row.summary, 'preview_errors': errors,
-            'preview_expires_at': row.expires_at}
+            'preview_hints': hints, 'preview_expires_at': row.expires_at}
 
 
 def pending_preview(actor, preview_id):
@@ -275,12 +280,19 @@ def preview_retry_authorized(actor, row):
     retried. That re-render must never become a way to read stored object data
     (account or study names) after the current authority for the operation was
     lost, so it re-uses the same current-authority re-check as a consumed replay
-    and fails closed on any refusal. It writes nothing.
+    and fails closed on any refusal. It writes nothing. A study-scoped roster
+    preview is checked against that study's own configuration scope; every other
+    kind keeps the instance account-governance gate.
     """
     try:
-        require(access.allowed_platform(actor, 'accounts.view'), 'forbidden', 403)
-        profile = _profile(actor.pk)
+        profile = _profile(getattr(actor, 'pk', None))
         require(not (profile is not None and profile.must_change_password), 'password_change_required', 403)
+        if row.kind == ROSTER_KIND:
+            study = Study.objects.filter(pk=row.scope).first()
+            require(study is not None, 'preview_invalid', 404)
+            _replay_authorize(actor, row)
+            return True
+        require(access.allowed_platform(actor, 'accounts.view'), 'forbidden', 403)
         from .governance_migration import ENABLEMENT_KIND
         if row.kind == ENABLEMENT_KIND:
             # Owner-only preview (the enablement entry is Owner-only); the Owner
@@ -339,6 +351,38 @@ def _gate(actor, password, preview_id, kind, scope='', require_owner=False):
     require(row.expires_at > timezone.now(), 'preview_expired', 409)
     require(bool(password) and check_password(password, locked.password), 'reauth_failed', 403)
     return instance, locked, row, False
+
+
+def _study_gate(actor, password, preview_id, kind, study_id):
+    """Lock instance -> actor -> study -> preview for one study-scoped preview.
+
+    The study page's own entries (the roster import) are authorized by that
+    study's configuration scope and never by an instance account permission: an
+    ordinary study creator passes without ``accounts.view``. The actor's current
+    ``study.view`` + ``study.configure`` on that exact study are re-checked from
+    the locked rows, the preview must carry that same study as its scope, and a
+    consumed preview replays its stored result only while that authority still
+    holds. Carries no mutation itself.
+    """
+    require(getattr(actor, 'is_authenticated', False) and getattr(actor, 'pk', None), 'auth_required', 403)
+    instance = accounts._locked_instance()
+    locked = get_user_model().objects.select_for_update().get(pk=actor.pk)
+    require(locked.is_active, 'auth_required', 403)
+    study = Study.objects.select_for_update().filter(pk=study_id).first()
+    require(study is not None, 'study_missing', 404)
+    require(access.allowed(locked, study, 'study.view', instance=instance), 'forbidden', 403)
+    require(access.allowed(locked, study, 'study.configure', instance=instance), 'forbidden', 403)
+    profile = _profile(locked.pk)
+    require(not (profile is not None and profile.must_change_password), 'password_change_required', 403)
+    row = PermissionPreview.objects.select_for_update().filter(
+        pk=preview_id, actor_id=locked.pk, kind=kind, scope=str(study.pk)).first()
+    require(row is not None, 'preview_invalid', 404)
+    if row.consumed:
+        _replay_authorize(locked, row)
+        return instance, locked, row, study, True
+    require(row.expires_at > timezone.now(), 'preview_expired', 409)
+    require(bool(password) and check_password(password, locked.password), 'reauth_failed', 403)
+    return instance, locked, row, study, False
 
 
 def _finish(row, instance, result):

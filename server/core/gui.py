@@ -2,7 +2,6 @@ import csv
 from functools import wraps
 from django.core.exceptions import ObjectDoesNotExist
 import hashlib
-import io
 import json
 import os
 import secrets
@@ -13,7 +12,6 @@ from urllib.parse import urlparse
 from jsonschema.exceptions import SchemaError
 from django.conf import settings
 from django.contrib.auth import authenticate, login, logout, get_user_model
-from django.contrib.auth.hashers import make_password
 from django.db import transaction
 from django.http import JsonResponse, HttpResponse, FileResponse
 from django.shortcuts import render, redirect
@@ -25,6 +23,7 @@ from .views import endpoint
 from .services import digest, completion_status, issue_recovery_code, SHELL_CAPABILITY
 from .packages import validate_package, descriptor_valid, native_program_valid, MAX_ARCHIVE, MAX_NATIVE_ARCHIVE, NATIVE_PLATFORMS
 from . import publication, artifacts, ui, workbench, researcher_passwords
+from . import permissions
 
 
 def _revision_ok(raw, current):
@@ -195,7 +194,13 @@ STUDY_MESSAGES = {
     'policy_frozen_after_release':'已有批准发行，参与政策已冻结。请创建新研究以使用不同政策。',
     'duplicate_or_invalid_code':'名单存在重复、已有或无效 ID；本次未导入任何行。',
     'roster_columns':'名单列数不正确；密码模式请填写 ID 与密码两列。本次未导入任何行。',
-    'password_too_short':'密码长度不足，请检查后重新提交。',
+    'roster_limit':'名单超过行数或文本容量上限；本次未导入任何行。',
+    'roster_empty':'名单内容为空；请填写或上传至少一行。本次未导入任何行。',
+    'roster_source':'请只提供一种名单来源：一个 XLSX 文件或一段 CSV 文本。本次未导入任何行。',
+    'roster_import_moved':'名单导入已移到研究页面的“参与与名单”模块（模板、错误预览、密码确认提交）；本页不再接收名单写入，本次未写入任何更改。',
+    'password_required':'密码模式要求每行都有非空密码；被试密码不设强度要求。本次未导入任何行。',
+    'password_too_long':'密码超过容量上限；本次未导入任何行。',
+    'id_whitespace':'ID 不能全是空白字符；空白不会被自动去掉。本次未导入任何行。',
     # Same unified researcher-password text as the account pages: a post here
     # never falls back to the generic message or the old 16-character threshold.
     'password_weak':'密码至少 6 位，且至少各含一个 ASCII 大写字母、小写字母、数字与可见标点符号；空格不算符号，首尾空白不会被去掉。',
@@ -266,7 +271,14 @@ STUDY_MESSAGES = {
 
 def study_error_message(request, code):
     """Chinese by default; known codes get their English translation."""
-    fallback = STUDY_MESSAGES.get(code, ui.tr(ui.lang_of(request), 'error_invalid_request'))
+    fallback = STUDY_MESSAGES.get(code)
+    if fallback is None:
+        # The roster import shares its row/upload codes with the instance
+        # account pages; reuse those texts instead of duplicating the table.
+        from . import gui_accounts
+        fallback = gui_accounts.MESSAGES.get(code)
+    if fallback is None:
+        fallback = ui.tr(ui.lang_of(request), 'error_invalid_request')
     return ui.error_message(code, fallback, ui.lang_of(request))
 
 
@@ -395,13 +407,37 @@ def study_page(request,study_id,module='overview'):
         notice=stored_notice.get(lang) or stored_notice.get('zh','')
     else:
         notice=stored_notice
+    extra={}
+    render_in_place=False
     try:
       require(workbench.module_allowed(request,study,module),'forbidden',403)
       if request.method=='POST':
+        from . import gui_imports
         op=request.POST.get('op')
-        audited=False
-        target=''
-        with transaction.atomic():
+        if op in gui_imports.STUDY_ROSTER_OPS:
+            # The participant roster import is authorized by this study's own
+            # scope and confirmed with the actor's own password; preview and
+            # commit own their transactions (instance -> actor -> study ->
+            # preview) and never pass through the instance account gate.
+            guard(request.user,study,'study.configure')
+            render_in_place=True
+            try:
+                extra.update(gui_imports.apply_study_roster_import(request,study,op))
+            except Rejected as error:
+                # A recoverable refusal (for example a mistyped password) keeps
+                # the still-valid preview visible for a retry, but only while
+                # the current authority for that exact operation still holds.
+                extra['error']=study_error_message(request,error.code)
+                extra['error_code']=error.code
+                extra['error_status']=error.status
+                pending=permissions.pending_preview(request.user,request.POST.get('preview_id'))
+                if pending is not None and permissions.preview_retry_authorized(request.user,pending):
+                    extra['preview']=permissions.preview_payload(pending,lang)
+                    extra['commit_op']=gui_imports.STUDY_ROSTER_COMMIT_OP
+        else:
+          audited=False
+          target=''
+          with transaction.atomic():
             instance=Instance.objects.select_for_update().get(pk=1)
             study=Study.objects.select_for_update().get(pk=study_id)
             if op=='configure':
@@ -411,25 +447,13 @@ def study_page(request,study_id,module='overview'):
                 limit=int(request.POST['max_sessions']);require(1<=limit<=100,'participation_limit')
                 study.mode=mode;study.max_sessions=limit;study.save()
             elif op=='roster':
+                # The legacy CSV write entry is refused explicitly: a roster
+                # write must go through the study-page preview and the actor's
+                # own password confirmation (current_requirements §4, U07/U08).
+                # It never writes and never redirects a POST for replay; the
+                # legacy GET entries stay authorized and redirect instead.
                 guard(request.user,study,'study.configure')
-                raw=request.POST['roster'];require(len(raw)<=256000,'roster_limit',413)
-                delimiter='\t' if request.POST.get('roster_format','legacy_tab')=='legacy_tab' else ','
-                try:
-                    rows=list(csv.reader(io.StringIO(raw,newline=''),delimiter=delimiter,strict=True))
-                except csv.Error:
-                    raise Rejected('roster_columns')
-                require(0<len(rows)<=1000,'roster_limit')
-                seen=set()
-                for row in rows:
-                    parts=row;require(bool(parts),'roster_columns');code=parts[0]
-                    require(0<len(code)<=128 and code not in seen and not Participant.objects.filter(study=study,code=code).exists(),'duplicate_or_invalid_code')
-                    require(len(parts)==(2 if study.mode=='password' else 1),'roster_columns')
-                    seen.add(code)
-                    require(study.mode!='password' or len(parts[1])>=12,'password_too_short')
-                    Participant.objects.create(study=study,code=code,password_hash=make_password(parts[1]) if len(parts)==2 else '')
-                request.session['roster_notice:'+str(study.id)]={
-                    'zh':f'名单导入成功：新增 {len(rows)} 个 ID。',
-                    'en':f'Roster imported: {len(rows)} new IDs.'}
+                raise Rejected('roster_import_moved',409)
             elif op=='native':
                 guard(request.user,study,'build.upload')
                 descriptor=parse(request.POST['descriptor'].encode());descriptor_valid(descriptor)
@@ -561,8 +585,13 @@ def study_page(request,study_id,module='overview'):
                 raise Rejected('unknown_operation')
             if not audited:
                 Audit.objects.create(study=study,actor=request.user,actor_principal=ensure_principal(request.user),action=op,target=str(study.id))
+      if extra.get('notice'):
+        notice=extra.pop('notice')
       context=study_context(request,study,notice,module)
       context.update(workbench.module_context(request,study,module))
+      context.update(extra)
+      if render_in_place:
+        return render(request,'core/study.html',context,status=extra.get('error_status',200))
       if request.method=='POST' and not notice:
         return redirect(target or workbench.module_url(study,module))
       return render(request,'core/study.html',context)

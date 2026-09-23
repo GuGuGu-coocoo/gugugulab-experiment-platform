@@ -145,8 +145,25 @@ def _cell_is_empty(cell):
     return value is None or (isinstance(value, str) and not value.strip())
 
 
-def read_rows(raw, headers):
-    """Parse the first worksheet; returns [{'row': n, 'values': {header: raw}}]."""
+def _cell_is_blank(cell):
+    """Truly blank for the roster contract: no text at all.
+
+    Whitespace-only text is data, not emptiness, so the roster normalizer can
+    refuse it per row instead of the parser silently dropping the row.
+    """
+    value = cell.value
+    return value is None or value == ''
+
+
+def read_rows(raw, headers, roster=False):
+    """Parse the first worksheet; returns [{'row': n, 'values': {header: raw}}].
+
+    ``roster=True`` keeps the workbook's real row numbers and treats a cell as
+    blank only when it holds no text at all, so an all-whitespace roster ID
+    reaches :func:`core.importers.normalize_roster_rows` as an explicit per-row
+    error. The researcher account import keeps its historical trimmed-emptiness
+    rule and stays unchanged.
+    """
     archive = _archive(raw)
     try:
         for info in _sheet_parts(archive):
@@ -163,7 +180,10 @@ def read_rows(raw, headers):
         header = None
         indexes = None
         rows = []
-        for values in sheet.iter_rows(values_only=False):
+        blank = _cell_is_blank if roster else _cell_is_empty
+        # read_only iteration is 1-based and fills missing rows, so the
+        # enumeration index is the worksheet's own row number.
+        for number, values in enumerate(sheet.iter_rows(values_only=False), start=1):
             cells = list(values)
             if header is None:
                 header = [str(cell.value).strip().lower() if cell.value is not None else '' for cell in cells]
@@ -174,14 +194,14 @@ def read_rows(raw, headers):
                     require(getattr(cell, 'hyperlink', None) is None, 'external_link_rejected', 415)
                 indexes = {name: header.index(name) for name in headers}
                 continue
-            if all(_cell_is_empty(cell) for cell in cells):
+            if all(blank(cell) for cell in cells):
                 continue
             require(len(rows) < MAX_ROWS, 'row_limit', 413)
             for cell in cells:
                 require(getattr(cell, 'data_type', None) != 'f', 'formula_rejected', 415)
                 require(getattr(cell, 'hyperlink', None) is None, 'external_link_rejected', 415)
                 require(getattr(cell, 'column', 1) <= MAX_COLUMNS, 'column_limit', 413)
-            rows.append({'row': len(rows) + 2,
+            rows.append({'row': number,
                          'values': {name: (cells[indexes[name]].value if indexes[name] < len(cells) else None)
                                     for name in headers}})
         require(header is not None, 'invalid_xlsx')
@@ -196,6 +216,21 @@ def text_cell(value):
         return '', True
     if isinstance(value, str):
         return value.strip(), True
+    return '', False
+
+
+def exact_text_cell(value):
+    """(text, ok) for roster credentials: the stored text is never rewritten.
+
+    Participant IDs and passwords keep their exact text: leading/trailing
+    whitespace and leading zeros are preserved, so the CSV and XLSX sources
+    normalize identically. Numbers/dates/booleans are refused instead of
+    coerced (a numeric ID could not preserve a leading zero).
+    """
+    if value is None:
+        return '', True
+    if isinstance(value, str):
+        return value, True
     return '', False
 
 
@@ -262,7 +297,10 @@ def roster_template_bytes(mode):
     _instructions(book, [
         '参与者名单导入模板（追加模式，已有 ID 永不覆盖）。',
         'id 必须存为文本，例如 001；数字形式的 ID 会被拒绝，不会猜测前导零。',
-        '密码列仅在“名单 ID 与密码”模式出现，导入后立即哈希到私密暂存，不回显、不写入预览/会话/日志/导出。',
+        'id 为 1–128 个字符，按原样保存：不会被自动去掉首尾空白，空白 ID 或全空白 ID 会被拒绝。',
+        '密码列仅在“名单 ID 与密码”模式出现；密码只需非空、无强度要求，按原值保存与验证（首尾空白不会被去掉）。',
+        'CSV 文本与 XLSX 使用同一套规则：1/1、001、含引号/逗号/Unicode 的值都按原样保留。',
+        '导入后立即哈希到私密暂存，不回显、不写入预览/会话/日志/导出；提交成功即清除，过期暂存由有界清理移除。',
         '公式、宏、外部链接一律拒绝；最多 1000 行、32 列、2 MiB、展开 10 MiB。',
     ])
     return _finish(book)

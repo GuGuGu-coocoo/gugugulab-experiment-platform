@@ -7,9 +7,23 @@
 {% else %}<p class="muted">{{ui.overview_no_permission}}</p>{% endif %}
 </section>
 <section data-participation-roster-import="1"><h2>{{ui.participation_roster_import}}</h2><p class="muted">{{ui.participation_roster_hint}}</p>
-{% if can_configure %}<form method="post">{% csrf_token %}<input type="hidden" name="op" value="roster"><input type="hidden" name="roster_format" value="csv"><label>{{ui.participation_roster_textarea}} <textarea name="roster" autocomplete="off" required></textarea></label><button>{{ui.participation_import_submit}}</button></form>{% else %}<p class="muted">{{ui.overview_no_permission}}</p>{% endif %}
+{% if can_configure %}
+<p><a href="/studies/{{study.id}}/roster-template" data-roster-template="1">{{ui.participation_roster_template}}</a></p>
+<form method="post" action="/studies/{{study.id}}/roster-import" enctype="multipart/form-data" data-roster-xlsx-form="1">{% csrf_token %}<input type="hidden" name="op" value="import_roster_preview"><label>{{ui.participation_roster_xlsx}} <input type="file" name="file" accept=".xlsx"></label><button>{{ui.participation_roster_xlsx_submit}}</button></form>
+<form method="post" action="/studies/{{study.id}}/roster-import" data-roster-csv-form="1">{% csrf_token %}<input type="hidden" name="op" value="import_roster_preview"><label>{{ui.participation_roster_textarea}} <textarea name="roster" autocomplete="off"></textarea></label><button>{{ui.participation_import_submit}}</button></form>
+{% else %}<p class="muted">{{ui.overview_no_permission}}</p>{% endif %}
 <p class="muted">{{ui.participation_excel_link}} {% if can_manage %}<a href="/users">{{ui.nav_users}}</a>{% endif %}</p>
 </section>
+{% if preview and preview.preview_kind == 'roster_import' %}
+<section data-preview="roster_import" data-preview-id="{{preview.preview_id}}"><h2>{{ui.participation_roster_preview_title}}</h2>
+<p>{% if lang == 'en' %}Study {{preview.preview_summary.study}} (mode {{preview.preview_summary.mode}}, source {{preview.preview_summary.source}}): read {{preview.preview_summary.rows}} rows, append {{preview.preview_summary.new_ids}} new IDs; {% if preview.preview_summary.passwords_set %}passwords were hashed into private staging immediately, so previews, sessions, logs and exports never contain plaintext.{% else %}this mode does not read a password column.{% endif %}{% else %}研究 {{preview.preview_summary.study}}（模式 {{preview.preview_summary.mode}}，来源 {{preview.preview_summary.source}}）：读取 {{preview.preview_summary.rows}} 行，追加 {{preview.preview_summary.new_ids}} 个新 ID；{% if preview.preview_summary.passwords_set %}密码已立即哈希到私密暂存，预览、会话、日志与导出都不含明文。{% else %}本模式不读取密码列。{% endif %}{% endif %}</p>
+{% if preview.preview_hints %}<ul class="muted" data-preview-hints="1">{% for hint in preview.preview_hints %}<li data-preview-hint="{{hint.code}}">{{hint.message}}</li>{% endfor %}</ul>{% endif %}
+{% if preview.preview_errors %}<h3>{{ui.users_row_errors}}</h3><div class="table-wrap"><table><tr><th>{{ui.users_import_col_row}}</th><th>{{ui.users_error_col_code}}</th><th>{{ui.users_error_col_message}}</th></tr>{% for item in preview.preview_errors %}<tr data-preview-error="{{item.code}}"><td>{{item.row}}</td><td>{{item.code}}</td><td>{{item.message}}</td></tr>{% endfor %}</table></div><p class="muted">{{ui.participation_roster_errors_note}}</p>
+{% else %}
+<form method="post" action="/studies/{{study.id}}/roster-import" data-roster-confirm="1">{% csrf_token %}<input type="hidden" name="op" value="{{commit_op}}"><input type="hidden" name="preview_id" value="{{preview.preview_id}}">
+<label>{{ui.users_confirm_password}}<input type="password" name="password" autocomplete="off" required></label><button>{{ui.users_confirm_commit}}{% if lang == 'en' %} (valid once before {{preview.preview_expires_at|date:"H:i"}}){% else %}（{{preview.preview_expires_at|date:"H:i"}} {{ui.users_confirm_expiry}}）{% endif %}</button></form><p class="muted">{{ui.participation_roster_preview_commit_note}}</p>{% endif %}
+</section>
+{% endif %}
 <section data-participation-roster="1"><h2>{{ui.participation_roster_title}}</h2>
 <p><span class="badge" data-roster-total="{{roster_total}}">{{ui.participation_roster_count}}：{{roster_total}}</span> <span class="badge">{{ui.participation_roster_active}}：{{roster_active}}</span> <span class="badge">{{ui.participation_roster_password}}：{{roster_password_entries}}</span></p>
 {% if roster_mapping_visible %}

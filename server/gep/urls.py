@@ -9,11 +9,18 @@ urlpatterns = [
 ]
 from core import gui
 from core import portal
+from core import gui_imports
 from core import ui as gep_ui
 urlpatterns += [
     path('', portal.site_root), path('login',gui.signin), path('logout',gui.signout), path('activate',gui.activate),
     path('prefs',gep_ui.preferences),
-    path('studies/<uuid:study_id>',gui.study_page), path('studies/<uuid:study_id>/<slug:module>',gui.study_page),
+    path('studies/<uuid:study_id>',gui.study_page),
+    # The bounded study-page roster entries are registered before the generic
+    # module slug so ``roster-template``/``roster-import`` are never read as a
+    # module name.
+    path('studies/<uuid:study_id>/roster-template',gui_imports.study_roster_template),
+    path('studies/<uuid:study_id>/roster-import',gui_imports.roster_import),
+    path('studies/<uuid:study_id>/<slug:module>',gui.study_page),
     path('releases/<uuid:release_id>/config',gui.config),
     path('releases/<uuid:release_id>/artifact',gui.artifact),
     path('releases/<uuid:release_id>/artifact/<path:member>',gui.artifact_member),
@@ -26,7 +33,6 @@ from core.hosting import preview
 urlpatterns += [path("preview/<str:token>/<path:resource_path>",preview)]
 
 from core import gui_accounts
-from core import gui_imports
 urlpatterns += [
     path('users',gui_accounts.users_page),
     path('users/templates/<str:kind>',gui_imports.template_download),

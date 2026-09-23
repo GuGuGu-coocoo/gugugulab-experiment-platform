@@ -80,6 +80,39 @@ def import_rows(*rows):
     return workbook_bytes(rows)
 
 
+# --- roster entries moved to the study page (2026-09-23, current_requirements §4) --
+# Old expectation: roster template/upload/preview/commit lived at /users behind
+# the instance account gate and password mode needed 12 characters.
+# New expectation (U07/U08): the participant roster template, upload, error
+# preview and password-confirmed commit are study-page entries authorized by
+# study.view + study.configure; participant passwords only need to be non-empty.
+# The old /users roster writes are explicitly refused; the old roster GET
+# authorizes and redirects to the study page.
+
+def roster_upload(client, study, payload, filename='roster.xlsx'):
+    upload_file = SimpleUploadedFile(filename, payload, content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    return client.post(f'/studies/{study.id}/roster-import',
+                       {'op': 'import_roster_preview', 'file': upload_file})
+
+
+def roster_csv(client, study, text):
+    return client.post(f'/studies/{study.id}/roster-import',
+                       {'op': 'import_roster_preview', 'roster': text})
+
+
+def roster_commit(client, study, preview, password):
+    return client.post(f'/studies/{study.id}/roster-import',
+                       {'op': 'import_roster_commit', 'preview_id': preview, 'password': password})
+
+
+def roster_template(client, study):
+    """Old GET authorizes and redirects; the study entry serves the workbook."""
+    response = client.get(f'/users/templates/roster?study={study.id}')
+    assert response.status_code == 302
+    assert response.url == f'/studies/{study.id}/roster-template'
+    return client.get(response.url)
+
+
 def test_templates_are_bounded_and_contain_no_secrets(setup):
     existing = get_user_model().objects.create_user('synthetic_template_holder', password=THIRD_PASSWORD)
     AccountProfile.objects.create(user=existing, role='admin', must_change_password=False, auth_version=1, revision=0)
@@ -98,27 +131,33 @@ def test_templates_are_bounded_and_contain_no_secrets(setup):
     assert existing.password.encode() not in payload
     assert accounts.digest(THIRD_PASSWORD).encode() not in payload
 
-    # Roster templates: the password column exists only in password mode.
+    # Roster templates: the password column exists only in password mode. The
+    # entry lives on the study page now; the old instance-page GET authorizes
+    # and redirects there.
     Grant.objects.create(user=setup['owner'], study=setup['study'], action='study.view', delegable=True)
     Grant.objects.create(user=setup['owner'], study=setup['study'], action='study.configure', delegable=True)
-    response = owner.get(f"/users/templates/roster?study={setup['study'].id}")
+    response = roster_template(owner, setup['study'])
     assert response.status_code == 200
+    assert response['Content-Disposition'] == 'attachment; filename="gep_roster_template.xlsx"'
     headers = set(load_workbook(io.BytesIO(response.content)).worksheets[0].iter_rows(min_row=1, max_row=1, values_only=True).__next__())
     assert headers == {'id'}
     password_study = Study.objects.create(title='Synthetic password study', mode='password')
     Grant.objects.create(user=setup['owner'], study=password_study, action='study.view', delegable=True)
     Grant.objects.create(user=setup['owner'], study=password_study, action='study.configure', delegable=True)
-    response = owner.get(f"/users/templates/roster?study={password_study.id}")
+    response = roster_template(owner, password_study)
     headers = set(load_workbook(io.BytesIO(response.content)).worksheets[0].iter_rows(min_row=1, max_row=1, values_only=True).__next__())
     assert headers == {'id', 'password'}
 
     ordinary = Client()
     assert login(ordinary, 'synthetic_template_holder', THIRD_PASSWORD).status_code == 302
-    # Admin without study.configure cannot fetch the roster template.
+    # Admin without study.configure cannot fetch the roster template (the old
+    # GET and the study entry both refuse), and the study entry itself is 403.
     assert ordinary.get(f"/users/templates/roster?study={setup['study'].id}").status_code == 403
+    assert ordinary.get(f"/studies/{setup['study'].id}/roster-template").status_code == 403
     assert ordinary.get('/users/templates/users').status_code == 200
     anonymous = Client()
     assert anonymous.get('/users/templates/users').status_code == 302
+    assert anonymous.get(f"/studies/{setup['study'].id}/roster-template").status_code == 302
 
 
 def test_users_import_invites_by_default_and_never_resets_passwords(setup):
@@ -237,7 +276,7 @@ def test_roster_import_text_ids_numeric_and_password_staging(setup):
 
     payload = workbook_bytes([('001', 'synthetic-roster-password-001'), ('002', 'synthetic-roster-password-002')],
                              headers=excel.ROSTER_HEADERS, title='roster')
-    response = upload(client, 'import_roster_preview', payload, extra={'study_id': str(study.id)})
+    response = roster_upload(client, study, payload)
     assert response.status_code == 200
     body = response.content.decode()
     assert 'synthetic-roster-password' not in body
@@ -253,12 +292,12 @@ def test_roster_import_text_ids_numeric_and_password_staging(setup):
     original = staged.staged
     staged.staged = {'rows': [{'code': '999', 'password_hash': original['rows'][0]['password_hash']}]}
     staged.save(update_fields=['staged'])
-    assert commit(client, 'import_roster_commit', preview, NEW_PASSWORD).status_code == 409
+    assert roster_commit(client, study, preview, NEW_PASSWORD).status_code == 409
     assert Participant.objects.filter(study=study).count() == 0
     staged.staged = original
     staged.save(update_fields=['staged'])
 
-    response = commit(client, 'import_roster_commit', preview, NEW_PASSWORD)
+    response = roster_commit(client, study, preview, NEW_PASSWORD)
     assert response.status_code == 200
     codes = sorted(Participant.objects.filter(study=study).values_list('code', flat=True))
     assert codes == ['001', '002']
@@ -268,13 +307,13 @@ def test_roster_import_text_ids_numeric_and_password_staging(setup):
 
     # Numeric IDs are refused instead of guessing leading zeros; existing IDs never overwrite.
     numeric = workbook_bytes([(1, 'synthetic-roster-password-long')], headers=excel.ROSTER_HEADERS, title='roster')
-    response = upload(client, 'import_roster_preview', numeric, extra={'study_id': str(study.id)})
+    response = roster_upload(client, study, numeric)
     assert response.status_code == 200 and '数字形式' in response.content.decode()
-    assert commit(client, 'import_roster_commit', preview_id(response), NEW_PASSWORD).status_code == 409
+    assert roster_commit(client, study, preview_id(response), NEW_PASSWORD).status_code == 409
     existing = workbook_bytes([('001', 'synthetic-roster-password-other')], headers=excel.ROSTER_HEADERS, title='roster')
-    response = upload(client, 'import_roster_preview', existing, extra={'study_id': str(study.id)})
+    response = roster_upload(client, study, existing)
     assert '已有该 ID' in response.content.decode()
-    assert commit(client, 'import_roster_commit', preview_id(response), NEW_PASSWORD).status_code == 409
+    assert roster_commit(client, study, preview_id(response), NEW_PASSWORD).status_code == 409
     assert check_password('synthetic-roster-password-001', Participant.objects.get(study=study, code='001').password_hash)
 
 
@@ -285,17 +324,17 @@ def test_roster_preview_binding_expiry_and_scope(setup):
     Grant.objects.create(user=setup['owner'], study=study, action='study.configure', delegable=True)
     payload = workbook_bytes([('007', 'synthetic-roster-binding-7')], headers=excel.ROSTER_HEADERS, title='roster')
 
-    response = upload(owner, 'import_roster_preview', payload, extra={'study_id': str(study.id)})
+    response = roster_upload(owner, study, payload)
     preview = preview_id(response)
     # A legacy writer adds the same code without a revision bump: refused whole.
     Participant.objects.create(study=study, code='007', password_hash='')
-    assert commit(owner, 'import_roster_commit', preview, OWNER_PASSWORD).status_code == 409
+    assert roster_commit(owner, study, preview, OWNER_PASSWORD).status_code == 409
     assert Participant.objects.get(study=study, code='007').password_hash == ''
 
-    response = upload(owner, 'import_roster_preview', payload, extra={'study_id': str(study.id)})
+    response = roster_upload(owner, study, payload)
     expired = preview_id(response)
     PermissionPreview.objects.filter(pk=expired).update(expires_at=timezone.now() - timedelta(seconds=1))
-    assert commit(owner, 'import_roster_commit', expired, OWNER_PASSWORD).status_code == 409
+    assert roster_commit(owner, study, expired, OWNER_PASSWORD).status_code == 409
     assert Participant.objects.filter(study=study).count() == 1
 
     # An actor without study.configure cannot preview a roster for that study.
@@ -303,15 +342,23 @@ def test_roster_preview_binding_expiry_and_scope(setup):
     AccountProfile.objects.create(user=stranger, role='admin', must_change_password=False, auth_version=1, revision=0)
     client = Client()
     assert login(client, 'synthetic_roster_stranger', NEW_PASSWORD).status_code == 302
-    response = upload(client, 'import_roster_preview', payload, extra={'study_id': str(study.id)})
+    response = roster_upload(client, study, payload)
     assert response.status_code == 403
 
-    # Too-short passwords are per-row errors, and the batch is refused.
-    weak = workbook_bytes([('008', 'short')], headers=excel.ROSTER_HEADERS, title='roster')
-    response = upload(owner, 'import_roster_preview', weak, extra={'study_id': str(study.id)})
-    assert '12 个字符' in response.content.decode()
-    assert commit(owner, 'import_roster_commit', preview_id(response), OWNER_PASSWORD).status_code == 409
-    assert not Participant.objects.filter(study=study, code='008').exists()
+    # Participant passwords only need to be non-empty (U07/U08): the old
+    # "at least 12 characters" rule was removed for participants, so a short
+    # value now imports and verifies exactly as written. An empty value is the
+    # real refusal.
+    short = workbook_bytes([('008', 'short')], headers=excel.ROSTER_HEADERS, title='roster')
+    response = roster_upload(owner, study, short)
+    assert response.status_code == 200 and '追加 1 个' in response.content.decode()
+    assert roster_commit(owner, study, preview_id(response), OWNER_PASSWORD).status_code == 200
+    assert check_password('short', Participant.objects.get(study=study, code='008').password_hash)
+    empty = workbook_bytes([('009', '')], headers=excel.ROSTER_HEADERS, title='roster')
+    response = roster_upload(owner, study, empty)
+    assert '密码不能为空' in response.content.decode()
+    assert roster_commit(owner, study, preview_id(response), OWNER_PASSWORD).status_code == 409
+    assert not Participant.objects.filter(study=study, code='009').exists()
 
 
 def test_xlsx_security_limits_and_formula_rejection(setup):
@@ -321,7 +368,7 @@ def test_xlsx_security_limits_and_formula_rejection(setup):
     Grant.objects.create(user=setup['owner'], study=study, action='study.configure', delegable=True)
 
     formula = workbook_bytes([('001', '=SUM(A1:A2)')], headers=excel.ROSTER_HEADERS, title='roster')
-    response = upload(owner, 'import_roster_preview', formula, extra={'study_id': str(study.id)})
+    response = roster_upload(owner, study, formula)
     assert response.status_code == 415 and '公式' in response.content.decode()
     assert Participant.objects.filter(study=study).count() == 0
 
@@ -441,7 +488,7 @@ def test_roster_staged_hash_binding_and_bounded_purge(setup):
         Grant.objects.create(user=setup['owner'], study=study, action=action, delegable=True)
     payload = workbook_bytes([('101', 'synthetic-roster-hash-001')], headers=excel.ROSTER_HEADERS, title='roster')
 
-    response = upload(owner, 'import_roster_preview', payload, extra={'study_id': str(study.id)})
+    response = roster_upload(owner, study, payload)
     assert response.status_code == 200
     preview = preview_id(response)
     staged = PermissionPreview.objects.get(pk=preview)
@@ -452,7 +499,7 @@ def test_roster_staged_hash_binding_and_bounded_purge(setup):
     original = staged.staged
     staged.staged = {'rows': [{'code': '101', 'password_hash': make_password('synthetic-roster-tamper-002')}]}
     staged.save(update_fields=['staged'])
-    response = commit(owner, 'import_roster_commit', preview, OWNER_PASSWORD)
+    response = roster_commit(owner, study, preview, OWNER_PASSWORD)
     assert response.status_code == 409 and '未执行任何更改' in response.content.decode()
     assert Participant.objects.filter(study=study).count() == 0
 
@@ -460,12 +507,12 @@ def test_roster_staged_hash_binding_and_bounded_purge(setup):
     staged.staged = original
     staged.save(update_fields=['staged'])
     Study.objects.filter(pk=study.pk).update(mode='anonymous')
-    assert commit(owner, 'import_roster_commit', preview, OWNER_PASSWORD).status_code == 409
+    assert roster_commit(owner, study, preview, OWNER_PASSWORD).status_code == 409
     assert Participant.objects.filter(study=study).count() == 0
     Study.objects.filter(pk=study.pk).update(mode='password')
 
     # The untouched preview still commits, and the consumed row keeps no hash.
-    assert commit(owner, 'import_roster_commit', preview, OWNER_PASSWORD).status_code == 200
+    assert roster_commit(owner, study, preview, OWNER_PASSWORD).status_code == 200
     participant = Participant.objects.get(study=study, code='101')
     assert check_password('synthetic-roster-hash-001', participant.password_hash)
     consumed = PermissionPreview.objects.get(pk=preview)
@@ -473,21 +520,18 @@ def test_roster_staged_hash_binding_and_bounded_purge(setup):
 
     # Replay is idempotent and still does not retain credential hashes.
     audited = Audit.objects.filter(action='roster.imported').count()
-    assert commit(owner, 'import_roster_commit', preview, OWNER_PASSWORD).status_code == 200
+    assert roster_commit(owner, study, preview, OWNER_PASSWORD).status_code == 200
     assert Audit.objects.filter(action='roster.imported').count() == audited
     assert Participant.objects.filter(study=study).count() == 1
 
     # Expired staging is cleared by the bounded purge; an unexpired preview keeps
     # its staging and still fails closed (preview_expired) instead of exposing it.
-    live = preview_id(upload(owner, 'import_roster_preview',
-                             workbook_bytes([('102', 'synthetic-roster-live-002')], headers=excel.ROSTER_HEADERS, title='roster'),
-                             extra={'study_id': str(study.id)}))
-    dead_a = preview_id(upload(owner, 'import_roster_preview',
-                               workbook_bytes([('103', 'synthetic-roster-dead-003')], headers=excel.ROSTER_HEADERS, title='roster'),
-                               extra={'study_id': str(study.id)}))
-    dead_b = preview_id(upload(owner, 'import_roster_preview',
-                               workbook_bytes([('104', 'synthetic-roster-dead-004')], headers=excel.ROSTER_HEADERS, title='roster'),
-                               extra={'study_id': str(study.id)}))
+    live = preview_id(roster_upload(owner, study,
+                                    workbook_bytes([('102', 'synthetic-roster-live-002')], headers=excel.ROSTER_HEADERS, title='roster')))
+    dead_a = preview_id(roster_upload(owner, study,
+                                      workbook_bytes([('103', 'synthetic-roster-dead-003')], headers=excel.ROSTER_HEADERS, title='roster')))
+    dead_b = preview_id(roster_upload(owner, study,
+                                      workbook_bytes([('104', 'synthetic-roster-dead-004')], headers=excel.ROSTER_HEADERS, title='roster')))
     PermissionPreview.objects.filter(pk__in=[dead_a, dead_b]).update(expires_at=timezone.now() - timedelta(seconds=1))
 
     assert permissions.purge_sensitive_staging(limit=1) == 1
@@ -496,7 +540,7 @@ def test_roster_staged_hash_binding_and_bounded_purge(setup):
     assert PermissionPreview.objects.filter(pk__in=[dead_a, dead_b], staged__isnull=False).count() == 0
     assert PermissionPreview.objects.get(pk=live).staged is not None
     assert Participant.objects.filter(study=study, code__in=['102', '103', '104']).count() == 0
-    assert commit(owner, 'import_roster_commit', dead_a, OWNER_PASSWORD).status_code == 409
+    assert roster_commit(owner, study, dead_a, OWNER_PASSWORD).status_code == 409
     assert Participant.objects.filter(study=study, code__in=['102', '103', '104']).count() == 0
 
 
@@ -511,16 +555,16 @@ def test_roster_replay_rechecks_study_configure(setup):
     assert login(client, admin.username, NEW_PASSWORD).status_code == 302
     payload = workbook_bytes([('201', 'synthetic-roster-replay-201')], headers=excel.ROSTER_HEADERS, title='roster')
 
-    response = upload(client, 'import_roster_preview', payload, extra={'study_id': str(study.id)})
+    response = roster_upload(client, study, payload)
     preview = preview_id(response)
-    assert commit(client, 'import_roster_commit', preview, NEW_PASSWORD).status_code == 200
+    assert roster_commit(client, study, preview, NEW_PASSWORD).status_code == 200
     audited = Audit.objects.filter(action='roster.imported').count()
-    assert commit(client, 'import_roster_commit', preview, NEW_PASSWORD).status_code == 200
+    assert roster_commit(client, study, preview, NEW_PASSWORD).status_code == 200
     assert Audit.objects.filter(action='roster.imported').count() == audited
 
     # Revoking the study.configure grant must refuse the replay and read no old result.
     Grant.objects.filter(user=admin, study=study, action='study.configure').delete()
-    response = commit(client, 'import_roster_commit', preview, NEW_PASSWORD)
+    response = roster_commit(client, study, preview, NEW_PASSWORD)
     assert response.status_code == 403 and '名单导入完成' not in response.content.decode()
     assert Audit.objects.filter(action='roster.imported').count() == audited
     assert Participant.objects.filter(study=study).count() == 1
@@ -683,5 +727,5 @@ def test_xlsx_sparse_dimension_header_formula_and_relationship_rejection(setup):
     ordinary = workbook_bytes([('001', 'synthetic-roster-long-001')], headers=excel.ROSTER_HEADERS, title='roster')
     rows = excel.read_rows(ordinary, excel.ROSTER_HEADERS)
     assert [row['values']['id'] for row in rows] == ['001']
-    response = upload(owner, 'import_roster_preview', ordinary, extra={'study_id': str(study.id)})
+    response = roster_upload(owner, study, ordinary)
     assert response.status_code == 200 and '追加 1 个' in response.content.decode()

@@ -5,7 +5,7 @@ import zipfile
 from pathlib import Path
 import pytest
 from django.test import Client
-from core.models import Grant, Instance, Study, Release, Invitation
+from core.models import Grant, Instance, Study, Release, Invitation, Participant
 from core.packages import validate_package
 from core.protocol import Rejected
 
@@ -60,7 +60,12 @@ def test_gui_real_object_authority_and_invitation(setup):
     url=f'/studies/{study.id}'
     assert c.get(url).status_code==200
     assert c.post(url,{'op':'configure','mode':'password','max_sessions':'2'}).status_code==302
-    assert c.post(url,{'op':'roster','roster':'001\tsynthetic-password'}).status_code==302
+    # U07/U08 (2026-09-23): the legacy roster write entry is refused explicitly;
+    # participant rosters go through the study-page preview plus the operator's
+    # own password confirmation. Old expectation was a direct 302 write.
+    refused=c.post(url,{'op':'roster','roster':'001\tsynthetic-password'})
+    assert refused.status_code==409 and refused.json()['code']=='roster_import_moved'
+    assert not Participant.objects.filter(study=study).exists()
     response=c.post(url,{'op':'invite','username':'synthetic_reader','actions':['study.view'],'revision':str(Instance.objects.get(pk=1).governance_revision)})
     assert response.status_code==200
     invite=Invitation.objects.get(study=study)

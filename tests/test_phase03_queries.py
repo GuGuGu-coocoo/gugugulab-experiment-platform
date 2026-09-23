@@ -795,12 +795,17 @@ def test_english_users_page_controls_lifecycle_previews_and_errors(setup):
     assert sorted(Grant.objects.filter(user=target, study=study).values_list('action', flat=True)) == [
         'data.export_raw', 'study.view']
 
-    # The legacy study roster notice and its error are English too.
-    response = client.post(f'/studies/{study.id}', {'op': 'roster', 'roster': 'E-001\nE-002'}, follow=True)
-    assert 'Roster imported: 2 new IDs.' in response.content.decode()
-    response = client.post(f'/studies/{study.id}', {'op': 'roster', 'roster': 'E-001'},
+    # The legacy roster write entry is refused in English too: the roster import
+    # lives on the study page and this entry never writes.
+    # Old expectation (03E) was a direct write with an English notice; new
+    # confirmed requirement is current_requirements §4 / U07/U08.
+    before = Participant.objects.filter(study=study).count()
+    response = client.post(f'/studies/{study.id}', {'op': 'roster', 'roster': 'E-001\nE-002'},
                            HTTP_ACCEPT='text/html')
-    assert 'The roster contains duplicate, existing or invalid IDs; no row was imported.' in response.content.decode()
+    assert response.status_code == 409
+    body = response.content.decode()
+    assert 'moved to the study page' in body and 'roster_import_moved' in body
+    assert Participant.objects.filter(study=study).count() == before
 
     # A real XLSX preview shows the row error in English, with the English UI.
     book = Workbook()

@@ -7,6 +7,9 @@ actor, re-checks the binding digest and re-checks *each staged operation's*
 current authority, so a revoked delegation, a moved Owner pointer or a changed
 study mode is refused as a whole with zero partial writes.
 """
+import csv
+import io
+
 from django.contrib.auth import get_user_model
 from django.contrib.auth.hashers import make_password
 from django.db import transaction
@@ -342,63 +345,177 @@ def _matrix_authorize_import(actor, target_user, study, target, version=1):
 
 # --------------------------------------------------------------------------- roster import
 
+# Capacity bound only: participant passwords have no strength requirement, but a
+# single credential cannot be unbounded inside a bounded workbook/request.
+MAX_ROSTER_PASSWORD = 1024
+MAX_ROSTER_TEXT = 256000
+
+
 def _roster_binding(actor, study, staged_rows, revision):
     """Bind the complete normalized staging, including credential hashes, to the
-    study mode and governance revision; the digest never leaves the database."""
-    existing = sorted(Participant.objects.filter(study=study).values_list('code', flat=True))
+    study mode and governance revision; the digest never leaves the database.
+
+    Only coded roster entries participate: an anonymous participant (a NULL
+    code) is not a roster identity and must neither break the digest nor count
+    as an existing ID.
+    """
+    existing = sorted(Participant.objects.filter(study=study, code__isnull=False)
+                      .values_list('code', flat=True))
     return permissions._digest({'kind': ROSTER_KIND, 'actor': actor.pk, 'study': str(study.pk),
                                 'mode': study.mode, 'revision': revision, 'existing': existing,
                                 'rows': [{'code': row['code'], 'password_hash': row['password_hash']}
                                          for row in staged_rows]})
 
 
-def preview_roster(actor, study, raw):
-    from .access import guard
-    guard(actor, study, 'study.configure')
-    headers = excel.ROSTER_HEADERS if study.mode == 'password' else ('id',)
-    rows = excel.read_rows(raw, headers)
+def _roster_csv_rows(raw, headers):
+    """Parse pasted CSV text into the same row shape the workbook parser yields.
+
+    Values stay exactly as written (the CSV reader never trims), a malformed
+    quote is refused, and the row/column capacity matches the workbook path.
+    A truly empty record (no text in any field) is ignored like a blank
+    workbook row; a record whose fields carry whitespace is kept so the
+    normalizer can refuse the ID per row with its real line number.
+    """
+    require(len(raw) <= MAX_ROSTER_TEXT, 'roster_limit', 413)
+    try:
+        parsed = list(csv.reader(io.StringIO(raw, newline=''), delimiter=',', strict=True))
+    except csv.Error:
+        raise Rejected('roster_columns')
+    rows = []
+    for index, fields in enumerate(parsed):
+        if not any(field != '' for field in fields):
+            continue
+        values = {name: (fields[position] if position < len(fields) else None)
+                  for position, name in enumerate(headers)}
+        rows.append({'row': index + 1, 'values': values,
+                     'columns': len(fields) == len(headers)})
+    require(len(rows) <= excel.MAX_ROWS, 'row_limit', 413)
+    return rows
+
+
+def normalize_roster_rows(rows, mode, existing):
+    """One shared CSV/XLSX text contract for participant credentials.
+
+    IDs and passwords keep their exact text: no trimming, no silent rewriting.
+    An ID must be 1-128 characters and is refused when empty or whitespace-only
+    (never trimmed into something else); a password only has to be non-empty and
+    inside the capacity bound. Ambiguous values (leading/trailing whitespace)
+    are accepted exactly as written and reported through secret-free hints.
+
+    Callers pass the real source row numbers; the parsers drop only records with
+    no text at all (blank CSV lines, unfilled workbook tails), so a row that
+    carries whitespace is refused per row instead of disappearing.
+    """
     errors = []
     staged_rows = []
     seen = set()
-    existing = set(Participant.objects.filter(study=study).values_list('code', flat=True))
+    padded_ids = 0
+    padded_passwords = 0
     for item in rows:
         number = item['row']
-        code, code_ok = excel.text_cell(item['values']['id'])
-        if not code:
+        values = item['values']
+        if item.get('columns') is False:
+            _row_error(errors, number, 'roster_columns',
+                       '每行必须是 ID；密码模式再跟一列密码，不要多余列。',
+                       'Each row must be an ID, plus exactly one password column in password mode.')
+            continue
+        code, code_ok = excel.exact_text_cell(values.get('id'))
+        if not code_ok:
+            _row_error(errors, number, 'numeric_identifier',
+                       'ID 必须是文本；数字形式的 ID 会被拒绝，不会猜测前导零。',
+                       'Identifiers must be text; numeric IDs are rejected because leading zeros cannot be guessed.')
+            continue
+        if code == '':
             _row_error(errors, number, 'id', 'ID 不能为空。', 'The ID cannot be empty.')
             continue
-        if not code_ok:
-            _row_error(errors, number, 'numeric_identifier', 'ID 必须是文本；数字形式的 ID 会被拒绝，不会猜测前导零。', 'Identifiers must be text; numeric IDs are rejected because leading zeros cannot be guessed.')
+        if not code.strip():
+            _row_error(errors, number, 'id_whitespace',
+                       'ID 不能全是空白字符；空白不会被自动去掉。',
+                       'The ID cannot be only whitespace; whitespace is never trimmed.')
             continue
         if len(code) > 128:
-            _row_error(errors, number, 'id', 'ID 过长。', 'The ID is too long.')
+            _row_error(errors, number, 'id', 'ID 过长（最多 128 个字符）。',
+                       'The ID is too long (at most 128 characters).')
             continue
         if code in seen:
-            _row_error(errors, number, 'duplicate_identifier', '本次导入中 ID 重复。', 'The same ID appears more than once in this import.')
+            _row_error(errors, number, 'duplicate_identifier',
+                       '本次导入中 ID 重复。',
+                       'The same ID appears more than once in this import.')
             continue
         if code in existing:
-            _row_error(errors, number, 'existing_identifier', '名单中已有该 ID；追加导入不会覆盖。', 'The roster already contains that ID; append imports never overwrite.')
+            _row_error(errors, number, 'existing_identifier',
+                       '名单中已有该 ID；追加导入不会覆盖。',
+                       'The roster already contains that ID; append imports never overwrite.')
             continue
         seen.add(code)
-        if study.mode == 'password':
-            password, password_ok = excel.text_cell(item['values']['password'])
+        if code != code.strip():
+            padded_ids += 1
+        password_hash = ''
+        if mode == 'password':
+            password, password_ok = excel.exact_text_cell(values.get('password'))
             if not password_ok:
-                _row_error(errors, number, 'password', '密码必须是文本。', 'The password must be text.')
+                _row_error(errors, number, 'password', '密码必须是文本。',
+                           'The password must be text.')
                 continue
-            if len(password) < 12:
-                _row_error(errors, number, 'password_too_short', '密码至少 12 个字符。', 'The password needs at least 12 characters.')
+            if password == '':
+                _row_error(errors, number, 'password_required',
+                           '密码不能为空；密码模式要求每行都有密码（不设强度要求）。',
+                           'The password cannot be empty; password mode requires one for every row (no strength rule).')
                 continue
-            staged_rows.append({'code': code, 'password_hash': make_password(password)})
-        else:
-            staged_rows.append({'code': code, 'password_hash': ''})
+            if len(password) > MAX_ROSTER_PASSWORD:
+                _row_error(errors, number, 'password_too_long',
+                           f'密码超过 {MAX_ROSTER_PASSWORD} 个字符的容量上限。',
+                           f'The password exceeds the {MAX_ROSTER_PASSWORD}-character capacity limit.')
+                continue
+            if password != password.strip():
+                padded_passwords += 1
+            password_hash = make_password(password)
+        staged_rows.append({'code': code, 'password_hash': password_hash})
+    hints = []
+    if padded_ids:
+        hints.append({'code': 'id_padded', 'count': padded_ids,
+                      'message': f'{padded_ids} 个 ID 含首尾空白，将按原样保存（不会自动去除）。',
+                      'message_en': f'{padded_ids} ID(s) carry leading/trailing whitespace and are stored exactly as written (never trimmed).'})
+    if padded_passwords:
+        hints.append({'code': 'password_padded', 'count': padded_passwords,
+                      'message': f'{padded_passwords} 个密码含首尾空白，将按原值验证（不会自动去除）。',
+                      'message_en': f'{padded_passwords} password(s) carry leading/trailing whitespace and are verified exactly as written (never trimmed).'})
+    return staged_rows, errors, hints
+
+
+def preview_roster(actor, study, raw=None, text=None):
+    """Preview one bounded roster import from an XLSX workbook or CSV text.
+
+    Authorization is the study's own configuration scope (``study.view`` +
+    ``study.configure``): an ordinary study creator previews without any
+    instance account permission. Both sources share :func:`normalize_roster_rows`,
+    so 1/1, 001, quoted commas and Unicode normalize identically; the preview
+    carries row errors, secret-free hints and a digest binding, never a
+    password or a hash.
+    """
+    access.guard(actor, study, 'study.configure')
+    headers = excel.ROSTER_HEADERS if study.mode == 'password' else ('id',)
+    if raw is not None:
+        source = 'xlsx'
+        rows = excel.read_rows(raw, headers, roster=True)
+    elif text is not None:
+        source = 'csv'
+        rows = _roster_csv_rows(text, headers)
+    else:
+        raise Rejected('roster_source', 400)
+    require(bool(rows), 'roster_empty', 400)
     with transaction.atomic():
         instance = accounts._locked_instance()
         locked = get_user_model().objects.select_for_update().get(pk=actor.pk)
         require(locked.is_active, 'auth_required', 403)
         study = Study.objects.get(pk=study.pk)
-        guard(locked, study, 'study.configure')
-        summary = {'study': study.title, 'study_id': str(study.pk), 'mode': study.mode, 'rows': len(rows),
-                   'new_ids': len(staged_rows), 'passwords_set': study.mode == 'password',
+        access.guard(locked, study, 'study.configure')
+        existing = set(Participant.objects.filter(study=study, code__isnull=False)
+                       .values_list('code', flat=True))
+        staged_rows, errors, hints = normalize_roster_rows(rows, study.mode, existing)
+        summary = {'study': study.title, 'study_id': str(study.pk), 'mode': study.mode,
+                   'source': source, 'rows': len(rows), 'new_ids': len(staged_rows),
+                   'passwords_set': study.mode == 'password', 'hints': hints,
                    'fingerprint': permissions._digest([row['code'] for row in staged_rows])}
         row = permissions._preview(locked, ROSTER_KIND, str(study.pk), summary, errors,
                                    _roster_binding(locked, study, staged_rows, instance.governance_revision),
@@ -406,17 +523,26 @@ def preview_roster(actor, study, raw):
     return row
 
 
-def commit_roster(actor, password, preview_id):
+def commit_roster(actor, password, preview_id, study_id):
+    """Commit one roster preview under its own study scope, atomically.
+
+    The gate locks instance -> actor -> study -> preview and re-checks the
+    actor's current ``study.view`` + ``study.configure`` on that exact study
+    (never an instance account permission) plus the actor's own password. The
+    complete binding digest - study mode, existing codes, governance revision
+    and the private staged rows - is re-checked before any row is written, and
+    a consumed preview replays its stored result without a second write only
+    while that same authority still holds.
+    """
     require(bool(preview_id), 'preview_required', 400)
+    require(bool(study_id), 'study_missing', 404)
     with transaction.atomic():
-        instance, locked, row, replay = permissions._gate(actor, password, preview_id, ROSTER_KIND,
-                                                          scope=permissions.row_scope(preview_id, ROSTER_KIND))
+        instance, locked, row, study, replay = permissions._study_gate(
+            actor, password, preview_id, ROSTER_KIND, study_id)
         if replay:
             return row.result
         require(not row.errors, 'preview_errors', 409)
-        from .access import guard
-        study = Study.objects.get(pk=row.scope)
-        guard(locked, study, 'study.configure')
+        access.guard(locked, study, 'study.configure')
         staged_rows = row.staged['rows']
         require(_roster_binding(locked, study, staged_rows, instance.governance_revision) == row.binding, 'preview_stale', 409)
         for staged in staged_rows:

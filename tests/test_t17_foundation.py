@@ -67,20 +67,38 @@ def test_only_approved_hosted_web_release_has_participation_link(setup):
 
 
 def test_roster_csv_preserves_ids_and_quoted_passwords_and_rolls_back(setup):
+    # Old expectation (before U07/U08): the study page imported pasted CSV in one
+    # request and required 12-character participant passwords. New expectation:
+    # the CSV text goes through the same error preview and password-confirmed
+    # commit as the XLSX template, participant passwords only need to be
+    # non-empty, and a duplicate batch is refused with zero writes.
+    import re
     from core.models import Participant
     from django.contrib.auth.hashers import check_password
     study=setup['study'];study.mode='password';study.save()
     client=client_for(setup,'study.view','study.configure')
-    url=f'/studies/{study.id}'
-    response=client.post(url,{'op':'roster','roster_format':'csv','roster':'001,"synthetic,password-long"\n002,synthetic-password-long'},follow=True)
+    url=f'/studies/{study.id}/roster-import'
+    response=client.post(url,{'op':'import_roster_preview','roster':'001,"synthetic,password-long"\n002,synthetic-password-long'})
+    assert response.status_code==200
+    body=response.content.decode()
+    assert '追加 2 个' in body
+    assert 'synthetic,password-long' not in body
+    preview=re.search(r'name="preview_id" value="([0-9a-f-]{36})"',body).group(1)
+    response=client.post(url,{'op':'import_roster_commit','preview_id':preview,'password':'synthetic-test-password'})
     assert response.status_code==200
     assert '新增 2 个 ID' in response.content.decode()
     assert 'synthetic,password-long' not in response.content.decode()
     assert check_password('synthetic,password-long',Participant.objects.get(study=study,code='001').password_hash)
     before=Participant.objects.count()
-    response=client.post(url,{'op':'roster','roster_format':'csv','roster':'003,synthetic-password-long\n001,synthetic-password-long'},HTTP_ACCEPT='text/html')
-    assert response.status_code==422
-    assert '本次未导入任何行' in response.content.decode()
+    response=client.post(url,{'op':'import_roster_preview','roster':'003,synthetic-password-long\n003,synthetic-password-long'})
+    assert response.status_code==200, response.content[:600]
+    body=response.content.decode()
+    assert 'ID 重复' in body and '整批不会执行' in body
+    assert 'name="preview_id"' not in body
+    preview=re.search(r'data-preview-id="([0-9a-f-]{36})"',body).group(1)
+    response=client.post(url,{'op':'import_roster_commit','preview_id':preview,'password':'synthetic-test-password'})
+    assert response.status_code==409
+    assert '整批未执行' in response.content.decode()
     assert Participant.objects.count()==before
     assert not Participant.objects.filter(code='003').exists()
 
