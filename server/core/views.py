@@ -1,17 +1,14 @@
-import json
-import csv
-import io
 from functools import wraps
-from django.http import JsonResponse, HttpResponse
+from django.http import JsonResponse
 from django.conf import settings
 from django.views.decorators.csrf import csrf_exempt
 from django.core.exceptions import ObjectDoesNotExist
-from django.db import transaction
-from .protocol import Rejected, require, parse
-from .models import Session, Study, Event, Export
+from .protocol import Rejected, require, parse, MAX_EXPORT_ARRAY, MAX_EXPORT_BYTES
+from .models import Session, Export
 from .services import (admit_request, context, receive, finish, authorize_session, completion_status, recover,
                        redeem_recovery_code, recover_named, RECOVERY_CODE_CAPABILITY, RECOVERY_NAMED_CAPABILITY)
 from .access import guard
+from . import exports as export_core
 
 
 def endpoint(fn):
@@ -20,7 +17,11 @@ def endpoint(fn):
         try:
             response=fn(request,*args,**kwargs)
         except Rejected as error:
-            response=JsonResponse({'code':error.code,'retryable':error.status in (429,503),'outcome_unknown':False},status=error.status)
+            body={'code':error.code,'retryable':error.status in (429,503),'outcome_unknown':False}
+            detail=getattr(error,'detail',None)
+            if isinstance(detail,dict):
+                body.update(detail)
+            response=JsonResponse(body,status=error.status)
         except (ObjectDoesNotExist, ValueError, KeyError, TypeError):
             response=JsonResponse({'code':'invalid_request','retryable':False,'outcome_unknown':False},status=400)
         response['Cache-Control']='no-store'
@@ -86,33 +87,31 @@ def exports(request, export_id=None):
     if export_id:
         require(request.method=='GET','method',405)
         item=Export.objects.get(pk=export_id)
-        guard(request.user,item.study,'data.export_raw')
+        # Every format re-checks the permission set frozen with the export; a
+        # revoked grant refuses the whole export instead of degrading it.
+        for action in export_core.required_actions(item):
+            guard(request.user,item.study,action)
         fmt=request.GET.get('format','jsonl')
         require(fmt in ('jsonl','csv','metadata'),'export_format')
-        if fmt=='metadata':
-            response=JsonResponse({k:v for k,v in item.snapshot.items() if k!='records'})
-        elif fmt=='csv':
-            output=io.StringIO(newline='');writer=csv.writer(output)
-            writer.writerow(['study_id','release_id','build_id','record_json'])
-            for row in item.snapshot['records']:
-                writer.writerow([row['study_id'],row['release_id'],row['build_id'],'json:'+json.dumps(row['record'],ensure_ascii=False,allow_nan=False)])
-            response=HttpResponse(output.getvalue().encode('utf-8-sig'),content_type='text/csv; charset=utf-8')
-        else:
-            response=HttpResponse(''.join(json.dumps(row,ensure_ascii=False,allow_nan=False)+'\n' for row in item.snapshot['records']),content_type='application/x-ndjson')
+        response=export_core.render_download(item,fmt)
         extension='metadata.json' if fmt=='metadata' else fmt
         response['Content-Disposition']=f'attachment; filename="{item.id}.{extension}"'
         return response
     require(request.method=='POST','method',405)
-    data=parse(request.body)
-    with transaction.atomic():
-        study=Study.objects.get(pk=data['study_id'])
-        guard(request.user,study,'data.export_raw')
-        require(Event.objects.filter(session__release__study=study).count()<=10000,'export_limit',413)
-        records=[];builds={};statuses={}
-        for event in Event.objects.filter(session__release__study=study).select_related('session__release__build').order_by('id'):
-            release=event.session.release
-            builds[str(release.build_id)]=release.build.descriptor
-            statuses[str(event.session_id)]=completion_status(event.session)
-            records.append({'study_id':str(study.id),'release_id':str(release.id),'build_id':str(release.build_id),'record':event.envelope})
-        item=Export.objects.create(study=study,snapshot={'records':records,'builds':builds,'sessions':statuses,'format_version':'1','csv_encoding':'record_json begins with json: followed by a lossless JSON value; remove prefix then parse JSON'})
-    return JsonResponse({'export_id':str(item.id)},status=201)
+    # The export application parses under its own bounded envelope; every other
+    # route keeps the unchanged participant protocol bounds.
+    data=parse(request.body,max_bytes=MAX_EXPORT_BYTES,max_array=MAX_EXPORT_ARRAY)
+    # New applications name their version explicitly; a missing field keeps the
+    # unchanged v1 contract for old clients, and anything else fails closed.
+    version=data.get('format_version','1')
+    require(version in ('1','2'),'export_format_version',400)
+    if version=='1':
+        item=export_core.create_legacy_export(request.user,data)
+        return JsonResponse({'export_id':str(item.id)},status=201)
+    view=data.get('view');language=data.get('language')
+    require(view in export_core.VIEWS,'export_view',400)
+    require(language in export_core.LANGUAGES,'export_language',400)
+    item=export_core.create_v2_export(request.user,data['study_id'],view=view,language=language,
+                                      session_ids=data.get('session_ids'))
+    return JsonResponse({'export_id':str(item.id),'format_version':'2','view':view,'language':language,
+                         'counts':item.snapshot['counts']},status=201)

@@ -1,10 +1,15 @@
 from django.http import JsonResponse
 
 from .packages import MAX_NATIVE_ARCHIVE
+from .protocol import MAX_EXPORT_BYTES
 
 # Body bounds are applied before CSRF/multipart parsing allocates upload
 # storage, so each entry is an envelope, not the final validation.
 DEFAULT_BODY_LIMIT = 262144
+# The admin export application may carry one complete explicit session range
+# (up to 20,000 UUIDs). Exactly this route gets the wider envelope; every other
+# route, including the participant protocol, keeps its own bound.
+EXPORT_BODY_LIMIT = MAX_EXPORT_BYTES
 # One bounded XLSX workbook (2 MiB compressed) plus multipart overhead. This is
 # the same envelope the account import already uses; the study-page roster
 # entry reuses it instead of the native-program envelope.
@@ -24,7 +29,11 @@ class RequestLimits:
             raw=request.META.get('CONTENT_LENGTH','')
             if not raw.isdigit():return JsonResponse({'code':'content_length_required'},status=411)
             path=request.path
-            if path.startswith('/studies/') and path.endswith(ROSTER_IMPORT_SUFFIX):
+            if path == '/v1/admin/exports':
+                # The v2 export application carries its own bounded envelope so
+                # the declared 20,000-session range is really usable over HTTP.
+                limit=EXPORT_BODY_LIMIT
+            elif path.startswith('/studies/') and path.endswith(ROSTER_IMPORT_SUFFIX):
                 # The study's own bounded roster workbook/CSV entry: bounded like
                 # the account XLSX import, never widened to the study page's
                 # native-program envelope.

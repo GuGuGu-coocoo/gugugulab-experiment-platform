@@ -7,6 +7,12 @@ PROTOCOL = 'gep/1'
 MAX_BYTES = 262144
 MAX_BATCH = 64
 MAX_EVENTS = 10000
+# Narrowly scoped admin export application envelope: one explicit session range
+# of up to 20,000 UUIDs fits in a single request. Only the export route passes
+# these; the participant protocol bounds above stay unchanged. The array bound
+# stays equal to ``core.exports.MAX_SESSIONS`` (asserted by the R07R tests).
+MAX_EXPORT_BYTES = 1024 * 1024
+MAX_EXPORT_ARRAY = 20000
 
 class Rejected(Exception):
     def __init__(self, code, status=422):
@@ -25,7 +31,7 @@ def uuid_text(value):
         raise Rejected('invalid_uuid')
     return value
 
-def validate_tree(value, depth=0):
+def validate_tree(value, depth=0, max_array=MAX_EVENTS):
     require(depth <= 16, 'json_depth')
     if value is None or type(value) is bool:
         return
@@ -35,19 +41,19 @@ def validate_tree(value, depth=0):
     elif isinstance(value, str):
         require(len(value) <= 16384, 'string_limit')
     elif isinstance(value, list):
-        require(len(value) <= MAX_EVENTS, 'array_limit')
+        require(len(value) <= max_array, 'array_limit')
         for item in value:
-            validate_tree(item, depth + 1)
+            validate_tree(item, depth + 1, max_array)
     elif isinstance(value, dict):
         require(len(value) <= 128, 'object_limit')
         for key, item in value.items():
             require(isinstance(key, str) and len(key) <= 128, 'key_limit')
-            validate_tree(item, depth + 1)
+            validate_tree(item, depth + 1, max_array)
     else:
         raise Rejected('json_type')
 
-def parse(raw):
-    require(len(raw) <= MAX_BYTES, 'body_limit', 413)
+def parse(raw, *, max_bytes=MAX_BYTES, max_array=MAX_EVENTS):
+    require(len(raw) <= max_bytes, 'body_limit', 413)
     def pairs(items):
         result = {}
         for key, value in items:
@@ -58,7 +64,7 @@ def parse(raw):
         value = json.loads(raw, object_pairs_hook=pairs)
     except (ValueError, UnicodeError, RecursionError):
         raise Rejected('invalid_json')
-    validate_tree(value)
+    validate_tree(value, max_array=max_array)
     return value
 
 def equal(a, b):

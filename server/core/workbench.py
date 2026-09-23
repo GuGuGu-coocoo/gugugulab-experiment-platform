@@ -26,6 +26,7 @@ from django.utils import timezone
 from .access import allowed
 from .models import Build, Event, Export, Participant, Release, Session
 from .protocol import Rejected, require
+from . import exports as export_core
 from . import ui
 
 MODULES = ('overview', 'participation', 'builds', 'recruitment', 'sessions', 'exports')
@@ -292,8 +293,24 @@ def participation_module(request, study):
 
 
 def exports_module(request, study):
+    """Fixed snapshots plus the authorization-aware v2 preview.
+
+    Each row names its frozen version/view/language and counts, and the preview
+    block carries accurate counts and field-permission text only for the views
+    this actor could really create, so the page can explain what an identified
+    or unmapped application would contain before anything is written.
+    """
     exports = Export.objects.filter(study=study).order_by('-created_at', '-id')[:50]
-    return {'exports_rows': [{'id': item.id, 'created_local': local_time(item.created_at)} for item in exports]}
+    rows = []
+    for item in exports:
+        snapshot = item.snapshot if isinstance(item.snapshot, dict) else {}
+        version = str(snapshot.get('format_version') or '1')
+        rows.append({'id': item.id, 'created_local': local_time(item.created_at),
+                     'format_version': version,
+                     'view': snapshot.get('view') if version == '2' else None,
+                     'language': snapshot.get('language') if version == '2' else None,
+                     'counts': snapshot.get('counts') if version == '2' else None})
+    return {'exports_rows': rows, 'exports_options': export_core.export_options(request.user, study)}
 
 
 def overview_module(request, study):
