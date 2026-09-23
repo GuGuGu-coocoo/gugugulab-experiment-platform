@@ -8,7 +8,7 @@ from django.http import HttpResponse
 from django.shortcuts import redirect
 
 from . import excel, importers, permissions, ui
-from .access import guard, is_account_administrator
+from .access import allowed_platform, guard
 from .gui import admin_host, admin_origin
 from .models import Study
 from .protocol import Rejected, require
@@ -67,7 +67,7 @@ def template_download(request, kind):
     admin_host(request)
     if not request.user.is_authenticated:
         return redirect('/login')
-    require(is_account_administrator(request.user), 'forbidden', 403)
+    require(allowed_platform(request.user, 'accounts.view'), 'forbidden', 403)
     if kind == 'users':
         payload, filename = excel.users_template_bytes(), 'gep_users_template.xlsx'
     elif kind == 'roster':

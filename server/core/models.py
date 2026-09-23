@@ -56,6 +56,13 @@ class AccountInvitation(Identified):
     expires_at = models.DateTimeField()
     consumed = models.BooleanField(default=False)
     revoked = models.BooleanField(default=False)
+    # Explicit finite policy bound for an Admin invitation created by a
+    # non-Owner (v2). NULL keeps the role default; a stored bound always carries
+    # complete per-study overrides and an explicit future list, so the invited
+    # Admin can never gain, through the role default, permissions the issuer was
+    # excluded from. It is re-verified against the issuer's current policy at
+    # activation. Legacy rows stay NULL and are never backfilled.
+    bound_policy = models.JSONField(null=True, blank=True)
 
 class Study(Identified):
     title = models.CharField(max_length=160)

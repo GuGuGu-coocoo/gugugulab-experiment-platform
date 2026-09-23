@@ -459,6 +459,86 @@ def test_canonical_policy_never_accepts_caller_flags_or_malformed_data(db, evide
 
 # --- real server entry -----------------------------------------------------
 
+def test_server_owner_entry_preview_confirm_and_no_flag_bypass(db, client, evidence):
+    owner, instance, admin, user, study_a, _, _ = _scenario()
+    sign_in(client, owner)
+    page = client.get('/users')
+    assert page.status_code == 200
+    html = page.content.decode()
+    assert 'data-policy-migration="available"' in html
+    assert 'data-policy-diff' not in html  # the full difference is on demand only
+
+    # The read-only difference is an explicit request and writes nothing.
+    diff_page = client.post('/users', {'op': 'migration_diff', 'revision': str(instance.governance_revision)})
+    assert diff_page.status_code == 200
+    diff_html = diff_page.content.decode()
+    assert 'data-policy-diff="1"' in diff_html and 'data-migration-unknown=' in diff_html
+    assert 'data-migration-unknown-select=' in diff_html and '<option value="" selected>' in diff_html
+    instance.refresh_from_db()
+    assert instance.authorization_version == 1
+
+    # An ordinary Admin never gets the enablement section or the controls.
+    sign_in(client, admin)
+    admin_html = client.get('/users').content.decode()
+    assert 'data-policy-migration' not in admin_html
+    assert client.post('/users', {'op': 'migration_diff', 'revision': '0'}).status_code == 403
+
+    sign_in(client, owner)
+    diff = governance_migration.read_diff(instance=instance)
+    data = {'op': 'migration_preview', 'revision': str(instance.governance_revision)}
+    for item in diff['unknown']:
+        data['unknown:' + item['id']] = item['choices'][0]
+    response = client.post('/users', data)
+    assert response.status_code == 200
+    html = response.content.decode()
+    assert 'data-preview="migration_enable"' in html
+    assert 'data-migration-final-strategy="1"' in html and 'data-final-subject=' in html
+    # The conservative choices request no expansion, so the final strategy adds
+    # no study action for the legacy Admin.
+    admin_row = re.search(r'data-final-subject="%d"[^>]*data-final-study-added="(\d+)"' % admin.pk, html)
+    assert admin_row is not None and admin_row.group(1) == '0'
+    preview_id = re.search(r'data-preview-id="([0-9a-f-]{36})"', html).group(1)
+    assert 'name="op" value="migration_confirm"' in html
+    instance.refresh_from_db()
+    assert instance.authorization_version == 1
+
+    # An ordinary Admin cannot confirm even with the right password and forged
+    # owner-ish flags: the Owner comes only from Instance.owner.
+    sign_in(client, admin)
+    refused_confirm = client.post('/users', {'op': 'migration_confirm', 'preview_id': preview_id,
+                                            'revision': str(instance.governance_revision),
+                                            'password': OWNER_PASSWORD, 'owner': '1',
+                                            'is_instance_owner': '1'})
+    assert refused_confirm.status_code == 403
+    instance.refresh_from_db()
+    assert instance.authorization_version == 1
+
+    sign_in(client, owner)
+    # A wrong password or a stale revision writes nothing.
+    bad = client.post('/users', {'op': 'migration_confirm', 'preview_id': preview_id,
+                                 'revision': str(instance.governance_revision), 'password': 'nope'})
+    assert bad.status_code == 403
+    assert '重新认证失败' in bad.content.decode()
+    instance.refresh_from_db()
+    assert instance.authorization_version == 1
+
+    # The Owner confirms once; the preview identity alone is never enough.
+    confirmed = client.post('/users', {'op': 'migration_confirm', 'preview_id': preview_id,
+                                       'revision': str(instance.governance_revision),
+                                       'password': OWNER_PASSWORD})
+    assert confirmed.status_code == 200
+    instance.refresh_from_db()
+    assert instance.authorization_version == 2
+    assert Audit.objects.filter(action='policy.v2_enabled').count() == 1
+
+    sign_in(client, admin)
+    refused = client.post('/users', {'op': 'migration_preview', 'revision': '0'})
+    assert refused.status_code == 403
+    owner.refresh_from_db()
+    assert access.is_instance_owner(owner) is True
+    evidence('server_entry.json', {'preview_kind': 'migration_enable', 'wrong_password_status': 403,
+                                   'confirmed_version': instance.authorization_version,
+                                   'admin_preview_status': 403, 'flag_keys_ignored': ['owner', 'is_instance_owner']})
 
 
 # --- the shared helper must be bounded and leak-free -----------------------

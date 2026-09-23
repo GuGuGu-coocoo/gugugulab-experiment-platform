@@ -19,7 +19,7 @@ from django.http import JsonResponse, HttpResponse, FileResponse
 from django.shortcuts import render, redirect
 from django.utils import timezone
 from .models import Study, Grant, Instance, Participant, Build, Release, Session, Audit, Invitation, Export, RecoveryPermit, AccountProfile
-from .access import guard, allowed, ACTIONS, authority_actions
+from .access import guard, allowed, allowed_platform, ACTIONS, STUDY_V2_ACTIONS, authority_actions, authorization_version, ensure_principal, viewable_studies
 from .protocol import require, parse, Rejected
 from .views import endpoint
 from .services import digest, completion_status, issue_recovery_code, SHELL_CAPABILITY
@@ -127,10 +127,30 @@ def action_label(action, lang='zh'):
     return labels.get(action, action)
 
 
+def _legacy_study_member_entry(instance):
+    """The v1 study member/delegation write entries have no v2 meaning.
+
+    They are exact version-1 entries: v2 and every unknown stored version refuse
+    with an explicit upgrade-required conflict instead of silently
+    re-interpreting the legacy ``actions`` payload; v2 permission writes go
+    through the /users matrix and the account entries.
+    """
+    require(authorization_version(instance)==1,'authorization_upgrade_required',409)
+
+
+def _legacy_delegable(user, study):
+    """v1-only delegable grant read; v2 never reaches this (callers gate on v1)."""
+    return set(Grant.objects.filter(user=user,study=study,delegable=True).values_list('action',flat=True))
+
+
 def study_context(request, study, notice='', module='overview'):
     lang=ui.lang_of(request)
-    permissions={action for action in ACTIONS if allowed(request.user,study,action)}
-    can_manage={'member.manage','permission.delegate'} <= permissions
+    version=authorization_version()
+    catalog=STUDY_V2_ACTIONS if version==2 else ACTIONS
+    permissions={action for action in catalog if allowed(request.user,study,action)}
+    # Legacy study member management (member.manage / permission.delegate) is a
+    # v1 contract only: v2 accounts govern permissions through the /users matrix.
+    can_manage=version!=2 and {'member.manage','permission.delegate'} <= permissions
     releases=list(Release.objects.filter(study=study).select_related('build'))
     for release in releases:
         release.artifact_ready=bool(release.approved and release.artifact_digest and release.artifact_path)
@@ -150,7 +170,7 @@ def study_context(request, study, notice='', module='overview'):
         'releases':releases,
         'members':Grant.objects.filter(study=study,action='study.view').exclude(user_id=Instance.objects.get(pk=1).owner_id).select_related('user') if can_manage else [],
         'invitations':Invitation.objects.filter(study=study,consumed=False,revoked=False) if can_manage else [],
-        'actions':[{'code':a,'label':action_label(a,lang)} for a in sorted(permissions & set(Grant.objects.filter(user=request.user,study=study,delegable=True).values_list('action',flat=True)))],
+        'actions':[{'code':a,'label':action_label(a,lang)} for a in sorted(permissions & _legacy_delegable(request.user,study))] if can_manage else [],
         'can_configure':'study.configure' in permissions,
         'can_upload':'build.upload' in permissions,
         'can_preview':'build.preview' in permissions,
@@ -275,15 +295,53 @@ def home(request):
     if not request.user.is_authenticated:
         return redirect('/login')
     if request.method=='POST':
-        require(Instance.objects.filter(owner=request.user).exists(),'create_forbidden',403)
         title=request.POST.get('title','').strip()
         require(0<len(title)<=160,'title')
+        # The stored instance is re-read (and locked) inside the write
+        # transaction, and the version/authorization decision is taken from
+        # that locked state: an unknown stored version is refused without any
+        # write and without falling through to the legacy Owner branch, and a
+        # revocation racing this request cannot pass a check made earlier.
         with transaction.atomic():
-            study=Study.objects.create(title=title)
-            Grant.objects.bulk_create([Grant(user=request.user,study=study,action=action,delegable=True) for action in ACTIONS])
+            instance=Instance.objects.select_for_update().get(pk=1)
+            version=authorization_version(instance)
+            require(version in (1,2),'unsupported_version',409)
+            if version==2:
+                # v2: the finite platform action opens a study for every role
+                # that holds it; the creator receives the full business action
+                # set once, as an explicit complete override plus the legacy
+                # grant rows, written in the same transaction as the study (a
+                # later revocation never refills from the creator fact).
+                require(allowed_platform(request.user,'study.create',instance=instance),'create_forbidden',403)
+                study=Study.objects.create(title=title)
+                study.creator_principal=ensure_principal(request.user)
+                study.save(update_fields=['creator_principal'])
+                profile=AccountProfile.objects.select_for_update().filter(user_id=request.user.pk).first()
+                if profile is not None:
+                    overrides=dict(profile.study_overrides or {})
+                    overrides[str(study.pk)]=sorted(STUDY_V2_ACTIONS)
+                    profile.study_overrides=overrides
+                    profile.revision+=1
+                    profile.save(update_fields=['study_overrides','revision'])
+                Grant.objects.bulk_create([Grant(user=request.user,study=study,action=action,delegable=False) for action in STUDY_V2_ACTIONS])
+                Audit.objects.create(study=study,actor=request.user,action='study.created',target=str(study.id))
+            else:
+                require(instance.owner_id==request.user.pk,'create_forbidden',403)
+                study=Study.objects.create(title=title)
+                Grant.objects.bulk_create([Grant(user=request.user,study=study,action=action,delegable=True) for action in ACTIONS])
         return redirect('/studies/'+str(study.id))
+    version=authorization_version()
     lang=ui.lang_of(request)
-    studies=Study.objects.filter(grant__user=request.user,grant__action='study.view').distinct().order_by('title','id')
+    if version==2:
+        studies=viewable_studies(request.user).order_by('title','id')
+        can_create=allowed_platform(request.user,'study.create')
+    elif version==1:
+        studies=Study.objects.filter(grant__user=request.user,grant__action='study.view').distinct().order_by('title','id')
+        can_create=Instance.objects.filter(owner=request.user).exists()
+    else:
+        # Unknown stored version: no study data and no creation entry at all.
+        studies=Study.objects.none()
+        can_create=False
     cards=[]
     for study in studies:
         cards.append({
@@ -295,7 +353,7 @@ def home(request):
             'sessions_total':Session.objects.filter(release__study=study).count(),
             'participants_total':Participant.objects.filter(study=study).count(),
         })
-    return render(request,'core/home.html',{'cards':cards,'can_create':Instance.objects.filter(owner=request.user).exists(),'nav_current':'home'})
+    return render(request,'core/home.html',{'cards':cards,'can_create':can_create,'nav_current':'home'})
 
 
 @endpoint
@@ -456,6 +514,7 @@ def study_page(request,study_id,module='overview'):
                 notice=ui.notice(lang, '同设备六位恢复码（5 分钟、最多 5 次尝试，仅本次有效）：'+issued['code'],
                                  'Same-device six-digit recovery code (5 minutes, at most 5 attempts, valid once): '+issued['code'])
             elif op=='invite':
+                _legacy_study_member_entry(instance)
                 guard(request.user,study,'member.manage');guard(request.user,study,'permission.delegate')
                 require(_revision_ok(request.POST.get('revision'),instance.governance_revision),'revision_conflict',409)
                 actions=request.POST.getlist('actions')
@@ -469,6 +528,7 @@ def study_page(request,study_id,module='overview'):
                                  'Invitation key (deliver through a trusted channel): '+token)
                 _bump(instance)
             elif op=='revoke_invite':
+                _legacy_study_member_entry(instance)
                 guard(request.user,study,'member.manage');guard(request.user,study,'permission.delegate')
                 require(_revision_ok(request.POST.get('revision'),instance.governance_revision),'revision_conflict',409)
                 invitation=Invitation.objects.get(pk=request.POST['invitation_id'],study=study)
@@ -476,6 +536,7 @@ def study_page(request,study_id,module='overview'):
                 invitation.revoked=True;invitation.save(update_fields=['revoked'])
                 _bump(instance)
             elif op=='revoke_member':
+                _legacy_study_member_entry(instance)
                 guard(request.user,study,'member.manage');guard(request.user,study,'permission.delegate')
                 require(_revision_ok(request.POST.get('revision'),instance.governance_revision),'revision_conflict',409)
                 require(not Instance.objects.filter(owner_id=request.POST['user_id']).exists(),'owner_protected',403)
@@ -557,6 +618,11 @@ def artifact_member(request,release_id,member):
 def activate(request):
     admin_host(request)
     if request.method=='POST':
+        # The legacy study-invitation activation has no v2 meaning: it never
+        # rewrites itself into the matrix storage. It is an exact version-1
+        # entry; v2 and unknown versions refuse with the same explicit upgrade
+        # conflict.
+        require(authorization_version()==1,'authorization_upgrade_required',409)
         with transaction.atomic():
             invite=Invitation.objects.get(token_hash=digest(request.POST['token']))
             require(not invite.consumed and not invite.revoked and invite.expires_at>timezone.now(),'invitation_inactive',403)

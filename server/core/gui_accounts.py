@@ -11,8 +11,8 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.shortcuts import redirect, render
 from django.utils import timezone
 
-from . import accounts, permissions, ui
-from .access import is_account_administrator, is_instance_owner
+from . import access, accounts, governance_migration, permissions, ui
+from .access import allowed_platform, is_instance_owner
 from .gui import ACTION_LABELS, admin_host, admin_origin
 from .models import AccountInvitation, AccountProfile, Instance
 from .protocol import Rejected, require
@@ -78,6 +78,12 @@ MESSAGES = {
     'password': '密码列必须是文本。',
     'id': 'ID 不合法。',
     'admin_origin': '管理地址配置无效，未生成任何链接；本次未创建邀请。',
+    'already_enabled': '实例已按 v2 授权运行，重复提交不会重置任何例外；本次未写入更改。',
+    'unsupported_version': '实例或账号存储的授权/策略版本不是受支持的 1 或 2，已拒绝并保持原状。',
+    'unsupported_policy_version': '账号存储的策略版本不是受支持的 1 或 2，已拒绝并保持原状。',
+    'unknown_choice_required': '未知项必须逐条给出明确选择后才能启用；本次未写入任何更改。',
+    'unknown_choice_invalid': '未知项的选择值不受支持；本次未写入任何更改。',
+    'unknown_choice_unknown': '提交中包含预览之外的未知项选择；本次未写入任何更改。',
 }
 
 
@@ -86,7 +92,8 @@ def message_for(code, lang='zh'):
 
 
 COMMIT_OPS = {'matrix': 'matrix_commit', 'reconcile': 'reconcile_commit',
-              'users_import': 'import_users_commit', 'roster_import': 'import_roster_commit'}
+              'users_import': 'import_users_commit', 'roster_import': 'import_roster_commit',
+              'migration_enable': 'migration_confirm', 'platform': 'platform_commit'}
 IMPORT_OPS = ('import_users_preview', 'import_users_commit', 'import_roster_preview', 'import_roster_commit')
 
 
@@ -159,6 +166,39 @@ def _apply(request):
             shown = '、'.join(result['actions']) or '无显式动作'
             notice = f"权限矩阵已更新：{result['username']} · {result['study']} → {shown}。"
         return {'notice': notice}
+    if op == 'platform_preview':
+        preview = permissions.preview_platform(request.user, request.POST)
+        return {'preview': permissions.preview_payload(preview, lang), 'commit_op': 'platform_commit'}
+    if op == 'platform_commit':
+        result = permissions.commit_platform(request.user, password, request.POST.get('preview_id'))
+        if lang == 'en':
+            notice = f"Platform permissions updated: {result['username']} → {', '.join(result['platform'])}."
+        else:
+            notice = f"平台权限已更新：{result['username']} → {'、'.join(result['platform'])}。"
+        return {'notice': notice}
+    if op == 'migration_diff':
+        # Read-only, Owner-only: no preview row, no permission write, no
+        # version change. An ordinary Admin never receives the instance-wide
+        # difference.
+        require(is_instance_owner(request.user), 'owner_only', 403)
+        return {'migration_diff': governance_migration.diff_payload()}
+    if op == 'migration_preview':
+        choices = {key.split(':', 1)[1]: value for key, value in request.POST.items()
+                   if key.startswith('unknown:')}
+        row = governance_migration.preview_enablement(request.user, choices)
+        return {'preview': permissions.preview_payload(row, lang), 'commit_op': 'migration_confirm'}
+    if op == 'migration_confirm':
+        result = governance_migration.confirm_enablement(request.user, password, revision,
+                                                         request.POST.get('preview_id'))
+        if lang == 'en':
+            notice = (f"Authorization version 2 enabled (revision {result['revision']}); "
+                      f"{len(result['overrides'])} explicit override(s) and "
+                      f"{len(result['future_defaults'])} future default(s) written.")
+        else:
+            notice = (f"已启用 v2 授权（治理版本 {result['revision']}）；"
+                      f"已写入 {len(result['overrides'])} 项显式完整覆盖与 "
+                      f"{len(result['future_defaults'])} 项未来默认。")
+        return {'notice': notice}
     raise Rejected('unknown_operation', 400)
 
 
@@ -178,6 +218,9 @@ def _users_context(request):
             'invitations': AccountInvitation.objects.filter(consumed=False, revoked=False, expires_at__gt=timezone.now()).order_by('username'),
             'conflicts': conflicts, 'revision': accounts.instance_revision(),
             'matrix': matrix, 'action_labels': ACTION_LABELS,
+            # Owner-only, read-only v1 -> v2 enablement difference (nothing is
+            # written here); an ordinary Admin never sees or can trigger it.
+            'migration': governance_migration.page_state() if owned else None,
             'study_choice': permissions.configure_studies_page(request.user, request.GET.get('study_q', ''))}
 
 
@@ -186,7 +229,9 @@ def users_page(request):
     admin_host(request)
     if not request.user.is_authenticated:
         return redirect('/login')
-    require(is_account_administrator(request.user), 'forbidden', 403)
+    # One version-routed governance gate: v1 keeps the Owner/Admin boundary,
+    # v2 needs the finite accounts.view platform action from the stored policy.
+    require(allowed_platform(request.user, 'accounts.view'), 'forbidden', 403)
     extra = {'notice': '', 'error': '', 'secret': None, 'secret_username': '',
              'invitation_username': '', 'preview': None, 'invitation_tokens': [], 'import_result': None}
     status = 200

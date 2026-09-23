@@ -27,7 +27,8 @@ from django.utils import timezone
 from . import accounts, ui
 from .access import (ACTIONS, conflicts, delegable_authority, dominates,
                      is_account_administrator, is_instance_owner, manageable_actions)
-from .models import (AccountInvitation, AccountProfile, Grant, Instance, PermissionPreview, Study)
+from . import access
+from .models import (AccountInvitation, AccountProfile, Grant, Instance, PermissionPreview, Principal, Study)
 from .protocol import Rejected, require
 
 PREVIEW_TTL = timedelta(minutes=10)
@@ -39,6 +40,7 @@ MATRIX_KIND = 'matrix'
 RECONCILE_KIND = 'reconcile'
 USERS_KIND = 'users_import'
 ROSTER_KIND = 'roster_import'
+PLATFORM_KIND = 'platform'
 
 
 def _canonical(value):
@@ -53,16 +55,32 @@ def _profile(user_id):
     return AccountProfile.objects.filter(user_id=user_id).first()
 
 
+def _target(username):
+    user = get_user_model().objects.filter(username=(username or '').strip()).first()
+    require(user is not None, 'account_missing', 404)
+    return user
+
+
 def _profile_state(profile):
     return {'role': profile.role, 'revision': profile.revision, 'auth_version': profile.auth_version,
-            'must_change_password': profile.must_change_password}
+            'must_change_password': profile.must_change_password,
+            'policy_version': profile.policy_version,
+            'platform_overrides': profile.platform_overrides or {},
+            'study_overrides': profile.study_overrides or {},
+            'future_study_actions': profile.future_study_actions}
 
 
 def _account_digest(user_ids):
     state = {}
+    principals = {principal.user_id: principal for principal in
+                  Principal.objects.filter(user_id__in=sorted(user_ids))}
     for user in get_user_model().objects.filter(pk__in=sorted(user_ids)).order_by('pk'):
         profile = _profile(user.pk)
+        principal = principals.get(user.pk)
         state[str(user.pk)] = {'username': user.username, 'is_active': user.is_active,
+                               'principal': str(principal.pk) if principal is not None else None,
+                               'principal_deleted_at': (principal.deleted_at.isoformat()
+                                                        if principal is not None and principal.deleted_at else None),
                                'profile': _profile_state(profile) if profile is not None else None}
     return state
 
@@ -159,8 +177,9 @@ def _replay_authorize(locked, row):
         study = Study.objects.filter(pk=summary.get('study_id')).first()
         require(user is not None and study is not None, 'preview_invalid', 404)
         target = {action: bool(flag) for action, flag in (summary.get('target_flags') or {}).items()}
-        current = {action: delegable for action, delegable in
-                   Grant.objects.filter(user=user, study=study).values_list('action', 'delegable')}
+        # Version-routed current state: v2 re-checks the stored complete
+        # selection through the kernel instead of the legacy grant rows.
+        current = _matrix_current(access.authorization_version(), user, study)
         _matrix_authorize(locked, user, study, current, target)
         return
     if row.kind == RECONCILE_KIND:
@@ -181,7 +200,10 @@ def _gate(actor, password, preview_id, kind, scope='', require_owner=False):
     row = PermissionPreview.objects.select_for_update().filter(pk=preview_id, actor_id=locked.pk, kind=kind, scope=scope).first()
     require(row is not None, 'preview_invalid', 404)
     profile = _profile(locked.pk)
-    require(is_instance_owner(locked) or (profile is not None and profile.role == 'admin'), 'forbidden', 403)
+    # One version-routed governance gate: v1 keeps the Owner/Admin boundary,
+    # v2 requires the finite ``accounts.view`` platform action from the stored
+    # policy; the operation-specific authority is re-checked below.
+    require(access.allowed_platform(locked, 'accounts.view', instance=instance), 'forbidden', 403)
     require(not (profile is not None and profile.must_change_password), 'password_change_required', 403)
     require(not require_owner or is_instance_owner(locked), 'owner_only', 403)
     if row.consumed:
@@ -248,7 +270,115 @@ def _matrix_study_scope(actor):
     return False, manageable
 
 
+def _matrix_page_v2(actor, search='', page=1, lang='zh'):
+    """v2 matrix page built from the canonical kernel for every cell.
+
+    Only studies the actor can actually see are loaded, so a title the actor has
+    no ``study.view`` on is never rendered (a restricted count is reported
+    instead). A target Admin's future/default actions are included through the
+    same kernel, so the Admin default is never missed; each cell is editable in
+    exactly the actor's assignable set and only while the whole-account takeover
+    comparison still holds.
+    """
+    from .gui import action_label
+    User = get_user_model()
+    owner_id = Instance.objects.get(pk=1).owner_id
+    search = (search or '').strip()
+    try:
+        actor_policy = access.canonical_policy(actor)
+    except ValueError:
+        raise Rejected('unsupported_policy_version', 409) from None
+    accounts = User.objects.order_by('id')
+    if search:
+        accounts = accounts.filter(username__icontains=search)
+    total = accounts.count()
+    pages = max(1, math.ceil(total / MATRIX_PAGE_SIZE))
+    try:
+        page = int(page)
+    except (TypeError, ValueError):
+        page = 1
+    page = min(max(page, 1), pages)
+    window = list(accounts[(page - 1) * MATRIX_PAGE_SIZE: page * MATRIX_PAGE_SIZE])
+    page_ids = [user.pk for user in window]
+    profiles = {profile.user_id: profile for profile in AccountProfile.objects.filter(user_id__in=page_ids)}
+    owner_scope = actor_policy.is_instance_owner
+    visible = list(access.viewable_studies(actor, policy=actor_policy))
+    visible_keys = {str(study.pk) for study in visible}
+    all_keys = {str(pk) for pk in Study.objects.values_list('pk', flat=True)}
+    studies = sorted(visible, key=lambda study: (study.title, str(study.pk)))
+    assignable = {str(study.pk): access.assignable_actions(actor, study, policy=actor_policy)
+                  for study in studies}
+    joiner = ui.tr(lang, 'users_preview_joiner')
+    rows = []
+    for user in window:
+        profile = profiles.get(user.pk)
+        is_owner_row = user.pk == owner_id
+        own_row = user.pk == getattr(actor, 'pk', None)
+        try:
+            target_policy = access.canonical_policy(user)
+        except ValueError:
+            target_policy = None
+        dominated = False
+        if target_policy is not None and not is_owner_row and not own_row:
+            target_role = profile.role if profile is not None else 'user'
+            platform_action = 'accounts.manage_admin' if target_role == 'admin' else 'accounts.manage_user'
+            dominated = ((owner_scope or access.takeover_allowed(actor, user, after=target_policy))
+                         and access.allowed_platform(actor, platform_action))
+        hidden = set()
+        if target_policy is not None and not is_owner_row:
+            stored = set(target_policy.study_overrides) | set(target_policy.grants)
+            hidden |= {key for key in stored if key not in visible_keys}
+            if authorization_default_has_view(target_policy):
+                hidden |= all_keys - visible_keys
+        entries = []
+        for study in studies:
+            key = str(study.pk)
+            current = (set(access.configured_study_actions(target_policy, key))
+                       if target_policy is not None else set())
+            manageable = set(assignable.get(key, set())) if not (is_owner_row or own_row) else set()
+            if not current and not manageable:
+                continue
+            if is_owner_row:
+                reason = 'owner'
+            elif own_row:
+                reason = 'self'
+            elif not manageable or not current <= manageable or not dominated:
+                reason = 'outside'
+            else:
+                reason = ''
+            entries.append({'study': study, 'granted': bool(current),
+                            'current': {action: False for action in current},
+                            'visibility': 'study.view' in current,
+                            'summary': joiner.join(sorted(current)) if current else ui.tr(lang, 'users_preview_none_actions'),
+                            'editable': not reason, 'readonly': bool(reason), 'readonly_reason': reason,
+                            'checks': [{'action': action, 'label': action_label(action, lang),
+                                        'checked': action in current, 'delegable': False}
+                                       for action in sorted(manageable) if action != 'study.view']})
+        rows.append({'id': user.pk, 'username': user.username, 'is_owner': is_owner_row,
+                     'role': profile.role if profile is not None else 'user',
+                     'is_active': user.is_active,
+                     'must_change_password': bool(profile.must_change_password) if profile is not None else False,
+                     'hidden_studies': len(hidden), 'studies': entries})
+    return {'rows': rows, 'search': search, 'page': page, 'pages': pages, 'total': total,
+            'page_links': _pager_links('page', page, pages, {'q': search}), 'owner_scope': owner_scope}
+
+
+def authorization_default_has_view(policy):
+    """Whether the subject's override-less default carries ``study.view``."""
+    return access.VIEW_ACTION in access.configured_default_study_actions(policy)
+
+
 def matrix_page(actor, search='', page=1, lang='zh'):
+    """One bounded page of the /users permission matrix (version routed)."""
+    version = access.authorization_version()
+    if version == 2:
+        return _matrix_page_v2(actor, search, page, lang)
+    if version == 1:
+        return _matrix_page_v1(actor, search, page, lang)
+    raise Rejected('unsupported_version', 409)
+
+
+def _matrix_page_v1(actor, search='', page=1, lang='zh'):
     """One bounded page of the /users permission matrix.
 
     Accounts are ordered by id, optionally filtered by a case-insensitive
@@ -401,17 +531,27 @@ def configure_studies_page(actor, search='', limit=STUDY_CHOICE_LIMIT):
         if not (getattr(actor, 'is_authenticated', False) and getattr(actor, 'is_active', False)):
             studies = studies.none()
         else:
-            visible = Grant.objects.filter(user=actor, action='study.view', study=OuterRef('pk'))
-            configure = Grant.objects.filter(user=actor, action='study.configure', study=OuterRef('pk'))
-            studies = (studies.annotate(_visible=Exists(visible), _configure=Exists(configure))
-                       .filter(_visible=True, _configure=True))
+            version = access.authorization_version()
+            if version == 2:
+                # Same kernel as every other entry: an Admin default or an
+                # explicit override counts, and only studies with both actions
+                # are offered.
+                studies = studies.filter(pk__in=access.manageable_study_ids(actor))
+            elif version == 1:
+                visible = Grant.objects.filter(user=actor, action='study.view', study=OuterRef('pk'))
+                configure = Grant.objects.filter(user=actor, action='study.configure', study=OuterRef('pk'))
+                studies = (studies.annotate(_visible=Exists(visible), _configure=Exists(configure))
+                           .filter(_visible=True, _configure=True))
+            else:
+                # Unknown stored version: no study choice at all.
+                studies = studies.none()
     total = studies.count()
     window = list(studies[:limit])
     return {'studies': window, 'total': total, 'more': total > len(window),
             'search': search, 'limit': limit}
 
 
-def _matrix_submission(post, actor):
+def _matrix_submission(post, version):
     """Rebuild the submitted (user, study, visibility, actions) set from a form POST."""
     require(post.get('user_id'), 'user_id')
     require(post.get('study_id'), 'study_id')
@@ -420,11 +560,12 @@ def _matrix_submission(post, actor):
     study = Study.objects.filter(pk=post['study_id']).first()
     require(study is not None, 'study_missing', 404)
     visibility = post.get('visibility') == '1'
+    catalog = access.STUDY_V2_ACTIONS if version == 2 else ACTIONS
     actions = {}
     for key in post.keys():
         if key.startswith('action:') and post.get(key) == '1':
             code = key.split(':', 1)[1]
-            require(code in ACTIONS, 'action')
+            require(code in catalog, 'action')
             actions[code] = post.get('delegable:' + code) == '1'
     if not visibility and actions:
         raise Rejected('visibility_children_contradiction', 409)
@@ -442,34 +583,82 @@ def _matrix_target(visibility, actions, current):
 
 def _matrix_binding(actor, instance, user, study, target):
     return _digest({
-        'kind': MATRIX_KIND, 'actor': actor.pk, 'instance': str(instance.pk), 'revision': instance.governance_revision,
+        'kind': MATRIX_KIND, 'actor': actor.pk, 'instance': str(instance.pk),
+        'version': access.authorization_version(instance),
+        'revision': instance.governance_revision,
         'user': _account_digest({user.pk}), 'study': _study_digest({study.pk}),
         'grants': _grant_digest({(user.pk, study.pk)}), 'target': {action: target[action] for action in sorted(target)},
     })
 
 
 def _matrix_authorize(actor, target_user, study, current, target):
-    """Non-Owner actors are bounded by effective AND delegable actions and by the
-    study-scoped takeover comparison over the affected subjects."""
+    """Version-routed matrix authority for one target/study edit.
+
+    v1 keeps effective AND delegable actions plus the study-scoped dominance
+    comparison. v2 uses the kernel's assignable set on this study and the
+    whole-account before/after takeover comparison over every study, so a legal
+    difference on B can never overwrite the target's A permission.
+    """
     _require_target(actor, target_user)
-    if not is_instance_owner(actor):
-        require(dominates(actor, target_user), 'higher_privilege_target', 403)
-        manageable = manageable_actions(actor, study)
-        require(set(current) | set(target) <= manageable, 'delegation_forbidden', 403)
+    version = access.authorization_version()
+    if version == 1:
+        if not is_instance_owner(actor):
+            require(dominates(actor, target_user), 'higher_privilege_target', 403)
+            manageable = manageable_actions(actor, study)
+            require(set(current) | set(target) <= manageable, 'delegation_forbidden', 403)
+        return
+    require(version == 2, 'unsupported_version', 409)
+    # Permission configuration is not a separate product: the actor must also
+    # hold the target role's lifecycle capability (manage_user / manage_admin)
+    # besides view + configure on this study.
+    target_profile = _profile(target_user.pk)
+    platform_action = 'accounts.manage_admin' if (target_profile is not None and target_profile.role == 'admin') else 'accounts.manage_user'
+    require(access.allowed_platform(actor, platform_action), 'forbidden', 403)
+    manageable = access.assignable_actions(actor, study)
+    require(set(current) | set(target) <= manageable, 'delegation_forbidden', 403)
+    try:
+        after = access.with_study_override(access.canonical_policy(target_user), study.pk, target)
+    except ValueError:
+        raise Rejected('unsupported_policy_version', 409) from None
+    require(access.takeover_allowed(actor, target_user, after=after), 'higher_privilege_target', 403)
+
+
+def _matrix_current(version, user, study):
+    """Stored per-action current state for one target/study (version routed).
+
+    v1 reads the grant rows (action -> delegable). v2 reads the complete stored
+    selection from the kernel (the delegable flag has no v2 meaning and is
+    always False). Any other stored version is refused, never read as v1."""
+    require(version in (1, 2), 'unsupported_version', 409)
+    if version == 2:
+        try:
+            policy = access.canonical_policy(user)
+        except ValueError:
+            raise Rejected('unsupported_policy_version', 409) from None
+        return {action: False for action in access.configured_study_actions(policy, study.pk)}
+    return {action: delegable for action, delegable in
+            Grant.objects.filter(user=user, study=study).values_list('action', 'delegable')}
 
 
 def preview_matrix(actor, post):
-    require(is_account_administrator(actor), 'forbidden', 403)
-    user, study, visibility, actions = _matrix_submission(post, actor)
+    version = access.authorization_version()
+    if version == 1:
+        require(is_account_administrator(actor), 'forbidden', 403)
+    else:
+        require(version == 2, 'unsupported_version', 409)
+        require(access.allowed_platform(actor, 'accounts.view'), 'forbidden', 403)
+    user, study, visibility, actions = _matrix_submission(post, version)
     with transaction.atomic():
         instance = accounts._locked_instance()
         locked = get_user_model().objects.select_for_update().get(pk=actor.pk)
         require(locked.is_active, 'auth_required', 403)
-        profile = _profile(locked.pk)
-        require(is_instance_owner(locked) or (profile is not None and profile.role == 'admin'), 'forbidden', 403)
-        current = {action: delegable for action, delegable in
-                   Grant.objects.filter(user=user, study=study).values_list('action', 'delegable')}
+        require(access.allowed_platform(locked, 'accounts.view', instance=instance), 'forbidden', 403)
+        current = _matrix_current(version, user, study)
         target = _matrix_target(visibility, actions, current)
+        if version == 2:
+            # Complete explicit selection: empty, view alone, or view plus known
+            # v2 actions; invisible sub-actions stay a contradiction.
+            require(access.validate_selection(sorted(target)) == set(target), 'invisible_subaction', 409)
         _matrix_authorize(locked, user, study, current, target)
         require(current != target, 'no_change', 409)
         add = sorted(set(target) - set(current))
@@ -487,6 +676,8 @@ def commit_matrix(actor, password, preview_id):
     require(bool(preview_id), 'preview_required', 400)
     with transaction.atomic():
         instance, locked, row, replay = _gate(actor, password, preview_id, MATRIX_KIND, scope=row_scope(preview_id, MATRIX_KIND))
+        version = access.authorization_version(instance)
+        require(version in (1, 2), 'unsupported_version', 409)
         if replay:
             return row.result
         staged = row.staged
@@ -494,21 +685,142 @@ def commit_matrix(actor, password, preview_id):
         study = Study.objects.get(pk=staged['study_id'])
         target = {action: bool(flag) for action, flag in staged['target'].items()}
         require(_matrix_binding(locked, instance, user, study, target) == row.binding, 'preview_stale', 409)
-        current = {action: delegable for action, delegable in
-                   Grant.objects.filter(user=user, study=study).values_list('action', 'delegable')}
+        current = _matrix_current(version, user, study)
         _matrix_authorize(locked, user, study, current, target)
         require(current != target, 'preview_stale', 409)
-        for action in sorted(current):
-            if action not in target:
-                Grant.objects.filter(user=user, study=study, action=action).delete()
-        for action in sorted(target):
-            if current.get(action) != target[action]:
-                Grant.objects.update_or_create(user=user, study=study, action=action,
-                                               defaults={'delegable': target[action]})
+        policy_before = access.canonical_policy(user) if version == 2 else None
+        if version == 2:
+            # Complete stored selection for this one study only; legacy grant
+            # rows stay untouched and are shadowed by the explicit override.
+            profile = AccountProfile.objects.select_for_update().filter(user_id=user.pk).first()
+            require(profile is not None, 'preview_stale', 409)
+            overrides = dict(profile.study_overrides or {})
+            overrides[str(study.pk)] = sorted(target)
+            profile.study_overrides = overrides
+            profile.revision += 1
+            profile.save(update_fields=['study_overrides', 'revision'])
+        else:
+            for action in sorted(current):
+                if action not in target:
+                    Grant.objects.filter(user=user, study=study, action=action).delete()
+            for action in sorted(target):
+                if current.get(action) != target[action]:
+                    Grant.objects.update_or_create(user=user, study=study, action=action,
+                                                   defaults={'delegable': target[action]})
         before, after = grant_diff(current, target)
+        change_before, change_after = {'actions': before}, {'actions': after}
+        if version == 2:
+            # The audit carries the complete before/after policy, not only the
+            # edited study, so a later reader can rebuild the whole decision.
+            change_before['policy'] = access.policy_snapshot(
+                access.with_study_override(policy_before, study.pk, current))
+            change_after['policy'] = access.policy_snapshot(
+                access.with_study_override(policy_before, study.pk, target))
         accounts.audit(locked, 'permission.matrix_changed', f'{user.pk}:{study.pk}',
-                       before={'actions': before}, after={'actions': after})
+                       before=change_before, after=change_after)
         result = {'username': user.username, 'study': study.title, 'actions': sorted(target)}
+        _finish(row, instance, result)
+    return result
+
+
+# --------------------------------------------------------------------------- platform switches
+
+def _platform_submission(post, current):
+    """Patch semantics: only explicitly posted switches change; unknown refuse."""
+    overrides = dict(current or {})
+    seen = set()
+    for key, value in post.items():
+        if not isinstance(key, str) or not key.startswith('platform:'):
+            continue
+        action = key.split(':', 1)[1]
+        require(action in access.PLATFORM_V2_ACTIONS, 'action')
+        require(value in ('0', '1'), 'platform_value')
+        overrides[action] = value == '1'
+        seen.add(action)
+    require(bool(seen), 'platform_required')
+    return access.validate_platform_overrides(overrides)
+
+
+def _platform_binding(actor, instance, target, overrides):
+    return _digest({'kind': PLATFORM_KIND, 'actor': actor.pk, 'instance': str(instance.pk),
+                    'revision': instance.governance_revision, 'version': access.authorization_version(instance),
+                    'target': _account_digest({target.pk}), 'overrides': overrides})
+
+
+def preview_platform(actor, post):
+    """Limited Owner platform-switch preview (server side; UI is a later task).
+
+    Only the Owner may write these finite switches, and only for another
+    non-Owner account: an Admin can never pass the three Owner-controlled Admin
+    lifecycle switches on. The preview binds the target's complete stored state
+    and the full resulting override map; nothing is written here.
+    """
+    with transaction.atomic():
+        instance = accounts._locked_instance()
+        require(access.authorization_version(instance) == 2, 'authorization_upgrade_required', 409)
+        locked = get_user_model().objects.select_for_update().get(pk=actor.pk)
+        require(locked.is_active, 'auth_required', 403)
+        require(is_instance_owner(locked), 'owner_only', 403)
+        target = _target(post.get('username'))
+        _require_target(locked, target)
+        profile = AccountProfile.objects.select_for_update().filter(user_id=target.pk).first()
+        current = dict(profile.platform_overrides or {}) if profile is not None else {}
+        overrides = _platform_submission(post, current)
+        require(overrides != current, 'no_change', 409)
+        try:
+            before_policy = access.canonical_policy(target, instance=instance)
+            after_policy = access.project_policy(before_policy, platform_overrides=overrides)
+        except ValueError:
+            raise Rejected('unsupported_policy_version', 409) from None
+        before_set = set(access.configured_platform_actions(before_policy))
+        after_set = set(access.configured_platform_actions(after_policy))
+        summary = {'username': target.username, 'user_id': target.pk,
+                   'before': sorted(before_set), 'after': sorted(after_set),
+                   'added': sorted(after_set - before_set), 'removed': sorted(before_set - after_set),
+                   'overrides': overrides}
+        row = _preview(locked, PLATFORM_KIND, str(target.pk), summary, [],
+                       _platform_binding(locked, instance, target, overrides),
+                       {'user_id': target.pk, 'overrides': overrides},
+                       instance.governance_revision)
+    return row
+
+
+def commit_platform(actor, password, preview_id):
+    require(bool(preview_id), 'preview_required', 400)
+    with transaction.atomic():
+        instance, locked, row, replay = _gate(actor, password, preview_id, PLATFORM_KIND,
+                                              scope=row_scope(preview_id, PLATFORM_KIND),
+                                              require_owner=True)
+        # The platform switches are an exact v2 entry: a v1 instance (or an
+        # unknown stored version) can never commit a stored platform override.
+        require(access.authorization_version(instance) == 2, 'authorization_upgrade_required', 409)
+        if replay:
+            return row.result
+        staged = row.staged
+        target = get_user_model().objects.select_for_update().get(pk=staged['user_id'])
+        _require_target(locked, target)
+        overrides = access.validate_platform_overrides(staged['overrides'])
+        require(_platform_binding(locked, instance, target, overrides) == row.binding, 'preview_stale', 409)
+        profile = AccountProfile.objects.select_for_update().filter(user_id=target.pk).first()
+        require(profile is not None, 'preview_stale', 409)
+        current = dict(profile.platform_overrides or {})
+        require(overrides != current, 'preview_stale', 409)
+        try:
+            before_policy = access.canonical_policy(target, instance=instance)
+            after_policy = access.project_policy(before_policy, platform_overrides=overrides)
+        except ValueError:
+            raise Rejected('unsupported_policy_version', 409) from None
+        before_set = sorted(access.configured_platform_actions(before_policy))
+        after_set = sorted(access.configured_platform_actions(after_policy))
+        profile.platform_overrides = overrides
+        profile.revision += 1
+        profile.save(update_fields=['platform_overrides', 'revision'])
+        accounts.audit(locked, 'permission.platform_changed', target.pk,
+                       before={'platform': before_set, 'platform_overrides': current,
+                               'policy': access.policy_snapshot(before_policy)},
+                       after={'platform': after_set, 'platform_overrides': overrides,
+                              'policy': access.policy_snapshot(after_policy)})
+        result = {'username': target.username, 'platform': after_set}
         _finish(row, instance, result)
     return result
 

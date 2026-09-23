@@ -12,10 +12,10 @@ from django.contrib.auth.hashers import make_password
 from django.db import transaction
 from django.utils import timezone
 
-from . import accounts, excel, permissions
-from .access import (ACTIONS, ROLES, dominates, is_account_administrator, is_instance_owner,
+from . import access, accounts, excel, permissions
+from .access import (ACTIONS, ROLES, dominates, is_instance_owner,
                      manageable_actions)
-from .models import AccountInvitation, Grant, Participant, Study
+from .models import AccountInvitation, AccountProfile, Grant, Participant, Study
 from .protocol import Rejected, require
 
 USERS_KIND = permissions.USERS_KIND
@@ -40,6 +40,10 @@ def _row_error(errors, row, code, message, message_en):
 
 
 def _normalize_users(actor, raw):
+    version = access.authorization_version()
+    # Exact version routing: the two supported stored versions only; an unknown
+    # version is refused before any row is read or normalized.
+    require(version in (1, 2), 'unsupported_version', 409)
     rows = excel.read_rows(raw, excel.USERS_HEADERS)
     errors = []
     ops = []
@@ -68,7 +72,26 @@ def _normalize_users(actor, raw):
             if not role_ok or role not in ROLES:
                 _row_error(errors, number, 'role', 'role 必须是 user 或 admin。', 'role must be user or admin.')
                 continue
-            if role == 'admin' and not is_instance_owner(actor):
+            bound = None
+            if version == 2:
+                action = 'accounts.create_admin' if role == 'admin' else 'accounts.create_user'
+                if not access.allowed_platform(actor, action):
+                    _row_error(errors, number,
+                               'admin_appointment_owner_only' if role == 'admin' else 'forbidden',
+                               '当前账号没有创建该角色的平台权限。' if role == 'admin' else '当前账号没有创建账号的平台权限。',
+                               'This actor does not hold the platform action to create that role.')
+                    continue
+                if role == 'admin' and not is_instance_owner(actor):
+                    # Restricted Admin creation: the finite bound is computed at
+                    # preview time and must stay inside the issuer's current
+                    # policy (re-verified at commit and again at activation).
+                    bound = access.conservative_admin_bound(actor)
+                    if not access.takeover_creation_allowed(actor, access.bound_subject_policy(bound)):
+                        _row_error(errors, number, 'higher_privilege_target',
+                                   '无法支配该受限 Admin 的拟生效策略，已拒绝。',
+                                   'The issuer does not dominate the restricted Admin policy; the row was refused.')
+                        continue
+            elif role == 'admin' and not is_instance_owner(actor):
                 _row_error(errors, number, 'admin_appointment_owner_only', '只有 Owner 可以创建 Admin 账号。', 'Only the Owner can create Admin accounts.')
                 continue
             if target is not None:
@@ -81,7 +104,8 @@ def _normalize_users(actor, raw):
             if seen_create[username] != number:
                 _row_error(errors, number, 'duplicate_identifier', '同一用户名在导入中出现多次。', 'The same username appears more than once in this import.')
                 continue
-            ops.append({'row': number, 'operation': 'create', 'username': username, 'role': role})
+            ops.append({'row': number, 'operation': 'create', 'username': username, 'role': role,
+                        'bound_policy': bound})
             continue
         if target is None:
             _row_error(errors, number, 'account_missing', '目标账号不存在；导入不会按显示名猜测创建。', 'The target account does not exist; imports never guess or create from a display name.')
@@ -98,9 +122,18 @@ def _normalize_users(actor, raw):
         if is_instance_owner(target):
             _row_error(errors, number, 'owner_protected', 'Owner 账号不可通过账号管理修改。', 'The Owner account cannot be changed through account management.')
             continue
-        if not is_instance_owner(actor) and not dominates(actor, target):
-            _row_error(errors, number, 'higher_privilege_target', '目标账号拥有操作者无法支配的研究权限。', 'The target holds study privileges this actor cannot dominate.')
-            continue
+        if version == 1:
+            if not is_instance_owner(actor) and not dominates(actor, target):
+                _row_error(errors, number, 'higher_privilege_target', '目标账号拥有操作者无法支配的研究权限。', 'The target holds study privileges this actor cannot dominate.')
+                continue
+        else:
+            required = accounts.lifecycle_platform_actions('manage', target_role=profile.role if profile else 'user')
+            if not all(access.allowed_platform(actor, action) for action in required):
+                _row_error(errors, number, 'forbidden', '当前账号没有维护该目标角色的平台权限。', 'This actor lacks the platform action to manage that target role.')
+                continue
+            if not access.takeover_allowed(actor, target):
+                _row_error(errors, number, 'higher_privilege_target', '目标账号拥有操作者无法支配的研究权限。', 'The target holds study privileges this actor cannot dominate.')
+                continue
         if operation in ('disable', 'enable'):
             want_active = operation == 'enable'
             if target.is_active == want_active:
@@ -120,17 +153,28 @@ def _normalize_users(actor, raw):
         if not actions_ok:
             _row_error(errors, number, 'actions', 'actions 必须是文本。', 'actions must be text.')
             continue
+        catalog = set(access.STUDY_V2_ACTIONS) if version == 2 else ACTIONS
         actions = [action.strip() for action in actions_text.split(';') if action.strip()]
-        if not actions or not set(actions) <= ACTIONS:
+        if not actions or not set(actions) <= catalog:
             _row_error(errors, number, 'actions', 'actions 必须是用分号分隔的已知动作代码。', 'actions must be a semicolon-separated list of known action codes.')
             continue
         if 'study.view' not in actions:
             _row_error(errors, number, 'visibility_required', '显式动作必须同时包含 study.view。', 'Explicit actions must include study.view.')
             continue
         if not is_instance_owner(actor):
-            manageable = manageable_actions(actor, study)
+            manageable = (manageable_actions(actor, study) if version == 1
+                          else access.assignable_actions(actor, study))
             if not set(actions) <= manageable:
                 _row_error(errors, number, 'delegation_forbidden', '包含操作者无权委派的动作或未授权研究。', 'The row includes actions this actor cannot delegate, or an unauthorized study.')
+                continue
+        if version == 2:
+            try:
+                after = access.with_study_override(access.canonical_policy(target), study.pk, actions)
+            except ValueError:
+                _row_error(errors, number, 'unsupported_policy_version', '账号存储的策略版本不受支持。', 'The stored policy version is not supported.')
+                continue
+            if not access.takeover_allowed(actor, target, after=after):
+                _row_error(errors, number, 'higher_privilege_target', '目标账号拥有操作者无法支配的研究权限。', 'The target holds study privileges this actor cannot dominate.')
                 continue
         key = (target.pk, study.pk)
         if key in seen_study:
@@ -138,9 +182,10 @@ def _normalize_users(actor, raw):
             continue
         seen_study.add(key)
         selected = {action: False for action in actions}
-        for action, delegable in Grant.objects.filter(user=target, study=study).values_list('action', 'delegable'):
-            if action in selected and delegable:
-                selected[action] = True
+        if version == 1:
+            for action, delegable in Grant.objects.filter(user=target, study=study).values_list('action', 'delegable'):
+                if action in selected and delegable:
+                    selected[action] = True
         ops.append({'row': number, 'operation': 'update', 'username': username, 'user_id': target.pk,
                     'study_id': str(study.pk), 'target': selected})
     return rows, ops, errors
@@ -156,34 +201,48 @@ def _uuid_ok(value):
 
 
 def preview_users(actor, raw):
-    require(is_account_administrator(actor), 'forbidden', 403)
+    require(access.allowed_platform(actor, 'accounts.view'), 'forbidden', 403)
     with transaction.atomic():
         instance = accounts._locked_instance()
         locked = get_user_model().objects.select_for_update().get(pk=actor.pk)
         require(locked.is_active, 'auth_required', 403)
-        profile = permissions._profile(locked.pk)
-        require(is_instance_owner(locked) or (profile is not None and profile.role == 'admin'), 'forbidden', 403)
+        require(access.allowed_platform(locked, 'accounts.view', instance=instance), 'forbidden', 403)
         rows, ops, errors = _normalize_users(locked, raw)
         summary = {'rows': len(rows), 'operations': [{'row': op['row'], 'operation': op['operation'],
                                                      'username': op['username'], 'user_id': op.get('user_id'),
                                                      'role': op.get('role', ''),
                                                      'study_id': str(op.get('study_id', '')),
-                                                     'actions': sorted(op.get('target', {}))} for op in ops],
+                                                     'actions': sorted(op.get('target', {})),
+                                                     'bound': op.get('bound_policy')} for op in ops],
                    'invitations': sorted(op['username'] for op in ops if op['operation'] == 'create')}
         row = permissions._preview(locked, USERS_KIND, '', summary, errors,
                                    _users_binding(locked, instance, ops), {'ops': ops}, instance.governance_revision)
     return row
 
 
-def _reauthorize_user_op(actor, op):
+def _reauthorize_user_op(actor, op, version):
     """Per-operation authority for one staged user-import row, read fresh."""
+    require(version in (1, 2), 'unsupported_version', 409)
     if op['operation'] == 'create':
+        if version == 2:
+            action = 'accounts.create_admin' if op.get('role') == 'admin' else 'accounts.create_user'
+            require(access.allowed_platform(actor, action), 'preview_stale', 403)
+            if op.get('bound_policy') is not None:
+                require(access.takeover_bound_allowed(actor, op['bound_policy']), 'preview_stale', 409)
+            return None
         require(op.get('role') != 'admin' or is_instance_owner(actor), 'admin_appointment_owner_only', 403)
-        return
+        return None
     target = get_user_model().objects.select_for_update().get(pk=op['user_id'])
     require(not is_instance_owner(target), 'preview_stale', 409)
     require(target.pk != actor.pk, 'preview_stale', 409)
-    require(is_instance_owner(actor) or dominates(actor, target), 'preview_stale', 409)
+    if version == 1:
+        require(is_instance_owner(actor) or dominates(actor, target), 'preview_stale', 409)
+    else:
+        profile = permissions._profile(target.pk)
+        required = accounts.lifecycle_platform_actions('manage',
+                                                       target_role=profile.role if profile else 'user')
+        require(all(access.allowed_platform(actor, action) for action in required), 'preview_stale', 403)
+        require(access.takeover_allowed(actor, target), 'preview_stale', 409)
     return target
 
 
@@ -193,40 +252,61 @@ def commit_users(actor, password, preview_id):
         instance, locked, row, replay = permissions._gate(actor, password, preview_id, USERS_KIND)
         if replay:
             return row.result
+        version = access.authorization_version(instance)
+        require(version in (1, 2), 'unsupported_version', 409)
         require(not row.errors, 'preview_errors', 409)
         ops = row.staged['ops']
         require(_users_binding(locked, instance, ops) == row.binding, 'preview_stale', 409)
         tokens = []
         for op in ops:
             if op['operation'] == 'create':
-                _reauthorize_user_op(locked, op)
+                _reauthorize_user_op(locked, op, version)
                 require(not get_user_model().objects.filter(username=op['username']).exists(), 'preview_stale', 409)
                 token = accounts._rand_password()
                 invitation = AccountInvitation.objects.create(
                     issuer=locked, username=op['username'], role=op['role'],
-                    token_hash=accounts.digest(token), expires_at=timezone.now() + accounts.INVITATION_TTL)
+                    token_hash=accounts.digest(token), bound_policy=op.get('bound_policy'),
+                    expires_at=timezone.now() + accounts.INVITATION_TTL)
                 accounts.audit(locked, 'account.invite_issued', invitation.id,
-                               after={'username': op['username'], 'role': op['role']})
+                               after={'username': op['username'], 'role': op['role'],
+                                      'bound_policy': op.get('bound_policy')})
                 tokens.append({'username': op['username'], 'token': token})
                 continue
-            target = _reauthorize_user_op(locked, op)
+            target = _reauthorize_user_op(locked, op, version)
             if op['operation'] in ('disable', 'enable'):
                 profile = accounts._profile_locked(target)
                 accounts.apply_account_active(locked, target, profile, op['operation'] == 'enable')
                 continue
             study = Study.objects.get(pk=op['study_id'])
             target_actions = {action: bool(flag) for action, flag in op['target'].items()}
-            require(_matrix_authorize_import(locked, target, study, target_actions), 'preview_stale', 409)
-            current = {action: delegable for action, delegable in
-                       Grant.objects.filter(user=target, study=study).values_list('action', 'delegable')}
-            for action in sorted(current):
-                if action not in target_actions:
-                    Grant.objects.filter(user=target, study=study, action=action).delete()
-            for action in sorted(target_actions):
-                if current.get(action) != target_actions[action]:
-                    Grant.objects.update_or_create(user=target, study=study, action=action,
-                                                   defaults={'delegable': target_actions[action]})
-            before, after = permissions.grant_diff(current, target_actions)
+            require(_matrix_authorize_import(locked, target, study, target_actions, version), 'preview_stale', 409)
+            if version == 2:
+                # Complete explicit selection for this study; legacy grant rows
+                # stay untouched and are shadowed.
+                profile = AccountProfile.objects.select_for_update().filter(user_id=target.pk).first()
+                require(profile is not None, 'preview_stale', 409)
+                try:
+                    stored_before = {action: False for action in access.configured_study_actions(
+                        access.canonical_policy(target), study.pk)}
+                except ValueError:
+                    raise Rejected('preview_stale', 409) from None
+                overrides = dict(profile.study_overrides or {})
+                overrides[str(study.pk)] = sorted(target_actions)
+                profile.study_overrides = overrides
+                profile.revision += 1
+                profile.save(update_fields=['study_overrides', 'revision'])
+            else:
+                current = {action: delegable for action, delegable in
+                           Grant.objects.filter(user=target, study=study).values_list('action', 'delegable')}
+                for action in sorted(current):
+                    if action not in target_actions:
+                        Grant.objects.filter(user=target, study=study, action=action).delete()
+                for action in sorted(target_actions):
+                    if current.get(action) != target_actions[action]:
+                        Grant.objects.update_or_create(user=target, study=study, action=action,
+                                                       defaults={'delegable': target_actions[action]})
+            before, after = permissions.grant_diff(
+                stored_before if version == 2 else current, target_actions)
             accounts.audit(locked, 'permission.import_grants', f'{target.pk}:{study.pk}',
                            before={'actions': before}, after={'actions': after})
         result = {'invited': sorted(op['username'] for op in ops if op['operation'] == 'create'),
@@ -237,7 +317,22 @@ def commit_users(actor, password, preview_id):
     return {'result': result, 'invitation_tokens': tokens}
 
 
-def _matrix_authorize_import(actor, target_user, study, target):
+def _matrix_authorize_import(actor, target_user, study, target, version=1):
+    if version == 2:
+        if is_instance_owner(target_user) or target_user.pk == actor.pk:
+            return False
+        profile = permissions._profile(target_user.pk)
+        required = accounts.lifecycle_platform_actions('manage',
+                                                       target_role=profile.role if profile else 'user')
+        if not all(access.allowed_platform(actor, action) for action in required):
+            return False
+        if not set(target) <= access.assignable_actions(actor, study):
+            return False
+        try:
+            after = access.with_study_override(access.canonical_policy(target_user), study.pk, target)
+        except ValueError:
+            return False
+        return access.takeover_allowed(actor, target_user, after=after)
     if is_instance_owner(actor):
         return not is_instance_owner(target_user) and target_user.pk != actor.pk
     return (target_user.pk != actor.pk and not is_instance_owner(target_user)
@@ -338,8 +433,11 @@ def replay_authorize(locked, row):
     """Re-check a consumed import preview's current per-operation authority.
 
     Called from :func:`core.permissions._replay_authorize`; uses only the
-    secret-free summary recorded at preview time.
+    secret-free summary recorded at preview time and routes by the stored
+    authorization version.
     """
+    version = access.authorization_version()
+    require(version in (1, 2), 'unsupported_version', 409)
     if row.kind == USERS_KIND:
         summary = row.summary or {}
         ops = summary.get('operations')
@@ -348,18 +446,36 @@ def replay_authorize(locked, row):
             operation = op.get('operation')
             if operation == 'create':
                 require('role' in op, 'preview_invalid', 404)
-                require(op['role'] != 'admin' or is_instance_owner(locked), 'admin_appointment_owner_only', 403)
+                if version == 2:
+                    action = 'accounts.create_admin' if op['role'] == 'admin' else 'accounts.create_user'
+                    require(access.allowed_platform(locked, action), 'preview_stale', 403)
+                    if op.get('bound_policy') is not None:
+                        require(access.takeover_bound_allowed(locked, op['bound_policy']), 'preview_stale', 409)
+                else:
+                    require(op['role'] != 'admin' or is_instance_owner(locked), 'admin_appointment_owner_only', 403)
                 continue
             target = get_user_model().objects.filter(pk=op.get('user_id')).first()
             require(target is not None, 'preview_stale', 409)
             require(not is_instance_owner(target), 'preview_stale', 409)
             require(target.pk != locked.pk, 'preview_stale', 409)
-            require(is_instance_owner(locked) or dominates(locked, target), 'preview_stale', 409)
+            if version == 1:
+                require(is_instance_owner(locked) or dominates(locked, target), 'preview_stale', 409)
+            else:
+                profile = permissions._profile(target.pk)
+                required = accounts.lifecycle_platform_actions('manage',
+                                                               target_role=profile.role if profile else 'user')
+                require(all(access.allowed_platform(locked, action) for action in required), 'preview_stale', 403)
+                require(access.takeover_allowed(locked, target), 'preview_stale', 409)
             if operation == 'update':
                 study = Study.objects.filter(pk=op.get('study_id')).first()
                 require(study is not None, 'preview_stale', 409)
-                require(is_instance_owner(locked) or set(op.get('actions') or []) <= manageable_actions(locked, study),
-                        'preview_stale', 409)
+                if version == 1:
+                    require(is_instance_owner(locked) or set(op.get('actions') or []) <= manageable_actions(locked, study),
+                            'preview_stale', 409)
+                else:
+                    require(is_instance_owner(locked)
+                            or set(op.get('actions') or []) <= access.assignable_actions(locked, study),
+                            'preview_stale', 409)
         return
     if row.kind == ROSTER_KIND:
         study = Study.objects.filter(pk=row.scope).first()

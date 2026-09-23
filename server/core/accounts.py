@@ -13,13 +13,62 @@ from django.contrib.auth.hashers import check_password
 from django.db import transaction
 from django.utils import timezone
 
-from .access import ROLES, dominates, effective_role, is_instance_owner
+from . import access
+from .access import (ROLES, allowed_platform, effective_role, ensure_principal,
+                     is_instance_owner)
 from .models import AccountInvitation, AccountProfile, Audit, Grant, Instance
 from .protocol import Rejected, require
 from .services import digest
 
 INVITATION_TTL = timedelta(hours=24)
 MINIMUM_PASSWORD = 16
+
+# The finite v2 platform action(s) every lifecycle operation requires. Ordinary
+# accounts are managed with ``accounts.manage_user``; an Admin target needs
+# ``accounts.manage_admin`` (and ``accounts.delete_admin`` to delete). Role
+# promotion, Admin invitation and withdrawing a pending Admin invitation need
+# ``accounts.create_admin``; demotion is Admin maintenance. The same table drives
+# the importers and the matrix.
+LIFECYCLE_PLATFORM_ACTIONS = {
+    'create_user': ('accounts.create_user',),
+    'create_admin': ('accounts.create_admin',),
+    'manage_user': ('accounts.manage_user',),
+    'manage_admin': ('accounts.manage_admin',),
+    'promote': ('accounts.create_admin',),
+    'demote': ('accounts.manage_admin',),
+    'revoke_user': ('accounts.manage_user',),
+    'revoke_admin': ('accounts.create_admin',),
+    'delete_user': ('accounts.manage_user',),
+    'delete_admin': ('accounts.manage_admin', 'accounts.delete_admin'),
+}
+OWNER_ONLY_LIFECYCLE = ('create_admin', 'promote', 'demote', 'revoke_admin')
+
+
+def lifecycle_platform_actions(operation, target_role='user'):
+    """The exact v2 platform action(s) one lifecycle operation requires."""
+    if operation in ('manage', 'delete'):
+        operation = f'{operation}_{"admin" if target_role == "admin" else "user"}'
+    try:
+        return LIFECYCLE_PLATFORM_ACTIONS[operation]
+    except KeyError:
+        raise ValueError(operation) from None
+
+
+def _require_lifecycle_platform(instance, actor, operation, *, target_role='user'):
+    """Reject unless the actor's current platform policy covers the operation.
+
+    Version 1 keeps the legacy capability map in :func:`access.allowed_platform`
+    (Owner or Admin for ordinary accounts and per-target Admin maintenance,
+    Owner-only for appointment/demotion and Admin invitations); the per-target
+    study dominance guard stays in ``_mutable_target``. Version 2 reads the
+    canonical stored policy, so an ordinary Admin's default cannot manage Admins
+    and the Owner-controlled switches are needed explicitly.
+    """
+    version = access.authorization_version(instance)
+    require(version in (1, 2), 'forbidden', 403)
+    required = lifecycle_platform_actions(operation, target_role)
+    code = 'admin_appointment_owner_only' if operation in OWNER_ONLY_LIFECYCLE else 'forbidden'
+    require(all(allowed_platform(actor, action, instance=instance) for action in required), code, 403)
 
 
 def instance_revision():
@@ -75,14 +124,16 @@ def _profile_locked(user, role='user', must_change=False):
     return profile
 
 
-def _mutable_target(actor, target, takeover=False):
+def _mutable_target(actor, target, *, instance=None, takeover=False, after=None):
     """Owner row is read-only and nobody targets itself. Lifecycle operations on
-    non-Owner accounts (including peer Admins) require the study takeover guard;
-    appoint/demote Admin stays Owner-only in set_account_role."""
+    non-Owner accounts (including peer Admins) require the whole-account
+    takeover guard; appoint/demote Admin stays Owner-only in set_account_role
+    (v1) or needs create_admin/manage_admin (v2)."""
     require(target.pk != actor.pk, 'self_target', 409)
     require(not is_instance_owner(target), 'owner_protected', 403)
     if takeover:
-        require(dominates(actor, target), 'higher_privilege_target', 403)
+        require(access.takeover_allowed(actor, target, instance=instance, after=after),
+                'higher_privilege_target', 403)
 
 
 def _clean_username(username):
@@ -95,29 +146,57 @@ def _account_state(user, profile):
     return {'username': user.username, 'is_active': user.is_active, 'role': profile.role if profile else 'user', 'must_change_password': profile.must_change_password if profile else False, 'auth_version': profile.auth_version if profile else 1}
 
 
+def _v2_policy_snapshot(user, *, instance=None):
+    """Full before/after policy sets for v2 governance audits; None on v1."""
+    if access.authorization_version(instance) != 2:
+        return None
+    try:
+        return access.policy_snapshot(access.canonical_policy(user, instance=instance))
+    except ValueError:
+        return None
+
+
 def invite_account(actor, password, expected_revision, username, role='user'):
     username = _clean_username(username)
     require(role in ROLES, 'role')
     with transaction.atomic():
         instance, actor, _ = _reauth(actor, password, expected_revision)
-        require(role == 'user' or is_instance_owner(actor), 'admin_appointment_owner_only', 403)
+        _require_lifecycle_platform(instance, actor, 'create_admin' if role == 'admin' else 'create_user')
         require(not get_user_model().objects.filter(username=username).exists(), 'account_exists', 409)
         require(not AccountInvitation.objects.filter(username=username, consumed=False, revoked=False, expires_at__gt=timezone.now()).exists(), 'invitation_active', 409)
+        bound = None
+        if (role == 'admin' and access.authorization_version(instance) == 2
+                and not is_instance_owner(actor)):
+            # A non-Owner issuer may only open a *restricted* Admin: the bound
+            # fixes every study and the future upper bound, and the issuer must
+            # dominate exactly that policy.
+            bound = access.conservative_admin_bound(actor, instance=instance)
+            require(access.takeover_creation_allowed(actor, access.bound_subject_policy(bound),
+                                                     instance=instance),
+                    'higher_privilege_target', 403)
         token = secrets.token_urlsafe(32)
-        invitation = AccountInvitation.objects.create(issuer=actor, username=username, role=role, token_hash=digest(token), expires_at=timezone.now() + INVITATION_TTL)
-        audit(actor, 'account.invite_issued', invitation.id, after={'username': username, 'role': role})
+        invitation = AccountInvitation.objects.create(issuer=actor, username=username, role=role,
+                                                      token_hash=digest(token), bound_policy=bound,
+                                                      expires_at=timezone.now() + INVITATION_TTL)
+        after = {'username': username, 'role': role}
+        if bound is not None:
+            after['bound_policy'] = bound
+        audit(actor, 'account.invite_issued', invitation.id, after=after)
         _bump(instance)
-    return {'token': token, 'username': username, 'role': role, 'expires_at': invitation.expires_at}
+    return {'token': token, 'username': username, 'role': role, 'expires_at': invitation.expires_at,
+            'bound_policy': bound}
 
 
 def create_temporary_account(actor, password, expected_revision, username):
     username = _clean_username(username)
     with transaction.atomic():
         instance, actor, _ = _reauth(actor, password, expected_revision)
+        _require_lifecycle_platform(instance, actor, 'create_user')
         require(not get_user_model().objects.filter(username=username).exists(), 'account_exists', 409)
         temporary = _rand_password()
         user = get_user_model().objects.create_user(username, password=temporary)
         AccountProfile.objects.create(user=user, role='user', must_change_password=True, auth_version=1, revision=0)
+        ensure_principal(user)
         audit(actor, 'account.created_temporary', user.pk, after={'username': username, 'role': 'user', 'must_change_password': True})
         _bump(instance)
     return {'username': username, 'temporary_password': temporary}
@@ -127,9 +206,13 @@ def reset_temporary_password(actor, password, expected_revision, target_id):
     with transaction.atomic():
         instance, actor, _ = _reauth(actor, password, expected_revision)
         target = get_user_model().objects.select_for_update().get(pk=target_id)
-        _mutable_target(actor, target, takeover=True)
+        _mutable_target(actor, target, instance=instance)
         profile = _profile_locked(target)
+        _require_lifecycle_platform(instance, actor, 'manage', target_role=profile.role)
+        require(access.takeover_allowed(actor, target, instance=instance),
+                'higher_privilege_target', 403)
         before = _account_state(target, profile)
+        before['policy'] = _v2_policy_snapshot(target, instance=instance)
         temporary = _rand_password()
         target.set_password(temporary)
         target.save(update_fields=['password'])
@@ -161,8 +244,11 @@ def set_account_active(actor, password, expected_revision, target_id, active):
         instance, actor, _ = _reauth(actor, password, expected_revision)
         target = get_user_model().objects.select_for_update().get(pk=target_id)
         # Reactivation restores privileged access too, so the takeover guard always applies.
-        _mutable_target(actor, target, takeover=True)
+        _mutable_target(actor, target, instance=instance)
         profile = _profile_locked(target)
+        _require_lifecycle_platform(instance, actor, 'manage', target_role=profile.role)
+        require(access.takeover_allowed(actor, target, instance=instance),
+                'higher_privilege_target', 403)
         apply_account_active(actor, target, profile, active)
         _bump(instance)
     return {'username': target.username, 'is_active': bool(active)}
@@ -172,17 +258,39 @@ def set_account_role(actor, password, expected_revision, target_id, role):
     require(role in ROLES, 'role')
     with transaction.atomic():
         instance, actor, _ = _reauth(actor, password, expected_revision)
-        require(is_instance_owner(actor), 'owner_only', 403)
+        version = access.authorization_version(instance)
+        if version == 1:
+            # Legacy boundary: appointment/demotion stays Owner-only.
+            require(is_instance_owner(actor), 'owner_only', 403)
         target = get_user_model().objects.select_for_update().get(pk=target_id)
         require(target.pk != actor.pk, 'self_target', 409)
         require(not is_instance_owner(target), 'owner_protected', 403)
         profile = _profile_locked(target)
         require(profile.role != role, 'no_change', 409)
+        after = None
+        before_policy = None
+        if version != 1:
+            # Exact v2 route: an unknown stored version is refused instead of
+            # being read through the v2 checks.
+            require(version == 2, 'unsupported_version', 409)
+            _require_lifecycle_platform(instance, actor, 'promote' if role == 'admin' else 'demote')
+            try:
+                before_policy = access.canonical_policy(target, instance=instance)
+                after = access.project_policy(before_policy, role=role)
+            except ValueError:
+                raise Rejected('unsupported_policy_version', 409) from None
+        require(access.takeover_allowed(actor, target, instance=instance, after=after),
+                'higher_privilege_target', 403)
         before = _account_state(target, profile)
+        if before_policy is not None:
+            before['policy'] = access.policy_snapshot(before_policy)
         profile.role = role
         profile.revision += 1
         profile.save(update_fields=['role', 'revision'])
-        audit(actor, 'account.role_changed', target.pk, before=before, after=_account_state(target, profile))
+        after_state = _account_state(target, profile)
+        if after is not None:
+            after_state['policy'] = access.policy_snapshot(after)
+        audit(actor, 'account.role_changed', target.pk, before=before, after=after_state)
         _bump(instance)
     return {'username': target.username, 'role': role}
 
@@ -214,7 +322,10 @@ def activate_account(token, password, confirm):
 
     The issuer's *current* active status and current authority to issue the
     invitation's role are re-checked before the account is created or the token
-    is consumed, under the same lock order as governance mutations.
+    is consumed, under the same lock order as governance mutations. On a v2
+    instance a stored finite Admin bound is re-validated and the issuer's
+    current policy must still dominate it, so a narrowed issuer can never
+    activate an Admin invitation it could no longer create.
     """
     require(bool(token), 'activation_failed', 403)
     require(bool(password) and len(password) >= MINIMUM_PASSWORD, 'password_too_short')
@@ -227,14 +338,40 @@ def activate_account(token, password, confirm):
         invitation = AccountInvitation.objects.select_for_update().filter(pk=pending.pk).first()
         require(invitation is not None and not invitation.consumed and not invitation.revoked and invitation.expires_at > timezone.now(), 'activation_failed', 403)
         require(invitation.role in ROLES, 'activation_failed', 403)
-        require(issuer.is_active and (is_instance_owner(issuer) or effective_role(issuer) == 'admin'), 'activation_failed', 403)
-        require(invitation.role == 'user' or is_instance_owner(issuer), 'activation_failed', 403)
+        version = access.authorization_version(instance)
+        bound_fields = {}
+        if version == 1:
+            require(issuer.is_active and (is_instance_owner(issuer) or effective_role(issuer) == 'admin'), 'activation_failed', 403)
+            require(invitation.role == 'user' or is_instance_owner(issuer), 'activation_failed', 403)
+        else:
+            # Exact v2 route: an unknown stored version refuses here instead of
+            # being silently treated as v2.
+            require(version == 2, 'unsupported_version', 409)
+            require(issuer.is_active, 'activation_failed', 403)
+            operation = 'create_admin' if invitation.role == 'admin' else 'create_user'
+            require(all(allowed_platform(issuer, action, instance=instance)
+                        for action in lifecycle_platform_actions(operation)), 'activation_failed', 403)
+            if invitation.role == 'admin' and invitation.bound_policy is not None:
+                try:
+                    normalized = access.validate_account_bound(invitation.bound_policy)
+                except ValueError:
+                    raise Rejected('activation_failed', 403) from None
+                require(normalized['role'] == invitation.role, 'activation_failed', 403)
+                require(access.takeover_bound_allowed(issuer, invitation.bound_policy, instance=instance),
+                        'activation_failed', 403)
+                bound_fields = {'platform_overrides': normalized['platform_overrides'],
+                                'study_overrides': normalized['study_overrides'],
+                                'future_study_actions': normalized['future_study_actions']}
         require(not get_user_model().objects.filter(username=invitation.username).exists(), 'activation_failed', 403)
         user = get_user_model().objects.create_user(invitation.username, password=password)
-        AccountProfile.objects.create(user=user, role=invitation.role, must_change_password=False, auth_version=1, revision=0)
+        AccountProfile.objects.create(user=user, role=invitation.role, must_change_password=False,
+                                      auth_version=1, revision=0, **bound_fields)
+        ensure_principal(user)
         invitation.consumed = True
         invitation.save(update_fields=['consumed'])
-        audit(issuer, 'account.invitation_activated', user.pk, after={'username': invitation.username, 'role': invitation.role})
+        audit(issuer, 'account.invitation_activated', user.pk,
+              after={'username': invitation.username, 'role': invitation.role,
+                     'bound_policy': bound_fields or None})
         _bump(instance)
     return user
 
@@ -245,7 +382,8 @@ def revoke_invitation(actor, password, expected_revision, invitation_id):
         invitation = AccountInvitation.objects.select_for_update().get(pk=invitation_id)
         require(not invitation.consumed, 'invitation_inactive', 409)
         require(not invitation.revoked, 'invitation_inactive', 409)
-        require(invitation.role == 'user' or is_instance_owner(actor), 'admin_appointment_owner_only', 403)
+        _require_lifecycle_platform(instance, actor,
+                                    'revoke_admin' if invitation.role == 'admin' else 'revoke_user')
         invitation.revoked = True
         invitation.save(update_fields=['revoked'])
         audit(actor, 'account.invite_revoked', invitation.id, before={'revoked': False}, after={'revoked': True, 'username': invitation.username})

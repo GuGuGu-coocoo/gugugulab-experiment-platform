@@ -476,6 +476,32 @@ def _wal_source(root, name='wal_source'):
 
 # --- real Chrome: blank refusal, explicit choice, final strategy, confirm ---
 
+@pytest.mark.skipif(os.environ.get('GEP_T17_BROWSER') != '1',
+                    reason='Set GEP_T17_BROWSER=1 to run the isolated Chrome check')
+def test_actual_chrome_blank_refusal_final_strategy_and_password_confirm(
+        live_server, world_scenario, evidence, run_chrome_tokens):
+    env = dict(os.environ, GEP_TEST_BASE=live_server.url, GEP_OWNER_PASSWORD=OWNER_PASSWORD)
+    result, reported = run_chrome_tokens(SCRIPT, env, timeout=180)
+    assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
+    assert reported == []
+    observations = json.loads(re.search(r'P03R02BR_OBSERVATIONS (\{.*\})', result.stdout).group(1))
+    assert observations['blank_refused'] is True
+    assert observations['choice_values']['missing'] == 'adopt_v2'
+    assert observations['final_visible'] is True
+    assert observations['admin_final_study_added'] > 0  # the explicit adoption is visible
+    assert observations['digest_shown'] is True
+    assert observations['wrong_password_refused'] is True
+    assert observations['confirmed'] is True
+    assert observations['enabled_state_visible'] is True
+    assert observations['page_errors'] == []
+
+    owner, instance, admin, study_a, study_b = world_scenario
+    instance.refresh_from_db()
+    assert instance.authorization_version == 2
+    policy = access.canonical_policy(admin, instance=instance)
+    assert access.allowed(admin, study_a, 'build.upload', version=2, policy=policy) is True
+    assert access.allowed(admin, study_a, 'data.export_raw', version=2, policy=policy) is False
+    evidence('chrome_journey.json', observations)
 
 
 SCRIPT = r'''
