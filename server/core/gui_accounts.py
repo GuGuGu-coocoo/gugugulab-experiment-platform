@@ -264,7 +264,7 @@ def users_page(request):
             # A rejected confirmation (for example a wrong own password) keeps the
             # still-valid preview visible so the actor can retry it.
             pending = permissions.pending_preview(request.user, request.POST.get('preview_id'))
-            if pending is not None:
+            if pending is not None and permissions.preview_retry_authorized(request.user, pending):
                 extra['preview'] = permissions.preview_payload(pending, ui.lang_of(request))
                 extra['commit_op'] = COMMIT_OPS.get(pending.kind, '')
     context = _users_context(request)

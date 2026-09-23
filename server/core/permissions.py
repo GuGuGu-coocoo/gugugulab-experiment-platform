@@ -166,6 +166,32 @@ def pending_preview(actor, preview_id):
         return None
 
 
+def preview_retry_authorized(actor, row):
+    """Whether a refused confirmation may re-render this still-pending preview.
+
+    The error page of a refused commit shows the actor their own pending preview
+    again so a recoverable refusal (for example a mistyped own password) can be
+    retried. That re-render must never become a way to read stored object data
+    (account or study names) after the current authority for the operation was
+    lost, so it re-uses the same current-authority re-check as a consumed replay
+    and fails closed on any refusal. It writes nothing.
+    """
+    try:
+        require(access.allowed_platform(actor, 'accounts.view'), 'forbidden', 403)
+        profile = _profile(actor.pk)
+        require(not (profile is not None and profile.must_change_password), 'password_change_required', 403)
+        from .governance_migration import ENABLEMENT_KIND
+        if row.kind == ENABLEMENT_KIND:
+            # Owner-only preview (the enablement entry is Owner-only); the Owner
+            # fact cannot be revoked, so the owner check is the authority.
+            require(is_instance_owner(actor), 'owner_only', 403)
+        else:
+            _replay_authorize(actor, row)
+        return True
+    except Rejected:
+        return False
+
+
 def _replay_authorize(locked, row):
     """Re-check the *current* authority for the exact operation of a consumed
     preview. A stored result is only replayed while the actor could still run
