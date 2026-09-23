@@ -22,6 +22,7 @@ from django.db import transaction
 from .access import allowed, guard
 from .models import Audit, Release, Study
 from .protocol import require
+from . import deletion
 
 POLICY_FIELDS = ('public_summary', 'public_duration', 'public_device_requirements')
 POLICY_LIMITS = {'public_summary': 280, 'public_duration': 80, 'public_device_requirements': 160}
@@ -152,6 +153,9 @@ def update_policy(actor, study, revision, values):
         actor = _current_actor(actor)
         guard(actor, study, 'study.configure')
         locked = Study.objects.select_for_update().get(pk=study.pk)
+        # Final lifecycle check inside the locking transaction: a request that
+        # read the study before the deletion mark committed is still refused.
+        require(deletion.active_study(locked), 'study_deleted', 403)
         guard(actor, locked, 'study.configure')
         require(_revision_matches(revision, locked.revision), 'revision_conflict', 409)
         before = policy_state(locked)
@@ -178,6 +182,9 @@ def select_current_release(actor, study, revision, release_id):
     with transaction.atomic():
         actor = _current_actor(actor)
         locked = Study.objects.select_for_update().get(pk=study.pk)
+        # Final lifecycle check inside the locking transaction, before any
+        # current-release write.
+        require(deletion.active_study(locked), 'study_deleted', 403)
         require(any(allowed(actor, locked, action) for action in SELECT_ACTIONS), 'forbidden', 403)
         require(_revision_matches(revision, locked.revision), 'revision_conflict', 409)
         target = bound_release(locked, release_id)

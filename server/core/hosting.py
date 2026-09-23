@@ -13,10 +13,12 @@ from . import publication
 def resource(request,release_id,resource_path):
     require(request.get_host().split(':')[0]==settings.EXPERIMENT_HOST,'wrong_host',403)
     require(request.method=='GET','method',405)
-    release=Release.objects.select_related('build','study').get(pk=release_id)
+    release=Release.objects.select_related('build','study').filter(pk=release_id).first()
     # Only a real Web release is served here: a complete native release carries a
     # program archive without any web/ path and must never be presented as one.
-    require(publication.release_kind(release)=='web','not_published',404)
+    # A deleted or random release id gets the same 404, and a study under
+    # deletion is no longer a published resource.
+    require(release is not None and publication.release_kind(release)=='web' and release.study.lifecycle=='active','not_published',404)
     require(resource_path.startswith('web/') and '..' not in resource_path.split('/'),'path',404)
     config=connection_config(release)
     if resource_path=='web/index.html':
@@ -50,7 +52,7 @@ def entry_binding(request,release):
     study=release.study
     valid=(raw_release==str(release.id) and raw_revision is not None and raw_revision.isdigit()
            and int(raw_revision)==study.revision and study.current_release_id==release.id
-           and study.recruitment=='open' and release.approved and bool(release.build.package_path))
+           and study.recruitment=='open' and study.lifecycle=='active' and release.approved and bool(release.build.package_path))
     if not valid:
         return False
     return {'expected_release_id':str(release.id),'expected_revision':int(raw_revision)}
@@ -93,7 +95,12 @@ def preview(request,token,resource_path):
     except signing.BadSignature:
         from .protocol import Rejected
         raise Rejected('preview_expired',403)
-    build=Build.objects.get(pk=claims['build']);user=get_user_model().objects.get(pk=claims['user'])
+    build=Build.objects.select_related('study').filter(pk=claims['build']).first()
+    user=get_user_model().objects.filter(pk=claims['user']).first()
+    # A deleted build, account or study is the same 404 as a random preview
+    # target: the preview never leaks whether the study ever existed.
+    from .protocol import require as _require
+    _require(build is not None and user is not None and build.study.lifecycle=='active','not_published',404)
     guard(user,build.study,'build.preview')
     config={'config_version':'1','protocol_version':'gep/1','sdk_version':'0.1.0','purpose':'synthetic','api_url':public_api_url(),'instance_id':str(Instance.objects.get(pk=1).instance_id),'study_id':str(build.study_id),'release_id':'preview','build_id':str(build.id),'preview':True}
     return serve(build,config,resource_path)

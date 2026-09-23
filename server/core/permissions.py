@@ -24,7 +24,7 @@ from django.db import transaction
 from django.db.models import Count, Exists, OuterRef, Q
 from django.utils import timezone
 
-from . import accounts, ui
+from . import accounts, deletion, ui
 from .access import (ACTIONS, conflicts, delegable_authority, dominates,
                      is_account_administrator, is_instance_owner, manageable_actions)
 from . import access
@@ -370,6 +370,9 @@ def _study_gate(actor, password, preview_id, kind, study_id):
     require(locked.is_active, 'auth_required', 403)
     study = Study.objects.select_for_update().filter(pk=study_id).first()
     require(study is not None, 'study_missing', 404)
+    # Final lifecycle check on the locked study: no roster/permission preview or
+    # commit may target a study whose deletion mark already committed.
+    require(deletion.active_study(study), 'study_deleted', 403)
     require(access.allowed(locked, study, 'study.view', instance=instance), 'forbidden', 403)
     require(access.allowed(locked, study, 'study.configure', instance=instance), 'forbidden', 403)
     profile = _profile(locked.pk)
@@ -888,6 +891,9 @@ def preview_matrix(actor, post):
         locked = get_user_model().objects.select_for_update().get(pk=actor.pk)
         require(locked.is_active, 'auth_required', 403)
         require(access.allowed_platform(locked, 'accounts.view', instance=instance), 'forbidden', 403)
+        # No private permission preview may be staged for a study whose deletion
+        # mark already committed.
+        require(deletion.active_study(study), 'study_deleted', 403)
         current = _matrix_current(version, user, study)
         target = _matrix_target(visibility, actions, current)
         if version == 2:
@@ -907,12 +913,32 @@ def preview_matrix(actor, post):
     return row
 
 
+def _preview_study(row):
+    """The study one preview targets (staged, summary or scope), or ``None``.
+
+    Used by the commit paths so a preview that names a study whose deletion
+    mark committed is refused before a replay or any write.
+    """
+    raw = (row.staged or {}).get('study_id') or (row.summary or {}).get('study_id') or row.scope
+    if not raw:
+        return None
+    try:
+        return Study.objects.filter(pk=raw).first()
+    except (ValueError, TypeError, ValidationError):
+        return None
+
+
 def commit_matrix(actor, password, preview_id):
     require(bool(preview_id), 'preview_required', 400)
     with transaction.atomic():
         instance, locked, row, replay = _gate(actor, password, preview_id, MATRIX_KIND, scope=row_scope(preview_id, MATRIX_KIND))
         version = access.authorization_version(instance)
         require(version in (1, 2), 'unsupported_version', 409)
+        # Final lifecycle check: a study marked for deletion after the preview
+        # was created never receives a new permission, and a replay of the
+        # consumed preview is refused too.
+        preview_study = _preview_study(row)
+        require(preview_study is not None and deletion.active_study(preview_study), 'study_deleted', 403)
         if replay:
             return row.result
         staged = row.staged

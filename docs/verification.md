@@ -190,3 +190,23 @@ browser=PASS（6 个规格 exit 0）, windows_preparation=PASS（229 项检查 0
 - **raw-only 浏览器工作流**：无身份映射读取权的账号在导出页只看到“不含名单 ID”选项且默认选中，直接点击主按钮即可创建并下载；真实 Chrome 保存的 ZIP 以独立 csv/json 解析器对账为 unmapped golden（无 `participant_code` 列、无未参与名单），页面显示下载已开始。对同一账号制造真实服务端 ZIP 失败（单元格超限 413 `export_cell_limit`）与真实网络失败（请求中止）时，页面如实显示错误代码、不出现“下载已开始”、不触发任何下载，并保留显式 ZIP 重试链接与可用 JSONL 链接（JSONL 下载成功且完整保留超限载荷）。
 - **权限与列表投影**：ZIP 与 metadata 每次下载重验冻结所需权限（raw-only 读者对 identified 产物 403、撤权后整份拒绝）；列表行只在当前账号仍持有冻结权限时显示计数与链接；`default_view` 使被隐藏的 identified 选项不会抢走 raw-only 读者的选择。v1 字节与三种旧格式保持，v1 `format=zip` 明确 400，v2 单文件 CSV 仍 409 `export_zip_required`。
 - **边界**：`READY_FOR_R11_REAL_VIEW` 只表示软件存在、可供 R11 门槛使用，不是软件通过；Windows Excel/WPS 实机查看与新一轮人工测试仍未运行（T17 保留编号，帮助/失败/未运行分别记录）。证据在本地忽略目录：浏览器轮 `local_data/phase03_remediation_20260923/p03r08/20260923T162447Z-ae70081b/`（含 `chrome_raw_unmapped.zip`、`chrome_raw_lossless.jsonl`、`chrome_download.zip`、`cache_binding.json`、`spool_safety.json` 等）与 UI 轮 `.../test_phase03_ui_browser/20260923T162447Z-56e9d04e/`；工具轮 `.../p03r08/20260923T162532Z-3bbeca5f/`；失败现场与旧证据不清理。以上为合成工程证据，**Phase 03 仍未完成**。
+
+## Phase 03 人工反馈修复 R04 checkpoint 修复轮（2026-09-24）
+
+2026-09-24：R04 在原 Task 内修复 Supervisor 独立复核的 4 项边界（删除后公开设置仍可写、新 operation 误匹配旧 proof、跨 scope 预览漏清、中断导出临时文件漏清），未重做 R08P（`b2b10c3` 保持），未改科学任务、旧迁移、旧验收源、队列/RUN_STATE/gate，未 commit/push。全部为合成数据库/合成夹具与隔离私有文件；Required Verification 两条命令均前台真实退出：
+
+- 独立复核边界用例（内部留存；相应公开回归见下方命令） → **4 passed in 1.56s**（Supervisor 独立 probe 原样通过，未修改其任何期望）。
+- `GEP_T17_BROWSER=1 .venv/bin/pytest -q tests/remediation/test_p03r04.py tests/remediation/test_p03r04_regressions.py tests/remediation/test_p03r06.py tests/remediation/test_p03r06r.py tests/remediation/test_p03r08.py tests/remediation/test_p03r02c.py tests/remediation/test_p03r02cr.py` → **68 passed in 80.01s**（无失败、无跳过；含真实 Chrome 7 项与真实多进程 probe 子进程 2 次）；附加全量 `.venv/bin/pytest -q` → **667 passed / 26 skipped**（跳过均为既有浏览器/外部环境开关）。
+- **修复内容**：准入永久拒绝改为“原 operation + 精确 instance/研究/发行/构建绑定 + 原 proof”（墓碑新增专用域 operation-binding HMAC，迁移 `0014_deletion_operation_binding`），新 operation/绑定错配/未知对象统一 `admission_unavailable`；公开政策、当前发行、名单 preview/commit、权限矩阵、账号导入指向研究的行与 GUI POST 都在最终锁定事务内重查生命周期；跨 scope staged 预览按持久主键游标有界分页清理并在 `complete` 前独立核对；导出 spool 归属（`<id>.zip` 与 `.<id>.<16 hex>.tmp`）在删除导出行前持久化，缓存检查与发布放进同一数据库写锁事务，生成进程被 SIGKILL 后由清单覆盖。
+- **真实多进程复验**（`tests/remediation/deletion_concurrency_probe.py`，真实 SQLite 文件与 OS 进程）：预检查→标记→提交的同步屏障被拒（`study_deleted`，`public` 保持 0、lifecycle `deleting`）；导出生成/删除竞争无可访问孤儿、删除后不再发布；被 SIGKILL 的生成进程无残留 spool 文件；`cleanup_deleted_studies --batch-size 1` 被 SIGKILL 后状态非 complete、重跑完成且依赖全清。
+- **边界**：本段记录的是 R04 中间修复轮；最终工程验收见下方 R04R，人工测试未重跑，Phase 03 未完成；旧/新客户端三平台联测（旧包 403 暂停实机、新版解析 `study_deleted`）留 R11，不能冒充已跑。证据只写新的唯一目录 `local_data/phase03_remediation_20260923/p03r04*/<UTC+random>/`，失败现场与旧证据不清理。以上为合成工程证据。
+
+## Phase 03 人工反馈修复 R04R 收尾轮（2026-09-24）
+
+2026-09-24：R04R 修复 Supervisor guarded review 在既定 §D 契约下复验出的 2 项失败（保留动作失去研究关联、`--batch-size 1` 一次删完整份导出 spool），并补齐同模块两项一致性问题（非法清理参数非 0 退出、最小删除状态页不再显示研究 title）。只追加迁移 `0015_audit_study_uuid`，未改旧迁移、原验收库或科学任务；全部为合成数据库/夹具与隔离私有文件。Required Verification 两条命令均前台真实退出：
+
+- 独立复核边界用例（内部留存；相应公开回归见下方命令） → **6 passed in 2.12s**（exit 0；Supervisor 独立 6 项边界原样通过。修复前同一命令为 **2 failed / 4 passed**，未修改其任何期望）。
+- `GEP_T17_BROWSER=1 .venv/bin/pytest -q tests/remediation/test_p03r04r.py tests/remediation/test_p03r04.py tests/remediation/test_p03r04_regressions.py tests/remediation/test_p03r08.py` → **28 passed in 25.44s**（exit 0；无失败、无跳过，含真实 Chrome 3 项与真实多进程 probe 子进程 2 次）；附加全量 `.venv/bin/pytest -q` → **674 passed / 26 skipped**（跳过均为既有浏览器/外部环境开关）；`makemigrations --check --dry-run` → `No changes detected`（exit 0）。
+- **修复内容**：新增可空 `Audit.study_uuid`（迁移 `0015_audit_study_uuid`），清理在同一有界事务为有研究外键的审计写入最小研究 UUID、置空外键并清除原始 before/after（mark 行保留最小 counts），历史已脱钩记录保持 NULL；导出文件清理按真实 unlink 计数（zip 与每个 tmp/链接各一项，`os.scandir` 有界内存扫描、不物化整个目录），未删完的 spool 归属留在持久清单，file-only 批次按真实文件进展继续（不因数据库游标不动而提前停住），`--batch-size 1`/`--max-batches 1` 后如实非 complete、重跑前进并最终完成；旧精确文件名 manifest 兼容，其他导出/未知文件/符号链接目标不误删；`cleanup_deleted_studies` 对 `--batch-size < 1` 与 `--max-batches < 0` 在清理前以非 0 退出；删除状态页只显示作业状态/时间/数量/错误，不显示研究 title。
+- **真实多进程复验**（`tests/remediation/deletion_concurrency_probe.py`，真实 SQLite 文件与 OS 进程）：数据库阶段 SIGKILL 后状态非 complete、重跑完成且依赖全清（kill 触发改为任务真实推进后立即触发，避免落在“数据库行已删、complete 未写”的合法中间窗口）；新增文件阶段 SIGKILL：61 个 spool 文件（中断时剩余 60 个）在 `--batch-size 1` 下被中断时状态非 complete、未完成归属留在清单，重跑删净 owned 文件并保留 3 个无关文件；非法参数 `--batch-size 0`、`--batch-size -3`、`--max-batches -1` 真实退出码均为 1。
+- **边界**：R04/R04R 已通过官方任务验证和关键边界复核；人工测试未重跑，Phase 03 未完成。旧/新客户端三平台联测（旧包 403 暂停实机、新版解析 `study_deleted`）留 R11，不能冒充已跑。证据只写新的唯一目录 `local_data/phase03_remediation_20260923/p03r04r*/<UTC+random>/`，失败现场与旧证据不清理。以上为合成工程证据。

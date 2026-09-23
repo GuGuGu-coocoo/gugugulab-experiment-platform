@@ -59,9 +59,11 @@ def recruiting_studies():
     A complete native release is listed with its own participation explanation;
     a native release whose complete artifact is missing or tampered is not
     listed at all, so the portal never points at a program nobody can obtain.
+    A study under deletion disappears from the portal the moment the mark
+    commits.
     """
     listed = []
-    for study in Study.objects.filter(public=True, recruitment='open').select_related('current_release__build').order_by('title', 'id'):
+    for study in Study.objects.filter(public=True, recruitment='open', lifecycle='active').select_related('current_release__build').order_by('title', 'id'):
         if publication.release_available(study.current_release):
             listed.append(study)
     return listed
@@ -69,7 +71,8 @@ def recruiting_studies():
 
 def closed_summaries():
     """Explicit public + closed studies that opted in to an ended summary."""
-    return list(Study.objects.filter(public=True, recruitment='closed', show_closed_summary=True).order_by('title', 'id'))
+    return list(Study.objects.filter(public=True, recruitment='closed', show_closed_summary=True,
+                                     lifecycle='active').order_by('title', 'id'))
 
 
 def _portal(request):
@@ -106,7 +109,9 @@ def entry(request, study_id):
     """Stable study-level participant entry; new sessions bind the current release."""
     experiment_host(request)
     require(request.method == 'GET', 'method', 405)
-    study = Study.objects.select_related('current_release__build').filter(pk=study_id).first()
+    study = Study.objects.select_related('current_release__build').filter(pk=study_id, lifecycle='active').first()
+    # A deleted/random study UUID gets the same 404; the deletion mark removes
+    # the public entry immediately.
     require(study is not None, 'study_not_found', 404)
     release = study.current_release
     state = publication.entry_state(study)

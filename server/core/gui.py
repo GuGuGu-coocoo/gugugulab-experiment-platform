@@ -24,6 +24,7 @@ from .services import digest, completion_status, issue_recovery_code, SHELL_CAPA
 from .packages import validate_package, descriptor_valid, native_program_valid, MAX_ARCHIVE, MAX_NATIVE_ARCHIVE, NATIVE_PLATFORMS
 from . import publication, artifacts, ui, workbench, researcher_passwords
 from . import permissions
+from . import deletion
 
 
 def _revision_ok(raw, current):
@@ -177,6 +178,7 @@ def study_context(request, study, notice='', module='overview'):
         'can_recruit':'recruitment.manage' in permissions,
         'can_export':'data.export_raw' in permissions,
         'can_recover':'session.recover' in permissions,
+        'can_delete':version==2 and allowed(request.user,study,'study.delete'),
         'can_manage':can_manage,
         'module':module,
         'module_template':'core/modules/%s.html' % module,
@@ -205,6 +207,10 @@ STUDY_MESSAGES = {
     # never falls back to the generic message or the old 16-character threshold.
     'password_weak':'密码至少 6 位，且至少各含一个 ASCII 大写字母、小写字母、数字与可见标点符号；空格不算符号，首尾空白不会被去掉。',
     'forbidden':'当前账号没有此操作权限，未执行更改。',
+    'already_deleting':'该研究已在删除流程中，未重复标记。',
+    'study_deleted':'该研究已永久删除，请求被拒绝。',
+    'study_missing':'该研究不存在或不可用。',
+    'authorization_upgrade_required':'删除研究需要 v2 授权；未执行任何更改。',
     'revision_conflict':'研究发布版本已变化，请刷新页面后重试；未执行任何更改。',
     'no_change':'目标状态没有变化，未写入任何更改。',
     'policy_field':'公开信息超出长度上限，未写入任何更改。',
@@ -395,11 +401,47 @@ def signout(request):
     return redirect('/login')
 
 
+def deletion_status_page(request, study, module, row=None):
+    """Minimal deletion progress for the requester/Owner; everyone else 404.
+
+    Only the durable job facts are shown (state, requested time, real counts and
+    the persisted error code); the study title, roster, sessions and files are
+    never rendered here - not even while the Study row still exists.
+    """
+    if row is None:
+        row=deletion.deletion_for(study.pk)
+    require(row is not None and deletion.operator_allowed(request.user,row),'not_found',404)
+    lang=ui.lang_of(request)
+    stored=request.session.pop('deletion_notice:'+str(row.study_uuid),'')
+    if isinstance(stored,dict):
+        notice=stored.get(lang) or stored.get('zh','')
+    else:
+        notice=stored or ''
+    title=ui.tr(lang,'deletion_status_title')
+    context={
+        'study':{'id':row.study_uuid,'title':title,'lifecycle':'deleting'},
+        'notice':notice,'module':module,'module_template':'core/modules/overview.html',
+        'module_links':{},'module_available':{},'study_nav':[],'nav_current':'study',
+        'deletion':deletion.status_payload(row),
+    }
+    response=render(request,'core/study.html',context)
+    response['Cache-Control']='no-store'
+    return response
+
+
 @endpoint
 def study_page(request,study_id,module='overview'):
     admin_host(request)
     require(module in workbench.MODULES,'not_found',404)
-    study=Study.objects.get(pk=study_id)
+    study=Study.objects.filter(pk=study_id).first()
+    if study is None:
+        # The Study row itself is gone once cleanup finished; the durable job
+        # row still lets exactly the requester/Owner watch the final state.
+        row=deletion.deletion_for(study_id)
+        require(row is not None and deletion.operator_allowed(request.user,row),'not_found',404)
+        return deletion_status_page(request,None,module,row)
+    if study.lifecycle!='active':
+        return deletion_status_page(request,study,module)
     guard(request.user,study,'study.view')
     lang=ui.lang_of(request)
     stored_notice=request.session.pop('roster_notice:'+str(study.id),'')
@@ -440,6 +482,10 @@ def study_page(request,study_id,module='overview'):
           with transaction.atomic():
             instance=Instance.objects.select_for_update().get(pk=1)
             study=Study.objects.select_for_update().get(pk=study_id)
+            # Final lifecycle check in the write transaction: the page may have
+            # read the study while it was still active, and a deletion mark that
+            # committed since then must still refuse every study write here.
+            require(study.lifecycle=='active','study_deleted',403)
             if op=='configure':
                 guard(request.user,study,'study.configure')
                 mode=request.POST['mode']; require(mode in ('anonymous','id','password'),'mode')
@@ -526,6 +572,14 @@ def study_page(request,study_id,module='overview'):
                 guard(request.user,study,'study.configure')
                 session=Session.objects.get(pk=request.POST['session_id'],release__study=study)
                 session.revoked=True;session.save(update_fields=['revoked'])
+            elif op=='delete_study':
+                # Permanent study deletion (R00 §D): the red entry re-confirms
+                # the actor's own password; the mark, tombstones, lifecycle and
+                # audit commit atomically inside the deletion service. The
+                # response only ever shows marked/cleaning until the explicit
+                # cleanup job really completes.
+                deletion.mark_study_deletion(request.user,study,request.POST.get('password',''))
+                audited=True
             elif op=='recover':
                 guard(request.user,study,'session.recover')
                 session=Session.objects.get(pk=request.POST['session_id'],release__study=study)
@@ -600,6 +654,15 @@ def study_page(request,study_id,module='overview'):
             else 'schema_invalid' if isinstance(error,SchemaError)
             else 'invalid_request')
       status=error.status if isinstance(error,Rejected) else 400
+      if request.method=='POST':
+        # A concurrent deletion mark committed between the page's first read and
+        # the write transaction: the write was refused; show only the minimal
+        # deletion status (requester/Owner) instead of the stale study page.
+        current=Study.objects.filter(pk=study.pk).first()
+        if current is None or current.lifecycle!='active':
+          row=deletion.deletion_for(study.pk)
+          if row is not None and deletion.operator_allowed(request.user,row):
+            return deletion_status_page(request,current,module,row)
       accept=request.headers.get('Accept','')
       if 'text/html' not in accept:
         if 'application/json' in accept:
@@ -612,7 +675,10 @@ def study_page(request,study_id,module='overview'):
 @endpoint
 def config(request,release_id):
     admin_host(request)
-    release=Release.objects.get(pk=release_id)
+    release=Release.objects.select_related('study').filter(pk=release_id).first()
+    # A deleted/deleting study's release object is a 404 for everyone, including
+    # an actor who once had the configuration permission.
+    require(release is not None and deletion.active_study(release.study),'not_found',404)
     guard(request.user,release.study,'study.configure');require(release.approved,'not_approved',409)
     response=JsonResponse(connection_config(release))
     response['Content-Disposition']='attachment; filename="connection.json"'
@@ -622,7 +688,8 @@ def config(request,release_id):
 def _artifact_release(request, release_id):
     admin_host(request)
     require(request.method=='GET','method',405)
-    release=Release.objects.select_related('build','study').get(pk=release_id)
+    release=Release.objects.select_related('build','study').filter(pk=release_id).first()
+    require(release is not None and deletion.active_study(release.study),'not_found',404)
     guard(request.user,release.study,'build.upload')
     return release
 

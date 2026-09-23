@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from django.contrib.auth import get_user_model
 
 from . import authorization
-from .models import AccountProfile, Grant, Instance, Principal, Study
+from .models import AccountProfile, Grant, Instance, Principal, Study, StudyDeletion
 from .protocol import require
 
 # Re-exported kernel facts for the single-entry rule: only this module imports
@@ -621,9 +621,17 @@ def dominates(actor, target):
 
 
 def conflicts():
-    """(user_id, study_id, conflicting_actions) for grants that lack study.view."""
+    """(user_id, study_id, conflicting_actions) for grants that lack study.view.
+
+    Grants of a study whose deletion mark committed are excluded: those rows are
+    about to be removed with the study and must never be turned into a new
+    permission preview or a reconciled ``study.view`` grant.
+    """
+    deleting = set(StudyDeletion.objects.values_list('study_uuid', flat=True))
     grouped = {}
     for user_id, study_id, action in Grant.objects.values_list('user_id', 'study_id', 'action'):
+        if study_id in deleting:
+            continue
         grouped.setdefault((user_id, study_id), set()).add(action)
     return sorted((user_id, study_id, sorted(actions - {'study.view'})) for (user_id, study_id), actions in grouped.items() if actions - {'study.view'} and 'study.view' not in actions)
 

@@ -2,6 +2,7 @@
 import hashlib
 import hmac
 import secrets
+import uuid
 from datetime import timedelta
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -14,6 +15,7 @@ from .protocol import require, Rejected, uuid_text, equal, validate_tree, MAX_BA
 from .access import guard, ensure_principal
 from .artifacts import require_release_artifact
 from .throttle import check
+from . import deletion
 
 
 def digest(value):
@@ -48,6 +50,58 @@ def operation_binding(release, data):
     return binding
 
 
+def _resolved_binding(release):
+    """Canonical admission binding of a server-resolved release."""
+    return {'instance_id': str(Instance.objects.get(pk=1).instance_id), 'study_id': str(release.study_id),
+            'release_id': str(release.id), 'build_id': str(release.build_id)}
+
+
+def _request_binding(data):
+    """Request-only binding for the un-enumerable refusal path.
+
+    Only server-verifiable values participate: the instance must be this
+    instance, and the study/release come from the request exactly as submitted
+    (``expected_release_id`` first, then ``release_id``). The build joins only
+    when the request carries one; the tombstone still verifies it whenever the
+    interface can resolve the release. Returns ``None`` when the request cannot
+    name a full binding, so the caller refuses with ``admission_unavailable``.
+    """
+    instance_id = str(Instance.objects.get(pk=1).instance_id)
+    if str(data.get('instance_id') or '') != instance_id:
+        return None
+    study_id = data.get('study_id')
+    release_id = data.get('expected_release_id') or data.get('release_id')
+    if not study_id or not release_id:
+        return None
+    return {'instance_id': instance_id, 'study_id': str(study_id), 'release_id': str(release_id),
+            'build_id': str(data['build_id']) if data.get('build_id') else None}
+
+
+def _verify_request_binding(binding, data):
+    """The submitted ids must agree with the resolved binding, when present.
+
+    A retry of the original operation still has to carry the exact original
+    instance/study/release/build: a mismatched release or build is not the
+    original request and must stay ``admission_unavailable``.
+    """
+    pairs = (('instance_id', data.get('instance_id')), ('study_id', data.get('study_id')),
+             ('release_id', data.get('expected_release_id') or data.get('release_id')),
+             ('build_id', data.get('build_id')))
+    for key, provided in pairs:
+        if provided is not None and str(provided) != str(binding.get(key)):
+            return None
+    return binding
+
+
+def _admission_refusal(study_uuid, data, proof, *, operation=None, release=None):
+    """One refusal call: prefer the resolved release, fall back to the request."""
+    binding = _resolved_binding(release) if release is not None else _request_binding(data)
+    if binding is not None:
+        binding = _verify_request_binding(binding, data)
+    deletion.admission_refusal(study_uuid=study_uuid, proof=proof,
+                               operation=operation or data['operation_id'], binding=binding)
+
+
 def admit(release, data):
     """Admit one create operation for a server-resolved release.
 
@@ -66,6 +120,9 @@ def admit(release, data):
     with transaction.atomic():
         old = _operation_session(data['operation_id'])
         if old is not None:
+            study = Study.objects.filter(pk=old.release.study_id).first()
+            if study is not None and not deletion.active_study(study):
+                _admission_refusal(study.pk, data, proof, operation=old.operation, release=old.release)
             return _resume(old, data, proof)
         return _create_session(release, data, binding, proof)
 
@@ -102,6 +159,11 @@ def _create_session(release, data, binding, proof):
     """Write the first session for an operation under the study row lock."""
     study = Study.objects.select_for_update().get(pk=release.study_id)
     release = Release.objects.select_related('build').get(pk=release.pk)
+    # The deletion mark shares this transaction boundary: once the mark
+    # committed, no new session may be created, and only the original operation
+    # with its exact binding and proof gets the permanent ``study_deleted``.
+    if not deletion.active_study(study):
+        _admission_refusal(study.pk, data, proof, release=release)
     require(release.approved and study.recruitment == 'open', 'admission_closed', 403)
     require_release_artifact(release)
     mode = frozen_mode(release, study)
@@ -138,6 +200,14 @@ def _entry_release(data, study, revision):
     return release
 
 
+def _uuid_or_none(raw):
+    """Parse a submitted UUID for the un-enumerable deletion refusal path."""
+    try:
+        return uuid.UUID(str(raw))
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
 def current_entry_release(data):
     """Resolve the study's explicit current release for a stable-entry request.
 
@@ -145,10 +215,14 @@ def current_entry_release(data):
     study entry page loaded. A mismatch fails closed with ``stale_entry`` so a
     page loaded before a researcher switch is never silently retargeted; a study
     without a current release does not open new participation through this path.
+    A study under deletion never resolves a release at all.
     """
     revision = _entry_fields(data)
     with transaction.atomic():
-        study = Study.objects.select_for_update().select_related('current_release__build').get(pk=data['study_id'])
+        study = Study.objects.select_for_update().select_related('current_release__build').filter(pk=data['study_id']).first()
+        require(study is not None, 'entry_closed', 409)
+        if not deletion.active_study(study):
+            _admission_refusal(study.pk, data, data.get('proof', ''), release=study.current_release)
         return _entry_release(data, study, revision)
 
 
@@ -170,6 +244,10 @@ def admit_request(data):
     3. A request carrying only ``release_id`` uses the frozen legacy
        direct-release admission contract; the release is never silently
        redirected to the study's latest release.
+
+    Every route first honours the deletion mark: a deleting/deleted study never
+    admits, the original proof gets the permanent ``study_deleted`` and every
+    other binding gets the same ``admission_unavailable`` as a random object.
     """
     uuid_text(data['operation_id'])
     proof = data['proof']
@@ -177,12 +255,29 @@ def admit_request(data):
     with transaction.atomic():
         old = _operation_session(data['operation_id'])
         if old is not None:
+            study = Study.objects.filter(pk=old.release.study_id).first()
+            if study is not None and not deletion.active_study(study):
+                _admission_refusal(study.pk, data, proof, operation=old.operation, release=old.release)
             return _resume(old, data, proof)
         if 'release_id' in data and not ({'expected_release_id', 'expected_revision'} & set(data)):
-            release = Release.objects.select_related('study', 'build').get(pk=data['release_id'])
+            release = Release.objects.select_related('study', 'build').filter(pk=data['release_id']).first()
+            if release is None:
+                parsed = _uuid_or_none(data.get('study_id'))
+                if parsed is not None and deletion.study_is_deleting(parsed):
+                    _admission_refusal(parsed, data, proof)
+                raise Rejected('admission_unavailable', 403)
+            if not deletion.active_study(release.study):
+                _admission_refusal(release.study_id, data, proof, release=release)
         else:
             revision = _entry_fields(data)
-            study = Study.objects.select_for_update().select_related('current_release__build').get(pk=data['study_id'])
+            study = Study.objects.select_for_update().select_related('current_release__build').filter(pk=data['study_id']).first()
+            if study is None:
+                parsed = _uuid_or_none(data['study_id'])
+                if parsed is not None and deletion.study_is_deleting(parsed):
+                    _admission_refusal(parsed, data, proof)
+                raise Rejected('admission_unavailable', 403)
+            if not deletion.active_study(study):
+                _admission_refusal(study.pk, data, proof, release=study.current_release)
             release = _entry_release(data, study, revision)
         return admit(release, data)
 
@@ -219,7 +314,13 @@ def receive(session_id, token, batch):
     accepted, duplicate = [], []
     try:
         with transaction.atomic():
-            session = Session.objects.select_related('release__build').get(pk=session_id)
+            session = Session.objects.select_related('release__build').filter(pk=session_id).first()
+            if session is None:
+                deletion.session_refusal(session_id, token)
+            study = Study.objects.select_for_update().filter(pk=session.release.study_id).first()
+            if study is None or not deletion.active_study(study):
+                deletion.session_refusal(session_id, token)
+            session = Session.objects.select_for_update().select_related('release__build').get(pk=session_id)
             authorize_session(session, token)
             require(len({e['event_id'] for e in events}) == len(events), 'duplicate_batch_id')
             for event in events:
@@ -256,7 +357,13 @@ def finish(session_id, token, declaration):
         for value in ids:
             uuid_text(value)
     with transaction.atomic():
-        session = Session.objects.get(pk=session_id)
+        session = Session.objects.select_related('release__study').filter(pk=session_id).first()
+        if session is None:
+            deletion.session_refusal(session_id, token)
+        study = Study.objects.select_for_update().filter(pk=session.release.study_id).first()
+        if study is None or not deletion.active_study(study):
+            deletion.session_refusal(session_id, token)
+        session = Session.objects.select_for_update().get(pk=session_id)
         authorize_session(session, token)
         if session.completion is not None:
             require(equal(session.completion, declaration), 'completion_conflict', 409)
@@ -273,7 +380,13 @@ def recover(session_id, proof, permit):
     from .models import RecoveryPermit, Audit
     from .access import guard
     with transaction.atomic():
-        session=Session.objects.get(pk=session_id)
+        session=Session.objects.select_related('release__study').filter(pk=session_id).first()
+        if session is None:
+            deletion.recovery_refusal(session_id=session_id, proof=proof)
+        study=Study.objects.select_for_update().filter(pk=session.release.study_id).first()
+        if study is None or not deletion.active_study(study):
+            deletion.recovery_refusal(session_id=session_id, proof=proof)
+        session=Session.objects.select_for_update().get(pk=session_id)
         ticket=RecoveryPermit.objects.get(session=session,token_hash=digest(permit))
         guard(ticket.issuer,session.release.study,'session.recover')
         require(not ticket.consumed and ticket.expires_at>timezone.now(),'recovery_permit_inactive',403)
@@ -351,8 +464,11 @@ def issue_recovery_code(issuer, session_id):
     digits are returned to the issuing researcher only and are never persisted.
     """
     with transaction.atomic():
+        session = Session.objects.select_related('release__study').filter(pk=session_id).first()
+        require(session is not None, 'session_missing', 404)
+        study = Study.objects.select_for_update().get(pk=session.release.study_id)
+        require(deletion.active_study(study), 'study_deleted', 403)
         session = Session.objects.select_for_update().select_related('release__study').get(pk=session_id)
-        study = session.release.study
         actor = get_user_model().objects.filter(pk=getattr(issuer, 'pk', None)).first()
         require(actor is not None, 'forbidden', 403)
         check(f'recovery-code-issue:{Instance.objects.get(pk=1).instance_id}:{study.pk}:{actor.pk}', limit=RECOVERY_ISSUE_LIMIT)
@@ -418,6 +534,9 @@ def redeem_recovery_code(data, client_key=None):
     code_hash = recovery_code_digest(code)
     denied, payload = True, None
     with transaction.atomic():
+        study = Study.objects.select_for_update().filter(pk=binding['study_id']).first()
+        if deletion.study_is_deleting(binding['study_id']) or (study is not None and study.lifecycle != 'active'):
+            deletion.recovery_refusal(study_uuid=binding['study_id'], proof=proof, binding=binding)
         ticket = (RecoveryCode.objects.select_for_update().select_related('session__release__study')
                   .filter(code_hash=code_hash).first())
         if ticket is not None:
@@ -481,6 +600,9 @@ def recover_named(data, client_key=None):
     require(not data.get('front_locked', False), 'front_locked', 403)
     denied, payload = True, None
     with transaction.atomic():
+        study = Study.objects.select_for_update().filter(pk=binding['study_id']).first()
+        if deletion.study_is_deleting(binding['study_id']) or (study is not None and study.lifecycle != 'active'):
+            deletion.recovery_refusal(study_uuid=binding['study_id'], proof=proof, binding=binding)
         candidates = (Session.objects.select_for_update().select_related('release__build', 'participant')
                       .filter(participant__study_id=binding['study_id'], participant__code=participant_code)
                       .order_by('-created_at'))

@@ -9,6 +9,7 @@ from .services import (admit_request, context, receive, finish, authorize_sessio
                        redeem_recovery_code, recover_named, RECOVERY_CODE_CAPABILITY, RECOVERY_NAMED_CAPABILITY)
 from .access import guard
 from . import exports as export_core
+from . import deletion
 
 
 def endpoint(fn):
@@ -53,7 +54,11 @@ def participant(request, session_id=None, action=None):
         return JsonResponse(receive(session_id,bearer(request),parse(request.body)))
     if action=='completion':
         return JsonResponse(finish(session_id,bearer(request),parse(request.body)))
-    session=Session.objects.select_related('release','participant').get(pk=session_id)
+    session=Session.objects.select_related('release','participant').filter(pk=session_id).first()
+    if session is None:
+        deletion.session_refusal(session_id,bearer(request))
+    if not deletion.active_study(session.release.study):
+        deletion.session_refusal(session_id,bearer(request))
     authorize_session(session,bearer(request))
     require(action in ('status','context'),'unknown_action',404)
     return JsonResponse(context(session) if action=='context' else completion_status(session))
@@ -86,7 +91,11 @@ def exports(request, export_id=None):
     require(request.get_host().split(':')[0] in (settings.ADMIN_HOST,'localhost','testserver'), 'wrong_host',403)
     if export_id:
         require(request.method=='GET','method',405)
-        item=Export.objects.get(pk=export_id)
+        item=Export.objects.select_related('study').filter(pk=export_id).first()
+        # A deleted study's export object is gone for everyone, including an
+        # actor who once had authority: the same 404 as a random export UUID.
+        if item is None or not deletion.active_study(item.study):
+            deletion.export_unavailable()
         # Every format re-checks the permission set frozen with the export; a
         # revoked grant refuses the whole export instead of degrading it.
         for action in export_core.required_actions(item):

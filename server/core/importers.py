@@ -15,7 +15,7 @@ from django.contrib.auth.hashers import make_password
 from django.db import transaction
 from django.utils import timezone
 
-from . import access, accounts, excel, permissions
+from . import access, accounts, deletion, excel, permissions
 from .access import (ACTIONS, ROLES, dominates, is_instance_owner,
                      manageable_actions)
 from .models import AccountInvitation, AccountProfile, Grant, Participant, Study
@@ -152,6 +152,12 @@ def _normalize_users(actor, raw):
         if study is None:
             _row_error(errors, number, 'study_missing', '研究不存在。', 'The study does not exist.')
             continue
+        if not deletion.active_study(study):
+            # A deleted/deleting study never receives a staged permission row;
+            # the rest of the import stays available for the user to fix.
+            _row_error(errors, number, 'study_deleted', '研究已删除或正在删除，不能导入其权限。',
+                       'The study is deleted or being deleted; its permissions cannot be imported.')
+            continue
         actions_text, actions_ok = excel.text_cell(values['actions'])
         if not actions_ok:
             _row_error(errors, number, 'actions', 'actions 必须是文本。', 'actions must be text.')
@@ -281,6 +287,8 @@ def commit_users(actor, password, preview_id):
                 accounts.apply_account_active(locked, target, profile, op['operation'] == 'enable')
                 continue
             study = Study.objects.get(pk=op['study_id'])
+            # Final lifecycle check before any study permission is written.
+            require(deletion.active_study(study), 'study_deleted', 403)
             target_actions = {action: bool(flag) for action, flag in op['target'].items()}
             require(_matrix_authorize_import(locked, target, study, target_actions, version), 'preview_stale', 409)
             if version == 2:
@@ -509,6 +517,7 @@ def preview_roster(actor, study, raw=None, text=None):
         locked = get_user_model().objects.select_for_update().get(pk=actor.pk)
         require(locked.is_active, 'auth_required', 403)
         study = Study.objects.get(pk=study.pk)
+        require(deletion.active_study(study), 'study_deleted', 403)
         access.guard(locked, study, 'study.configure')
         existing = set(Participant.objects.filter(study=study, code__isnull=False)
                        .values_list('code', flat=True))
@@ -595,6 +604,7 @@ def replay_authorize(locked, row):
             if operation == 'update':
                 study = Study.objects.filter(pk=op.get('study_id')).first()
                 require(study is not None, 'preview_stale', 409)
+                require(deletion.active_study(study), 'preview_stale', 409)
                 if version == 1:
                     require(is_instance_owner(locked) or set(op.get('actions') or []) <= manageable_actions(locked, study),
                             'preview_stale', 409)

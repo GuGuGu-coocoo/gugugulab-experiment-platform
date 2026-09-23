@@ -93,6 +93,10 @@ class Study(Identified):
     # Publication revision: every explicit policy or current-release change bumps
     # it, and a submission carrying a stale revision is refused.
     revision = models.PositiveIntegerField(default=0)
+    # Study lifecycle (R00 §D): ``active`` admits new business writes; once the
+    # deletion mark commits the study is ``deleting`` and every new entry refuses
+    # until the re-entrant cleanup job removes the row itself.
+    lifecycle = models.CharField(max_length=16, default='active')
 
 class Grant(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
@@ -160,6 +164,12 @@ class Export(Identified):
 
 class Audit(models.Model):
     study = models.ForeignKey(Study, on_delete=models.PROTECT, null=True, blank=True)
+    # Minimal study association that survives the deletion cleanup: the cleanup
+    # nulls the foreign key when the study row is removed, while ``study_uuid``
+    # keeps every retained action attributable to its own study without a live
+    # row. A row detached before this field existed keeps NULL (unknown, never
+    # guessed from a target or a reused name).
+    study_uuid = models.UUIDField(null=True, blank=True, db_index=True)
     # Device-initiated recovery carries no human actor; every governance and
     # administrative action still names one. The user reference is SET_NULL so a
     # deleted account leaves its history intact, while ``actor_principal`` keeps
@@ -230,6 +240,56 @@ class Throttle(models.Model):
     key = models.CharField(max_length=64,primary_key=True)
     window = models.BigIntegerField()
     count = models.PositiveIntegerField(default=0)
+
+class StudyDeletion(models.Model):
+    """One persistent, re-entrant study deletion job (R00 §D).
+
+    The row is the durable job identity: it survives process termination and is
+    the only thing the maintenance command needs to resume. ``study_uuid`` is
+    unique forever, so a deleted study UUID can never be reused, and the counts
+    snapshot is the minimal audit left after the raw study data is gone.
+    ``file_manifest`` names the private files still to remove; it is emptied only
+    once the database and the private files are verified clean.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    study_uuid = models.UUIDField(unique=True)
+    principal = models.ForeignKey('Principal', null=True, blank=True,
+                                  on_delete=models.PROTECT, related_name='+')
+    requested_at = models.DateTimeField(auto_now_add=True)
+    state = models.CharField(max_length=16, default='marked')
+    cursor = models.PositiveIntegerField(default=0)
+    # Persisted progress of the bounded cross-scope preview scan inside the
+    # ``credentials`` step: the last scanned preview primary key, so a killed
+    # process resumes exactly there and unrelated previews are never touched.
+    preview_cursor = models.UUIDField(null=True, blank=True)
+    file_manifest = models.JSONField(default=list, blank=True)
+    counts = models.JSONField(default=dict, blank=True)
+    error_code = models.CharField(max_length=64, blank=True, default='')
+
+class DeletedSession(models.Model):
+    """Irreversible rejection tombstone for one deleted session.
+
+    Only the session/study/release/build/instance UUIDs and the server-secret
+    HMACs of the already-hashed token/proof are kept. The raw token, proof,
+    roster, answers, passwords and any re-issuable credential are never stored
+    here, and a tombstone match can only refuse; it can never restore a read or
+    a write. The submitted secret is digested and domain-separated-HMACed the
+    same way before a constant-time comparison.
+    """
+    session_uuid = models.UUIDField(primary_key=True)
+    study_uuid = models.UUIDField(db_index=True)
+    release_uuid = models.UUIDField()
+    build_uuid = models.UUIDField()
+    instance_uuid = models.UUIDField()
+    token_hmac = models.CharField(max_length=64, db_index=True)
+    proof_hmac = models.CharField(max_length=64, db_index=True)
+    # Dedicated operation-binding HMAC (2026-09-24 checkpoint): the permanent
+    # admission refusal is only for the original operation together with the
+    # exact instance/study/release binding, never for a fresh operation reusing
+    # the proof. The value is a server-secret HMAC over a domain-separated
+    # canonical string; no re-issuable credential is stored.
+    operation_hmac = models.CharField(max_length=64, blank=True, default='', db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
 
 class PermissionPreview(models.Model):
     """Single-use, expiring commit identity for preview-bound governance changes.

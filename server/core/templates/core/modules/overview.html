@@ -1,3 +1,13 @@
+{% if deletion %}
+<section data-deletion-status="{{deletion.state}}" data-deletion-study="{{deletion.study_uuid}}">
+<h2>{{ui.deletion_status_title}}</h2>
+<p>{{ui.deletion_state_label}}：<strong data-deletion-state="{{deletion.state}}">{{deletion.state}}</strong></p>
+<p>{{ui.deletion_requested}}：{{deletion.requested_at}}</p>
+{% if deletion.error_code %}<p class="error" role="alert" data-deletion-error="{{deletion.error_code}}">{{ui.deletion_failed_note}} <small>{{deletion.error_code}}</small></p>{% endif %}
+<p class="muted" data-deletion-removed-counts="1">{{ui.deletion_removed_note}}：{{ui.home_card_sessions}} {{deletion.counts.sessions|default:0}} · {{ui.home_card_participants}} {{deletion.counts.participants|default:0}} · {{ui.module_exports}} {{deletion.counts.exports|default:0}} · {{ui.module_builds}} {{deletion.counts.builds|default:0}} · {{ui.builds_releases}} {{deletion.counts.releases|default:0}}</p>
+<p class="muted">{{ui.deletion_status_note}}</p>
+</section>
+{% else %}
 <section data-overview="1">
 <h2>{{ui.overview_title}}</h2>
 <ul class="cards">
@@ -23,3 +33,20 @@
 {% if module_available.builds %}<p><a href="{{module_links.builds}}" data-module-link="builds">{{ui.module_builds}}</a></p>{% endif %}
 {% if module_available.recruitment %}<p><a href="{{module_links.recruitment}}" data-module-link="recruitment">{{ui.module_recruitment}}</a></p>{% endif %}
 </section>
+{% if can_delete %}
+<section data-study-deletion="1">
+<h2>{{ui.deletion_title}}</h2>
+<p class="muted">{{ui.deletion_warning}}</p>
+{% if overview_delete_has_data %}
+<p data-deletion-counts="1">{{ui.deletion_data_note}}：{{ui.home_card_sessions}} {{overview_delete_counts.sessions}} · {{ui.home_card_participants}} {{overview_delete_counts.participants}} · {{ui.module_exports}} {{overview_delete_counts.exports}} · {{ui.module_builds}} {{overview_delete_counts.builds}} · {{ui.builds_releases}} {{overview_delete_counts.releases}}</p>
+{% if overview_export_url %}<p data-deletion-export-prompt="1"><a href="{{overview_export_url}}" data-deletion-export-link="1">{{ui.deletion_export_first}}</a></p>{% endif %}
+{% endif %}
+<form method="post" action="{{module_url}}" data-delete-form="1">
+{% csrf_token %}
+<input type="hidden" name="op" value="delete_study">
+<label>{{ui.deletion_password}} <input type="password" name="password" data-delete-password="1" autocomplete="current-password" required></label>
+<button type="submit" class="danger" data-delete-submit="1">{{ui.deletion_submit}}</button>
+</form>
+</section>
+{% endif %}
+{% endif %}

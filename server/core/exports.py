@@ -48,6 +48,7 @@ from .access import allowed, guard
 from .models import Event, Export, Participant, Release, Session, Study
 from .protocol import Rejected, require
 from .services import completion_status
+from . import deletion
 
 # --- fixed vocabulary -------------------------------------------------------
 
@@ -305,7 +306,9 @@ def _enforce_counts(counts):
 def create_legacy_export(user, data):
     """The unchanged v1 creation path: records only, no roster, no title."""
     with transaction.atomic():
-        study = Study.objects.get(pk=data['study_id'])
+        study = Study.objects.select_for_update().filter(pk=data['study_id']).first()
+        if study is None or not deletion.active_study(study):
+            deletion.study_unavailable()
         guard(user, study, 'data.export_raw')
         require(Event.objects.filter(session__release__study=study).count() <= MAX_EVENTS, 'export_limit', 413)
         records = []
@@ -334,7 +337,12 @@ def create_v2_export(user, study_id, *, view, language, session_ids=None,
     """
     require(view in VIEWS, 'export_view', 400)
     require(language in LANGUAGES, 'export_language', 400)
-    study = Study.objects.get(pk=study_id)
+    study = Study.objects.select_for_update().filter(pk=study_id).first()
+    # The deletion mark shares this transaction boundary: an export application
+    # that commits first is cleaned up with the study, and one that arrives
+    # after the mark gets the same 404 as a random study UUID.
+    if study is None or not deletion.active_study(study):
+        deletion.study_unavailable()
     guard(user, study, 'data.export_raw')
     if view == 'identified':
         guard(user, study, 'identity_mapping.read')
@@ -712,7 +720,10 @@ def render_zip_download(item, *, generation_seconds=MAX_GENERATION_SECONDS):
     mixed bytes. The deadline covers serialization, compression, cache
     comparison and the file commit; the final compressed ZIP is bounded like the
     decompressed CSV pair. Any filesystem setup/open/write/flush/rename failure
-    refuses only this download: the lossless JSONL path stays open.
+    refuses only this download: the lossless JSONL path stays open. The cache
+    check and the publish run inside :func:`core.deletion.live_export_lock`, so
+    the deletion job and the generation path serialize on the same database
+    write lock and no file is published after the deletion committed.
     """
     snapshot = item.snapshot if isinstance(item.snapshot, dict) else {}
     require(format_version_of(item) == '2', 'export_format', 400)
@@ -722,14 +733,21 @@ def render_zip_download(item, *, generation_seconds=MAX_GENERATION_SECONDS):
     if len(payload) > MAX_ZIP_BYTES:
         raise ExportZipLimit()
     _check_deadline(deadline)
-    stream = _open_verified_cache(path, payload, deadline)
-    if stream is not None:
-        return FileResponse(stream, as_attachment=True, filename=f'{item.id}.zip',
-                            content_type='application/zip')
-    try:
-        identity = _store_export_zip(path.parent, path, payload)
-    except OSError:
-        raise ExportFileFailure()
+    # The cache check and any file publish happen inside the cross-process
+    # generation boundary: the database write lock is held from before the
+    # liveness read until the file is committed, so a concurrent cleanup either
+    # already removed the row (this request refuses and publishes nothing) or
+    # runs after the commit and removes the just-published file by ownership.
+    identity = None
+    with deletion.live_export_lock(item.pk):
+        stream = _open_verified_cache(path, payload, deadline)
+        if stream is not None:
+            return FileResponse(stream, as_attachment=True, filename=f'{item.id}.zip',
+                                content_type='application/zip')
+        try:
+            identity = _store_export_zip(path.parent, path, payload)
+        except OSError:
+            raise ExportFileFailure()
     try:
         _check_deadline(deadline)
     except Rejected:

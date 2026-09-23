@@ -321,16 +321,29 @@ def exports_module(request, study):
 
 
 def overview_module(request, study):
-    return {
-        'overview_frozen': Release.objects.filter(study=study, approved=True).exists(),
-        'overview_counts': {
-            'sessions': Session.objects.filter(release__study=study).count(),
-            'participants': Participant.objects.filter(study=study).count(),
-            'builds': Build.objects.filter(study=study).count(),
-            'releases': Release.objects.filter(study=study).count(),
-            'exports': Export.objects.filter(study=study).count(),
-        },
+    counts = {
+        'sessions': Session.objects.filter(release__study=study).count(),
+        'participants': Participant.objects.filter(study=study).count(),
+        'builds': Build.objects.filter(study=study).count(),
+        'releases': Release.objects.filter(study=study).count(),
+        'exports': Export.objects.filter(study=study).count(),
     }
+    context = {'overview_frozen': Release.objects.filter(study=study, approved=True).exists(),
+               'overview_counts': counts}
+    # The red deletion entry only appears for an actor with the v2
+    # ``study.delete`` action; the confirmation block shows the real counts and
+    # an export-first link when there is anything to lose, and never a forced
+    # backup (R00 §D).
+    if allowed(request.user, study, 'study.delete'):
+        from . import deletion
+        delete_counts = deletion.dependency_counts(study)
+        context.update({
+            'overview_delete_counts': delete_counts,
+            'overview_delete_has_data': deletion.has_study_data(delete_counts),
+            'overview_export_url': module_url(study, 'exports')
+            if allowed(request.user, study, 'data.export_raw') else '',
+        })
+    return context
 
 
 def module_context(request, study, module):
