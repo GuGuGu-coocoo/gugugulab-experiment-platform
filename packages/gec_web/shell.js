@@ -79,6 +79,12 @@ export function installShell(specification,action) {
   // document; nothing is exported silently and no server receipt is implied.
   if(spec.local_only)actions.append(button('download-results',spec.messages.download_results||'Download results JSONL'));
   panel.append(actions);
+  // Failure surface (R09C): hidden until the persisted summary reports three
+  // consecutive retry failures (or the permanent deletion terminal) with legal
+  // unlocked records; hidden again once the session is received.
+  const failure=el('div',{id:'gec-shell-failure',role:'group'},{display:'none',gap:'8px',flexWrap:'wrap'});
+  failure.append(button('retry',spec.messages.retry_upload||'Retry upload'),button('failure-export',spec.messages.export_failure||'Export failure data'));
+  panel.append(failure);
 
   const confirm=el('div',{id:'gec-shell-confirm',role:'alertdialog','aria-modal':'false'},{display:'none',border:'1px solid #d0a',borderRadius:'4px',padding:'8px',gap:'8px',flexWrap:'wrap',alignItems:'center'});
   const confirmText=el('p',{text:''},{margin:'0',flex:'1 1 100%',fontSize:'15px'});
@@ -109,9 +115,15 @@ export function installShell(specification,action) {
         panel.dataset.entryHidden='1';
         for(const [name,node] of fields){node.disabled=true;node.blur();const label=node.closest('label');if(label)label.style.display='none';}
         for(const name of ['start','recover-code','recover-permit']){const node=buttons.get(name);if(node){node.disabled=true;node.style.display='none';}}
-        recovery.style.display='none';confirm.style.display='none';
+        recovery.style.display='none';confirm.style.display='none';failure.style.display='none';
       }
-      if(state.visible)for(const [name,node] of buttons)if(!['confirm-continue','confirm-new','confirm-cancel'].includes(name))node.style.display=state.visible.includes(name)?'':'none';
+      if(state.failure!==undefined){
+        const visible=!!(state.failure&&state.failure.visible);
+        failure.style.display=visible?'flex':'none';
+        buttons.get('retry').disabled=!(state.failure&&state.failure.retry);
+        buttons.get('failure-export').disabled=!(state.failure&&state.failure.export);
+      }
+      if(state.visible)for(const [name,node] of buttons)if(!['confirm-continue','confirm-new','confirm-cancel','retry','failure-export'].includes(name))node.style.display=state.visible.includes(name)?'':'none';
       if(state.confirm!==undefined){
         if(state.confirm){confirmText.textContent=state.confirm.text;buttons.get('confirm-new').style.display=state.confirm.new_session?'':'none';confirm.style.display='flex';}
         else confirm.style.display='none';

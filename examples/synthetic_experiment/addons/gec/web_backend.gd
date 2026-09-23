@@ -47,6 +47,10 @@ func finish() -> Dictionary:
 	return await call_bridge("finish")
 func status() -> Dictionary:
 	return JSON.parse_string(bridge.status_json()) if bridge != null else current
+func flush_upload() -> Dictionary:
+	## Explicit manual retry round through the real bridge; the browser SDK still
+	## respects the persisted backoff and never clears the counters.
+	return await call_bridge("flush", [true])
 func summary() -> Dictionary:
 	return await call_bridge("summary")
 func candidates() -> Array:

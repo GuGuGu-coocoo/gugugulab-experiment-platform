@@ -218,3 +218,29 @@ R09A/R09AR 已通过任务验证和关键边界复核。正式命令 `GEP_T17_BR
 验证覆盖真实 Godot、本地 SQLite、导出的 Godot Web 构建、Chrome 与 IndexedDB：记录和完成声明持久化后才宣称本地测试完成；锁定、缺失、已清理及远端会话不能使用本地测试结果下载；保存部分结果不表示实验完成；原生文件先写同目录临时文件、核对完整内容后替换，实际文件父目录用于反馈与打开；成功准入或仅数据恢复后退役前置表单，保存失败后也不能从旧入口再次准入。科学任务源码摘要保持不变。
 
 只读目录与不存在路径造成的文件打开失败、SQLite 写入失败为本机文件系统实测；打开成功后的写失败由明确测试钩子注入，浏览器存储失败由 IndexedDB API 边界注入，不声称物理磁盘耗尽。正常与失败路径均保留本机记录，覆盖旧目标文件保护。Windows 上新保存与文件替换行为、完整冻结包、补传轮次与失败收尾的整体联测仍待后续；本轮不代表人工验收，Phase03 未完成。
+
+## GEC 收尾壳呈现与冻结包 403 兼容（2026-09-24，R09C）
+
+R09C 的任务验证通过后发现下述边界缺陷，已由 R09CR 修复并完成工程复核；人工测试与 R11 总编排仍待进行。正式命令：
+
+- `GEP_T17_BROWSER=1 .venv/bin/pytest -q tests/remediation/test_p03r09c.py tests/test_phase03_shell.py` → **23 passed**（无失败、无跳过；含真实 Godot 原生壳、真实导出的 Godot Web 构建 + Chrome、真实隔离 Django 删除服务器）。
+- `.venv/bin/python tools/remediation_gec.py --verify-local` → **PASS，24 项检查 0 失败**：新 macOS 原生壳与真实 HTTP、新 Web 构建冻结并真实 Chrome 运行、原旧 Web 包与原旧 macOS 原生包在真实 403 下的兼容保全；旧包摘要前后一致。
+- `GEP_T17_BROWSER=1 .venv/bin/pytest -q tests/remediation/test_p03r09b.py` → **3 passed**（R09B 回归未削弱）。
+
+覆盖内容：准入后前置表单隐藏/禁用/移焦/移除回调，科学刺激期间无前置控件；持久 summary（`kind`/`complete_ack`/`pending`/`delivery`）驱动壳呈现——首次发送失败与第 1/2 次补传显示“正在补传”，第 3 次连续失败且仍有合法未锁记录时显示“重试上传/导出失败数据”，成功墓碑或完成回执隐藏失败面；同 state 下计数变化仍公告；本地 SQLite 触发器与真实 IndexedDB 中止注入的保存失败只报本地错误、不显示已完成；真实未打补丁 bridge 的成功 flush 与未到期退避 flush 都返回、壳无永久忙碌；重开进程按持久状态区分已收齐墓碑（公告已上传、无失败面、无旧答案）与未完成会话（保留持久失败计数并显示重试/导出面）。删除侧：隔离真实服务器经生产删除服务真实标记后，合法墓碑 token 得到 403 `study_deleted`、未知 session/token 得到 403 `session_unavailable`、前台锁命名恢复得到 403 `front_locked`，响应不回研究名/名单；新原生客户端在标记前完成真实上传与收齐、标记后首次 403 即永久终止且不再请求（访问日志仅一次批量、零 completion），保留未确认记录、无假回执，合法导出不含凭据。
+
+补修（R09CR，2026-09-24）：随后复核用真实受限写入复现该轮失败导出会把已有目标截断为限制字节仍返回 `exported`；另确认 `--verify-windows` 会原地改写传入包并用首个 exe、故障服务器以 `select` 等待 Windows 不可用的进程管道，补传计数在 1/2 次时显示 `failures+1`。R09C 的通过证据与归档保留、不回改；上述边界的当前契约以下方 R09CR 为准（首发送失败无计数、补传次数按持久 `retry_failures` 精确呈现、失败导出原子替换）。
+
+边界：旧包 403 保全为冻结字节的真实本机运行证据（旧 Web 包在 Chrome、旧 macOS 原生包实体运行），不是 R11 三平台总验收；`--verify-windows` 必须在真实 Windows 主机对新完整包执行（交叉编译或本机命令不算 Windows 通过），R11 的 WN01–WN06 与新旧 Windows 联测、Excel/WPS 实机查看、人工测试仍待进行。以上为合成工程证据，Phase 03 未完成。
+
+## GEC 失败导出原子写、只读验证包与跨平台握手（2026-09-24，R09CR 补修）
+
+R09CR 修复复核确认的三处缺陷并按持久计数精确化壳文案，已通过任务验证与关键边界工程复核；人工测试与 R11 总编排仍待进行。正式命令（本机前台真实退出）：
+
+- `GEP_T17_BROWSER=1 .venv/bin/pytest -q tests/remediation/test_p03r09cr.py tests/remediation/test_p03r09c.py tests/test_phase03_shell.py` → **exit 0，32 passed in 51.02s**（无失败、无跳过；新增 9 项 + R09C 原 23 项）。
+- `.venv/bin/python tools/remediation_gec.py --verify-local` → **exit 0，24 项检查 0 失败**，`local verification: PASS`；旧包摘要前后一致；`Windows: NOT RUN locally`。
+- `GEP_T17_BROWSER=1 .venv/bin/pytest -q tests/remediation/test_p03r09a.py tests/remediation/test_p03r09ar.py tests/remediation/test_p03r09b.py tests/test_protocol.py` → **exit 0，15 passed in 19.80s**（R09A/AR/B 回归与 protocol）。
+
+覆盖内容：原生失败数据导出改为同目录临时文件完整写入、flush、回读核对后一次原子替换，GUI 保存对话框与自动化入口共用同一方法并显示真实结果（已导出路径/明确错误/取消）；RLIMIT_FSIZE 真实受限写下返回错误、原目标字节保持、无临时残留、本地队列行 sha256 不变，之后无限制导出成功且文档与对照一致、不含凭据。补传文案始终等于持久 `retry_failures`（初次失败无计数、1/2/3 精确、有进展的一轮不计数、进度重置后从 1 开始）；失败面显式排除已存 `complete_ack` receipt、`cleaned`/`remote_acknowledged` 与 `front_locked`（陈旧计数不再触发导出入口）。`--verify-windows` 以传入包为只读源：全部文件 sha256 记录后复制到唯一运行副本，程序由 `--program` 或包清单唯一确定（歧义/越界/非 exe 明确失败，不再猜首个 exe），只在副本内替换合成 `connection.json`，运行后再次核对源摘要不变，并明确分开“源冻结包完整性”与“兼容配置副本运行”两类证据。故障服务器启动改为线程读取 ready 行的有界握手（超时/无效行/早退都 kill+wait 回收 owned 子进程），公开脚本不再用 `select` 等待进程管道，也不再保留个人 Windows 工作目录常量。
+
+边界：受限写为父进程 `RLIMIT_FSIZE` 的真实 POSIX 限写，不声称物理磁盘耗尽；GUI 在 headless 真实 Godot 中经真实 `FileDialog` 信号驱动（窗口本身未显示）。原冻结完整包的端到端运行、Windows 上替换已有目标文件的真实行为、R11 的 WN01–WN06 与新旧 Windows 联测仍待进行；`--verify-windows` 的兼容配置副本运行不等于原冻结连接包端到端通过。本页不关闭 Phase03；以上为合成工程证据。

@@ -1,8 +1,12 @@
-"""Synthetic GEP/1 participant-protocol fault server for the P03R09B suite.
+"""Synthetic GEP/1 participant-protocol fault server for the P03R09B/R09C suites.
 
 Serves the real participant routes over real HTTP against an in-memory synthetic
 store, so both the native (Godot HTTPRequest) and the Web (fetch) clients talk to
-a genuine socket. Every response is scripted per admission ordinal:
+a genuine socket. The admission response echoes the roster ``participant_code``
+(like the real server context) and ``/v1/participant/recovery`` implements the
+versioned same-device recovery for the R09C shell scenarios (exact local proof
+only; a front-locked candidate is refused). Every response is scripted per
+admission ordinal:
 
   event-batches entries: ack | fail | invalid | partial | drop | lost | delay |
                           accepted_null | duplicate_null | accepted_absent |
@@ -66,6 +70,7 @@ class Store:
                 'ordinal': len(self.order),
                 'token': binding.get('token') or uuid.uuid4().hex,
                 'proof': proof,
+                'participant_code': binding.get('participant_code'),
                 'instance_id': binding.get('instance_id', ''),
                 'study_id': binding.get('study_id', ''),
                 'release_id': binding.get('release_id', ''),
@@ -235,6 +240,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/v1/participant/sessions':
             self._admission(body)
             return
+        if path == '/v1/participant/recovery':
+            self._recovery(body)
+            return
         self._reject(404, 'not_found')
 
     # ---- participant protocol --------------------------------------------
@@ -253,7 +261,41 @@ class Handler(BaseHTTPRequestHandler):
             'study_id': session['study_id'],
             'release_id': session['release_id'],
             'build_id': session['build_id'],
+            # The real admission context echoes the roster code; the local
+            # same-device recovery matches candidates by it.
+            'participant_code': session.get('participant_code'),
         })
+
+    def _recovery(self, body):
+        """Versioned same-device recovery for the R09C shell scenarios.
+
+        Only the exact local proof is honoured (the client's private device
+        credential); a front-locked candidate is refused like the real server,
+        and no public code/session UUID ever restores anything here.
+        """
+        capability = str(body.get('capability', ''))
+        if capability not in ('recovery_named/v1', 'recovery_code/v1'):
+            self._reject(409, 'unsupported_capability')
+            return
+        if bool(body.get('front_locked', False)):
+            self._reject(403, 'front_locked')
+            return
+        session = None
+        for item in STORE.sessions.values():
+            if not item['proof'] or str(body.get('proof', '')) != item['proof']:
+                continue
+            if capability == 'recovery_code/v1':
+                session = item
+                break
+            if str(item.get('participant_code') or '') == str(body.get('participant_code') or ''):
+                session = item
+                break
+        if session is None:
+            self._reject(403, 'recovery_denied')
+            return
+        session['token'] = 'renewed-' + session['token']
+        self._respond(200, {'capability': capability, 'session_id': session['session_id'], 'token': session['token'],
+                            'task_finished': bool(session.get('completed', False))})
 
     def _event_batches(self, session, body):
         entry = STORE.next_entry(session, 'events')
@@ -399,7 +441,11 @@ class Handler(BaseHTTPRequestHandler):
             wrong = {'event_ids': list(event_ids) + ['00000000-0000-0000-0000-000000000000'], 'segment_ids': list(segment_ids)}
             self._respond(200, self._completion_body(session, 'complete', [], wrong))
             return
-        self._respond(200, self._completion_body(session, 'complete' if not missing else 'pending', missing, {'event_ids': event_ids, 'segment_ids': segment_ids}))
+        state = 'complete' if not missing else 'pending'
+        if state == 'complete':
+            with STORE.lock:
+                session['completed'] = True
+        self._respond(200, self._completion_body(session, state, missing, {'event_ids': event_ids, 'segment_ids': segment_ids}))
 
     def _completion_body(self, session, state, missing, declaration):
         return {

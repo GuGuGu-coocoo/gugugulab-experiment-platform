@@ -371,6 +371,12 @@ func flush() -> void:
 		if counting or progress or not failure.is_empty():
 			_round_finish(s.id,progress,failure,counting)
 	sending = false
+func flush_upload() -> Dictionary:
+	## Explicit manual retry round for the shell's failure surface. The persisted
+	## backoff/safe pause still applies and no delivery counter is cleared by a
+	## manual call; the caller only learns that the round was requested.
+	await flush()
+	return {"state":"requested"}
 func recovery_export() -> Dictionary:
 	var s = read_session(session_id)
 	if s.is_empty() or s.get("kind") != "session" or s.get("front_locked",false): return {"error":"recovery_export_unavailable"}
@@ -381,13 +387,21 @@ func recovery_export() -> Dictionary:
 func summary() -> Dictionary:
 	## Rebuilt from the current session's persisted row on every call, so the
 	## pending count, error and failure counters can never leak from another
-	## session or from a stale in-memory state string.
+	## session or from a stale in-memory state string. The reported state is the
+	## persisted one as well: a cleaned tombstone or a stored completion receipt
+	## is an acknowledged session even before this process knows about it, so a
+	## reopened shell can never show an old upload failure (or old answers) for
+	## a session that is already received.
 	var s: Dictionary = read_session(session_id) if not session_id.is_empty() else {}
 	var records: Array = s.get("records",[])
 	var pending: Array = s.get("pending",[])
 	var checkpoint = s.get("checkpoint")
 	var delivery = delivery_of(s)
-	return {"state":current.get("state","unprepared"),"error":delivery.get("last_error","") if not s.is_empty() else current.get("error",""),"kind":s.get("kind",""),"records":records.size(),"pending":pending.size(),"checkpoint_next":checkpoint.get("next_trial") if checkpoint is Dictionary else null,"delivery_version":DELIVERY_VERSION,"delivery":delivery}
+	var reported: String = str(current.get("state","unprepared"))
+	if not s.is_empty():
+		if str(s.get("kind","")) == "cleaned": reported = "remote_acknowledged"
+		elif s.get("complete_ack") != null and pending.is_empty() and checkpoint == null: reported = "remote_acknowledged"
+	return {"state":reported,"error":delivery.get("last_error","") if not s.is_empty() else current.get("error",""),"kind":s.get("kind",""),"records":records.size(),"pending":pending.size(),"front_locked":bool(s.get("front_locked",false)),"complete_ack":s.get("complete_ack") != null,"checkpoint_next":checkpoint.get("next_trial") if checkpoint is Dictionary else null,"delivery_version":DELIVERY_VERSION,"delivery":delivery}
 func _study_sessions() -> Array:
 	## Newest first; only sessions of the configured instance/study are candidates.
 	var out: Array = []

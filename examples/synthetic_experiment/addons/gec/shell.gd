@@ -60,8 +60,16 @@ const LOCALIZED := {
 		"results_download": "已请求下载结果 JSONL：{name}",
 		"results_cancelled": "已取消保存；本机记录仍保留。",
 		"export_failed": "导出失败：{code}",
+		"export_saved": "恢复数据已导出：{path}",
+		"export_cancelled": "已取消导出；本机记录仍保留。",
 		"error_prefix": "无法开始：{code}",
 		"retry": "服务器暂时不可用，将按退避自动重试；本地记录不会丢失。",
+		"retrying": "正在补传：已连续 {n} 次发送失败，将按退避自动重试；本地记录不会丢失。",
+		"retry_ready": "补传已连续失败 {n} 次；可重试上传，或导出本机数据（导出不含凭据）。",
+		"retry_upload": "重试上传",
+		"export_failure": "导出失败数据",
+		"retry_requested": "已请求重试上传；本地记录仍保留。",
+		"deleted_terminal": "该研究已永久删除，上传已停止；本机未确认数据仍可导出。",
 		"unsupported": "发行配置的参与能力无法识别，已停止以避免误接。",
 		"no_server": "本地运行模式：不连接服务器。",
 		"bridge_unavailable": "参与界面未能连接到浏览器桥接。",
@@ -117,8 +125,16 @@ const LOCALIZED := {
 		"results_download": "Results JSONL download requested: {name}",
 		"results_cancelled": "Save cancelled; local records are kept.",
 		"export_failed": "Export failed: {code}",
+		"export_saved": "Recovery data exported: {path}",
+		"export_cancelled": "Export cancelled; local records are kept.",
 		"error_prefix": "Cannot start: {code}",
 		"retry": "The server is temporarily unavailable; retries back off automatically and local records are kept.",
+		"retrying": "Upload retry in progress: {n} consecutive send round(s) failed; retries back off automatically and local records are kept.",
+		"retry_ready": "Upload failed {n} consecutive round(s); you can retry the upload or export the local data (the export contains no credentials).",
+		"retry_upload": "Retry upload",
+		"export_failure": "Export failure data",
+		"retry_requested": "Upload retry requested; local records are kept.",
+		"deleted_terminal": "This study was permanently deleted; uploads stopped and the unconfirmed local data can still be exported.",
 		"unsupported": "The release capability is not recognized, so the shell stopped instead of guessing.",
 		"no_server": "Local-only mode: no server connection.",
 		"bridge_unavailable": "The participation panel could not reach the browser bridge.",
@@ -167,6 +183,8 @@ var recover_button: Button
 var permit_button: Button
 var save_results_button: Button
 var open_results_button: Button
+var retry_button: Button
+var failure_export_button: Button
 var save_results_dialog: FileDialog
 var shell_box: VBoxContainer
 
@@ -174,6 +192,9 @@ var _callbacks: Array = []
 var _reported_state := ""
 var _results_directory := ""
 var _refresh: Timer
+var failure_surface := false
+var last_announcement := ""
+var last_summary: Dictionary = {}
 
 
 func setup(selected: Node) -> Dictionary:
@@ -278,6 +299,10 @@ func set_locale(code: String) -> void:
 		save_results_button.text = t("save_results")
 	if open_results_button != null:
 		open_results_button.text = t("open_results_dir")
+	if retry_button != null:
+		retry_button.text = t("retry_upload")
+	if failure_export_button != null:
+		failure_export_button.text = t("export_failure")
 	if confirm_continue != null:
 		confirm_continue.text = t("continue_")
 	if confirm_new != null:
@@ -356,6 +381,20 @@ func _build_native_ui() -> void:
 	export_button.text = t("export")
 	export_button.pressed.connect(export_recovery)
 	box.add_child(export_button)
+	# Failure surface (R09C): only shown when the persisted summary reports three
+	# consecutive retry failures (or the permanent deletion terminal) while legal
+	# unlocked records remain. Retrying never clears the counters or lifts a safe
+	# pause; the export never contains proof/token/password.
+	retry_button = Button.new()
+	retry_button.text = t("retry_upload")
+	retry_button.visible = false
+	retry_button.pressed.connect(_on_retry_pressed)
+	box.add_child(retry_button)
+	failure_export_button = Button.new()
+	failure_export_button.text = t("export_failure")
+	failure_export_button.visible = false
+	failure_export_button.pressed.connect(_on_failure_export_pressed)
+	box.add_child(failure_export_button)
 	if backend != null and backend.has_method("save_results"):
 		save_results_button = Button.new()
 		save_results_button.text = t("save_results")
@@ -456,6 +495,8 @@ func _mount_web_shell() -> void:
 					"start": t("start"),
 					"export": t("export"),
 					"download_results": t("download_results"),
+					"retry_upload": t("retry_upload"),
+					"export_failure": t("export_failure"),
 					"continue_": t("continue_"),
 					"start_new": t("start_new"),
 					"cancel": t("cancel"),
@@ -490,6 +531,10 @@ func _on_web_action(args: Array) -> void:
 			cancel_confirmation()
 		"download-results":
 			await export_results()
+		"retry":
+			await _request_retry()
+		"failure-export":
+			await export_recovery()
 	_focus_canvas()
 
 
@@ -559,6 +604,7 @@ func _web_state(spec: Dictionary) -> void:
 
 
 func announce(text: String) -> void:
+	last_announcement = text
 	if message != null:
 		message.text = text
 	if web:
@@ -816,15 +862,46 @@ func _refresh_state() -> void:
 		summary = await backend.summary()
 	elif backend.has_method("status"):
 		summary = backend.status()
+	last_summary = summary
 	var current := str(summary.get("state", "unprepared"))
 	var current_error := str(summary.get("error", ""))
-	var fingerprint := _fingerprint(current, current_error)
+	var kind := str(summary.get("kind", ""))
+	var delivery: Dictionary = summary.get("delivery", {})
+	var failures := int(delivery.get("retry_failures", 0))
+	var terminal := str(delivery.get("terminal_reason", ""))
+	var pending_count := int(summary.get("pending", 0))
+	var initial_failed := bool(delivery.get("initial_failed", false))
+	# A received session is never offered the failure surface or the retry-ready
+	# announcement, no matter what stale counters the row still carries: the
+	# persisted receipt/cleaned state decides, not a counter that reads zero.
+	var received := current == "remote_acknowledged" or kind == "cleaned" or bool(summary.get("complete_ack", false))
+	# The persisted summary decides the failure surface on every refresh; the
+	# announcement fingerprint additionally carries kind/counts/terminal, so a
+	# same-state change (a new retry failure, a receipt, a tombstone) is still
+	# announced instead of being hidden behind an unchanged state string.
+	_update_failure_surface(summary)
+	var fingerprint := _fingerprint(current, current_error) + "|" + kind + "|" + str(failures) + "|" + terminal + "|" + str(pending_count)
 	if fingerprint == _reported_state:
 		return
 	_reported_state = fingerprint
-	if current == "remote_acknowledged":
+	if received:
 		state = "uploaded"
 		announce(t("uploaded"))
+	elif terminal == "study_deleted":
+		state = "deleted"
+		announce(t("deleted_terminal"))
+	elif str(delivery.get("last_error_kind", "")) == "local_storage_error":
+		announce(t("storage_error"))
+	elif failures >= 3 and int(summary.get("records", 0)) > 0 and not bool(summary.get("front_locked", false)):
+		announce(t("retry_ready", {"n": failures}))
+	elif failures > 0:
+		# The displayed retry count is always exactly the persisted
+		# ``retry_failures``; the first normal send failure never counts as one.
+		announce(t("retrying", {"n": failures}))
+	elif initial_failed and int(delivery.get("ack_progress", 0)) == 0:
+		# The initial send failure is not a retry yet, so it gets the generic
+		# retry state instead of an invented consecutive count.
+		announce(t("retry"))
 	elif current == "finished_saved" and local_test_mode:
 		state = "finished_local_test"
 		finished_announced = true
@@ -833,6 +910,64 @@ func _refresh_state() -> void:
 		announce(t("local_test_complete") if local_test_mode else t("finished_local"))
 	elif current in ["active", "local_committed", "finished_saved"] and not current_error.is_empty():
 		announce(t("retry") + " (" + current_error + ")")
+
+
+func _update_failure_surface(summary: Dictionary) -> void:
+	## The failure surface exists only for a real session that still holds legal,
+	## unlocked, not-yet-received local records: three consecutive retry failures
+	## or the permanent deletion terminal. A cleaned tombstone or a stored
+	## completion receipt (the persisted ``complete_ack``/``remote_acknowledged``
+	## state) hides it explicitly, not merely because the counters happen to read
+	## zero, so a reopened shell never shows an old upload failure for data that
+	## is already received. Retrying is offered only while the server is still a
+	## candidate; a deletion terminal offers the legal local export alone, and a
+	## front-locked session offers no failure export either.
+	var delivery: Dictionary = summary.get("delivery", {})
+	var failures := int(delivery.get("retry_failures", 0))
+	var terminal := str(delivery.get("terminal_reason", ""))
+	var kind := str(summary.get("kind", ""))
+	var reported := str(summary.get("state", ""))
+	var records := int(summary.get("records", 0))
+	var unlocked := not bool(summary.get("front_locked", false))
+	var received: bool = kind == "cleaned" or bool(summary.get("complete_ack", false)) or reported == "remote_acknowledged"
+	failure_surface = kind == "session" and records > 0 and unlocked and not received and (failures >= 3 or terminal == "study_deleted")
+	if web:
+		_web_state({"failure": {"visible": failure_surface, "retry": failure_surface and terminal != "study_deleted", "export": failure_surface}})
+		return
+	if retry_button != null:
+		retry_button.visible = failure_surface
+		retry_button.disabled = terminal == "study_deleted"
+	if failure_export_button != null:
+		failure_export_button.visible = failure_surface
+
+
+func _request_retry() -> Dictionary:
+	## Explicit manual retry of the upload round. The backend still respects the
+	## persisted backoff/Retry-After and never lifts a safe pause or clears the
+	## delivery counters: this only asks for the next eligible round.
+	if backend == null or not backend.has_method("flush_upload"):
+		return {"error": "retry_unavailable"}
+	var result: Dictionary = await backend.flush_upload()
+	if result.has("error"):
+		announce(t("error_prefix", {"code": str(result.get("error", ""))}))
+		return result
+	announce(t("retry_requested"))
+	_reported_state = ""
+	return result
+
+
+func _on_retry_pressed() -> void:
+	await _request_retry()
+
+
+func _on_failure_export_pressed() -> void:
+	await export_recovery()
+
+
+func export_failure_data(path: String) -> Dictionary:
+	## Automation entry for the failure export: the same recovery document the
+	## failure export button writes, with no secrets, and the local queue stays.
+	return await export_recovery_to(path)
 
 
 func export_recovery() -> void:
@@ -854,31 +989,67 @@ func export_recovery() -> void:
 	dialog.current_file = "recovery.json"
 	dialog.filters = PackedStringArray(["*.json ; Recovery data"])
 	add_child(dialog)
-	dialog.file_selected.connect(func(path):
-		var file = FileAccess.open(path, FileAccess.WRITE)
-		if file == null:
-			announce(t("error_prefix", {"code": "recovery_export_unavailable"}))
-			return
-		file.store_string(JSON.stringify(recovery_data))
-		file.close()
-	)
+	dialog.file_selected.connect(_on_recovery_file_selected)
+	dialog.canceled.connect(_on_recovery_cancelled)
 	dialog.popup_centered(Vector2i(800, 500))
+
+
+func _on_recovery_file_selected(path: String) -> void:
+	## The real GUI save path: the selected file is written by exactly the same
+	## atomic method as the automation entry, and the visible result says whether
+	## the document really reached the disk.
+	var result: Dictionary = await export_recovery_to(path)
+	if result.has("error"):
+		announce(t("export_failed", {"code": str(result.get("error", ""))}))
+	else:
+		announce(t("export_saved", {"path": str(result.get("path", path))}))
+
+
+func _on_recovery_cancelled() -> void:
+	## A cancelled dialog writes nothing and never touches the queue.
+	announce(t("export_cancelled"))
+
+
+func _write_recovery_document(path: String, content: String) -> bool:
+	## Same-directory temporary file, complete write + flush + error check +
+	## read-back verification, then one atomic replace (the R09A local-results
+	## pattern). Any failed open, write, flush, verification or rename removes the
+	## temporary and keeps the previous target bytes untouched, so a reported
+	## export always means the whole document is on disk.
+	var temporary := path + ".part-" + Crypto.new().generate_random_bytes(8).hex_encode()
+	var file = FileAccess.open(temporary, FileAccess.WRITE)
+	if file == null:
+		return false
+	if not file.store_string(content):
+		file.close()
+		DirAccess.remove_absolute(temporary)
+		return false
+	file.flush()
+	if file.get_error() != OK:
+		file.close()
+		DirAccess.remove_absolute(temporary)
+		return false
+	file.close()
+	if FileAccess.get_file_as_string(temporary) != content:
+		DirAccess.remove_absolute(temporary)
+		return false
+	if DirAccess.rename_absolute(temporary, path) != OK:
+		DirAccess.remove_absolute(temporary)
+		return false
+	return true
 
 
 func export_recovery_to(path: String) -> Dictionary:
 	## Automation entry for the failure-data export: it writes exactly the same
 	## recovery document the GUI save dialog writes, without a dialog and without
-	## secrets. It never deletes the local queue.
+	## secrets, through the same atomic method. It never deletes the local queue.
 	if backend == null or not backend.has_method("recovery_export"):
 		return {"error": "recovery_export_unavailable"}
 	var recovery_data: Dictionary = await backend.recovery_export()
 	if recovery_data.has("error"):
 		return recovery_data
-	var file = FileAccess.open(path, FileAccess.WRITE)
-	if file == null:
+	if not _write_recovery_document(path, JSON.stringify(recovery_data)):
 		return {"error": "recovery_export_unavailable"}
-	file.store_string(JSON.stringify(recovery_data))
-	file.close()
 	return {"state": "exported", "path": path}
 
 
@@ -987,4 +1158,12 @@ func auto_submit(credentials: Dictionary, auto_new := false) -> Dictionary:
 
 
 func status_snapshot() -> Dictionary:
-	return {"state": state, "mode": mode, "locale": locale, "data_only": data_only, "finished_announced": finished_announced, "pending": not pending.is_empty()}
+	var delivery: Dictionary = last_summary.get("delivery", {})
+	return {"state": state, "mode": mode, "locale": locale, "data_only": data_only, "finished_announced": finished_announced,
+			"pending": not pending.is_empty(), "entry_locked": entry_locked, "failure_surface": failure_surface,
+			"last_announcement": last_announcement,
+			"summary": {"state": str(last_summary.get("state", "")), "kind": str(last_summary.get("kind", "")),
+				"records": int(last_summary.get("records", 0)), "pending": int(last_summary.get("pending", 0)),
+				"front_locked": bool(last_summary.get("front_locked", false)), "complete_ack": bool(last_summary.get("complete_ack", false)),
+				"retry_failures": int(delivery.get("retry_failures", 0)), "terminal_reason": str(delivery.get("terminal_reason", "")),
+				"last_error_kind": str(delivery.get("last_error_kind", "")), "inflight": bool(delivery.get("inflight", false))}}

@@ -26,7 +26,11 @@ globalThis.GECBridge={
    else if(op==='download_recovery'){const data=await client.recovery_export();const url=URL.createObjectURL(new Blob([JSON.stringify(data)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='recovery-'+data.session_id+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);result={state:'download_requested'};}
   else if(op==='download_results'){const text=await client.results_jsonl();const name=client.results_filename();const url=URL.createObjectURL(new Blob([text],{type:'application/x-ndjson'}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);result={state:'download_requested',filename:name};}
    else result=await client[op](...args);
-   replies.set(key,JSON.stringify(result));
+   // A successful flush() resolves undefined. That is still a completed call,
+   // so the reply channel must carry an explicit result: an undefined reply is
+   // indistinguishable from "the bridge never answered" and would leave the
+   // Godot shell waiting in its busy state forever.
+   replies.set(key,JSON.stringify(result===undefined?{state:'ok'}:result));
  }catch(e){replies.set(key,JSON.stringify({error:e.message,code:e.code,state:'error'}));}},
  take(key){const result=replies.get(key);replies.delete(key);return result??null;},
  context_json(){return JSON.stringify(globalThis.GEP_CONTEXT??{});},

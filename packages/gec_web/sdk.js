@@ -287,10 +287,17 @@ export class GEC {
   async summary(){
     // Rebuilt from the current session's persisted row on every call, so the
     // state, pending, error and failure counters can never leak from another
-    // session or from a stale in-memory state string.
+    // session or from a stale in-memory state string. The reported state is the
+    // persisted one as well: a cleaned tombstone or a stored completion receipt
+    // is an acknowledged session even before this document's client object
+    // knows about it, so a reopened shell can never show an old upload failure
+    // (or old answers) for a session that is already received.
     const s=this.id?await this.get(this.id):null;
     const delivery=deliveryOf(s);
-    return {state:this.state,error:s?delivery.last_error:this.error,buffered:this.buffer.length,records:s?.records?.length??0,pending:s?.pending?.length??0,kind:s?.kind??null,checkpoint_next:s?.checkpoint?.next_trial??null,delivery_version:DELIVERY_VERSION,delivery};
+    let persisted=this.state;
+    if(s&&s.kind==='cleaned')persisted='remote_acknowledged';
+    else if(s&&s.complete_ack&&!s.pending.length&&!s.checkpoint)persisted='remote_acknowledged';
+    return {state:persisted,error:s?delivery.last_error:this.error,buffered:this.buffer.length,records:s?.records?.length??0,pending:s?.pending?.length??0,kind:s?.kind??null,front_locked:!!s?.front_locked,complete_ack:!!s?.complete_ack,checkpoint_next:s?.checkpoint?.next_trial??null,delivery_version:DELIVERY_VERSION,delivery};
   }
   report(error){this.error=error.message;}
   close(){clearInterval(this.timer);this.stopped=true;this.db?.close();this.unlock?.();}
