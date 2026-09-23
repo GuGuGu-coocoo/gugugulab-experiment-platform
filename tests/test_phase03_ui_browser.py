@@ -7,9 +7,11 @@ GEP_T17_BROWSER guard is the same opt-in switch the Required Verification comman
 sets; inside the run everything is mandatory.
 """
 import os
+import secrets
 import socket
 import subprocess
 import uuid
+from datetime import datetime, timezone as utc_timezone
 from pathlib import Path
 
 import pytest
@@ -25,7 +27,24 @@ pytestmark = pytest.mark.skipif(os.environ.get('GEP_T17_BROWSER') != '1',
 
 OWNER_PASSWORD = 'synthetic-test-password'
 PARTICIPANT_CODE = '001'
-EVIDENCE_DIR = Path(__file__).resolve().parents[1] / 'local_data' / 'phase03_20260920' / 'p0307' / 'evidence'
+
+
+def _evidence_dir():
+    """Explicit ``GEP_EVIDENCE_DIR``, otherwise a new unique remediation root.
+
+    The historical Phase 03 screenshot root is never reused, so a rerun cannot
+    overwrite earlier evidence and a failed attempt keeps its own files.
+    """
+    explicit = os.environ.get('GEP_EVIDENCE_DIR')
+    if explicit:
+        return Path(explicit).resolve()
+    stamp = datetime.now(utc_timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + secrets.token_hex(4)
+    return (Path(__file__).resolve().parents[1] / 'local_data' / 'phase03_remediation_20260923'
+            / 'test_phase03_ui_browser' / stamp)
+
+
+EVIDENCE_DIR = _evidence_dir()
+_EVIDENCE_CREATED = False
 ALL_ACTIONS = ('study.view', 'study.configure', 'build.upload', 'build.preview', 'release.approve_pilot',
                'recruitment.manage', 'data.export_raw', 'session.recover', 'member.manage',
                'permission.delegate', 'audit.view', 'identity_mapping.read', 'session.view')
@@ -115,8 +134,13 @@ def experiment_base(live_server):
 
 
 def run_chrome(script, env_extra):
+    global _EVIDENCE_CREATED
     root = Path(__file__).resolve().parents[1]
-    EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
+    # An explicit root belongs to the caller; the default unique root must be
+    # newly created and never overwrite an existing tree.
+    if not _EVIDENCE_CREATED:
+        EVIDENCE_DIR.mkdir(parents=True, exist_ok=bool(os.environ.get('GEP_EVIDENCE_DIR')))
+        _EVIDENCE_CREATED = True
     env = dict(os.environ, GEP_EVIDENCE_DIR=str(EVIDENCE_DIR), **env_extra)
     result = subprocess.run(['node', '--input-type=module', '-e', script], cwd=root, env=env,
                             capture_output=True, text=True, timeout=600)
