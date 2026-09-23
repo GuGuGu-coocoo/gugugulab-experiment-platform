@@ -6,7 +6,7 @@ from django.core.management import BaseCommand, CommandError, call_command
 from django.conf import settings
 from django.db import transaction
 from django.contrib.auth import get_user_model
-from core.models import AccountProfile, Instance
+from core.models import AccountProfile, Instance, Principal
 
 class Command(BaseCommand):
     help='Initialize a new empty synthetic instance; never repairs or overwrites a volume.'
@@ -25,8 +25,12 @@ class Command(BaseCommand):
         call_command('migrate',verbosity=0)
         with transaction.atomic():
             owner=get_user_model().objects.create_user(options['username'],password=password)
-            Instance.objects.create(instance_id=instance_id,owner=owner)
-            AccountProfile.objects.create(user=owner,role='user',must_change_password=False,auth_version=1,revision=0)
+            # A new isolated volume is explicitly v2 with the Owner's stable
+            # principal; an existing volume is never reinitialized.
+            Instance.objects.create(instance_id=instance_id,owner=owner,authorization_version=2)
+            Principal.objects.create(user=owner)
+            AccountProfile.objects.create(user=owner,role='user',must_change_password=False,auth_version=1,
+                                          revision=0,policy_version=2)
         for name,value in [('secret',secret),('instance',str(instance_id))]:
             fd=os.open(root/name,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
             with os.fdopen(fd,'w') as stream:

@@ -23,6 +23,11 @@ def test_initialize_empty_volume_and_refuse_overwrite(tmp_path):
     with sqlite3.connect(root / 'gep.sqlite3') as db:
         assert db.execute('select count(*) from core_instance').fetchone()[0] == 1
         assert db.execute('select count(*) from auth_user').fetchone()[0] == 1
+        # A new isolated volume is explicitly v2 with the Owner's stable
+        # principal and a v2 policy profile (never a silent v1 default).
+        assert db.execute('select authorization_version from core_instance').fetchone()[0] == 2
+        assert db.execute('select count(*) from core_principal').fetchone()[0] == 1
+        assert db.execute('select policy_version, role from core_accountprofile').fetchone() == (2, 'user')
 
 
 def test_incomplete_initialization_cannot_serve(tmp_path, monkeypatch):
