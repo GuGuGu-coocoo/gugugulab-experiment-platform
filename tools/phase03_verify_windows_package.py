@@ -97,6 +97,11 @@ HOST_VERSION = (4, 7, 2)
 WINDOWS_MACHINE = 0x8664
 WINDOWS_MAGIC = 0x20b
 NOT_RUN = "NOT_RUN"
+MEMBER_USERNAME = "synthetic_windows_reader"
+# Fixed synthetic value for the invitation activation page (U07): one ASCII
+# uppercase letter, lowercase letter, digit and visible symbol each; it is not a
+# real credential and never leaves this synthetic run.
+MEMBER_PASSWORD = "Synthetic-windows-reader-2026!"
 
 
 class VerificationError(Exception):
@@ -520,7 +525,7 @@ class Verify:
         return {"admin_url": f"http://admin.localhost:{self.port}",
                 "experiment_url": f"http://experiment.localhost:{self.port}",
                 "credentials": {"username": "synthetic_owner", "password": self.owner_password},
-                "member": {"username": "synthetic_windows_reader", "password": "synthetic-windows-reader-password"},
+                "member": {"username": MEMBER_USERNAME, "password": MEMBER_PASSWORD},
                 "run_dir": str(self.evidence), "title": "Windows package verification", "max_sessions": 2,
                 "platform": "windows_x64",
                 "sidecar_members": ["artifact_manifest.json", f"{PROGRAM_ROOT.name}/connection.json",

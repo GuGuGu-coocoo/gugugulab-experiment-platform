@@ -68,7 +68,10 @@ ENGINE_NOTICES = ROOT / "server" / "core" / "data" / "godot_engine_notices.json"
 ENGINE_NOTICES_SCRIPT = ROOT / "tests" / "native" / "engine_notices_export.gd"
 NOTICES_MEMBER = "THIRD_PARTY_NOTICES.txt"
 MEMBER_USERNAME = "synthetic_package_reader"
-MEMBER_PASSWORD = "synthetic-package-reader-password"
+# Fixed synthetic value for the invitation activation page (U07): it must carry
+# one ASCII uppercase letter, lowercase letter, digit and visible symbol each.
+# It is not a real credential and never leaves this synthetic run.
+MEMBER_PASSWORD = "Synthetic-package-reader-2026!"
 
 
 class VerificationError(Exception):

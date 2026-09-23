@@ -100,6 +100,24 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
+def researcher_temporary_password():
+    """One synthetic researcher password from the platform's own pure module.
+
+    Every researcher set-password entry enforces ``core.researcher_passwords``
+    (U07): at least 6 characters with one ASCII uppercase letter, one lowercase
+    letter, one digit and one visible punctuation mark each. The member password
+    is set through the real legacy ``/activate`` route, so the kit must not
+    invent its own weak generator: the shared module is imported lazily (it has
+    no Django imports) and guarantees all four classes with at least 24
+    characters by construction.
+    """
+    server = str(ROOT / "server")
+    if server not in sys.path:
+        sys.path.insert(0, server)
+    from core import researcher_passwords
+    return researcher_passwords.generate_temporary_password()
+
+
 def canonical_json(document):
     return json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
@@ -489,7 +507,7 @@ class KitBuilder:
         self.http = None
         self.owner = None
         self.member = None
-        self.member_password = secrets.token_urlsafe(18)
+        self.member_password = researcher_temporary_password()
         self.participant_passwords = {code: secrets.token_urlsafe(16) for code in ID_CODES}
         self.releases = {}
         self.alternates = {}

@@ -222,12 +222,57 @@ def test_account_browser_fixtures_are_four_class_and_owner_hash_stays_weak():
 
 # --- the acceptance tools' real generation path ------------------------------
 
+def _assert_policy_password(value, label):
+    assert isinstance(value, str), label
+    assert len(value) >= 24, label
+    assert researcher_passwords.password_problem(value) is None, label
+    for characters in researcher_passwords.CLASSES:
+        assert any(character in characters for character in value), label
 
 
+def _load_tool(name):
+    if str(TOOLS) not in sys.path:
+        sys.path.insert(0, str(TOOLS))
+    spec = importlib.util.spec_from_file_location(name, TOOLS / f'{name}.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
+def test_windows_kit_member_password_comes_from_the_shared_module(tmp_path):
+    kit = _load_tool('phase03_windows_kit')
+    observed = []
+    for _ in range(2):
+        # The real call site: the constructor assigns the member password that
+        # the kit later sends to /activate. Two independent constructions must
+        # differ, so this is a generator and not a fixed value.
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            builder = kit.KitBuilder(tmp_path, lambda *a, **k: True, lambda *a, **k: None)
+        assert stdout.getvalue() == '' and stderr.getvalue() == '', 'generation must not print'
+        observed.append(builder.member_password)
+    assert len(set(observed)) == 2
+    for password in observed:
+        _assert_policy_password(password, 'windows kit member password')
+    assert not list(tmp_path.iterdir()), 'constructing the kit writes no secret file'
+    source = (TOOLS / 'phase03_windows_kit.py').read_text(encoding='utf-8')
+    assert 'researcher_passwords.generate_temporary_password()' in source
+    assert 'self.member_password = researcher_temporary_password()' in source
+    assert 'token_urlsafe(18)' not in source
 
 
+def test_package_verifier_member_passwords_are_four_class_fixed_values(tmp_path):
+    package = _load_tool('phase03_verify_package')
+    member = package.Verify(tmp_path / 'package').job()['member']
+    assert member['username'] == package.MEMBER_USERNAME
+    assert member['password'] == package.MEMBER_PASSWORD
+    assert researcher_passwords.password_problem(member['password']) is None
+    assert 'synthetic-package-reader-password' not in member['password']
+    windows = _load_tool('phase03_verify_windows_package')
+    windows_member = windows.Verify(tmp_path / 'windows-package').job()['member']
+    assert windows_member['username'] == windows.MEMBER_USERNAME
+    assert researcher_passwords.password_problem(windows_member['password']) is None
+    assert 'synthetic-windows-reader-password' not in windows_member['password']
 
 
 # --- real Chrome: activation feedback and token single use -------------------

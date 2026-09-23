@@ -16,7 +16,7 @@
 
 v2 研究列表与直接访问使用同一规则，显式隐藏覆盖默认权限与旧授权。具备研究创建权限的账号在创建事务中一次性获得该研究的完整业务权限；之后撤权不会按创建者身份自动恢复。账号管理、导入、权限预览及重放重新检查存储中的平台能力和全部研究范围；受限 Admin 发出的邀请附带权限上限，激活时再次核对签发者当前权限。旧研究成员管理入口在 v2 返回冲突提示，应改用实例账号权限页。
 
-研究者密码使用统一模块 `core/researcher_passwords.py`：至少 6 位，且至少各含一个 ASCII 大写字母、小写字母、数字与可见 ASCII 标点符号；空格不计作符号、值不做首尾空白去除。两个初始化入口（管理命令 initialize 与 `gep.initialize`）、开发实例工具、邀请激活、旧 activate、自助改密与临时密码生成/重置共用该规则；临时密码由 `secrets` 构造保证四类且不少于 24 位，页面 `minlength` 与提示同步为 6。已有密码哈希不会被重置，旧账号继续用原密码登录。账号页与邀请激活页的错误统一显示 `password_weak` 的中文/English 具体规则；旧 `/activate` 端点仍只返回统一拒绝代码，但共享同一中文/English 文案映射，不再显示旧 16 位门槛或通用提示。
+研究者密码使用统一模块 `core/researcher_passwords.py`：至少 6 位，且至少各含一个 ASCII 大写字母、小写字母、数字与可见 ASCII 标点符号；空格不计作符号、值不做首尾空白去除。两个初始化入口（管理命令 initialize 与 `gep.initialize`）、开发实例工具、邀请激活、旧 activate、自助改密与临时密码生成/重置共用该规则；临时密码由 `secrets` 构造保证四类且不少于 24 位，页面 `minlength` 与提示同步为 6。已有密码哈希不会被重置，旧账号继续用原密码登录。账号页与邀请激活页的错误统一显示 `password_weak` 的中文/English 具体规则；旧 `/activate` 端点仍只返回统一拒绝代码，但共享同一中文/English 文案映射，不再显示旧 16 位门槛或通用提示。通过激活/改密入口设置研究者密码的验收工具复用该模块或使用满足四类的固定合成值（`tools/phase03_windows_kit.py`、`tools/phase03_verify_package.py`、`tools/phase03_verify_windows_package.py`）；被试名单密码与邀请令牌不在该范围。
 
 定向工程回归：`GEP_T17_BROWSER=1 .venv/bin/pytest -q tests/remediation/test_p03r02b.py tests/remediation/test_p03r02br.py tests/remediation/test_p03r02c.py tests/remediation/test_p03r02cr.py tests/remediation/test_p03r03a.py tests/remediation/test_p03r03ar.py tests/test_initialize.py tests/test_phase03_accounts_browser.py`。需要本机 Chrome 和项目依赖；测试使用隔离数据库与新的证据目录，浏览器自动化不代表人工验收。
 
