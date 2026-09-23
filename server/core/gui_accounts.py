@@ -13,7 +13,7 @@ from django.utils import timezone
 
 from . import accounts, permissions, ui
 from .access import is_account_administrator, is_instance_owner
-from .gui import ACTION_LABELS, admin_host
+from .gui import ACTION_LABELS, admin_host, admin_origin
 from .models import AccountInvitation, AccountProfile, Instance
 from .protocol import Rejected, require
 from .throttle import check
@@ -77,6 +77,7 @@ MESSAGES = {
     'operation': 'operation 必须是 create / update / disable / enable。',
     'password': '密码列必须是文本。',
     'id': 'ID 不合法。',
+    'admin_origin': '管理地址配置无效，未生成任何链接；本次未创建邀请。',
 }
 
 
@@ -105,10 +106,15 @@ def _apply(request):
         from . import gui_imports
         return gui_imports.apply_import(request, op)
     if op == 'invite_account':
+        # The link origin is validated before the invitation is written: a
+        # broken ADMIN_ORIGIN must fail closed without leaving a one-time token
+        # that can never be shown again.
+        origin = admin_origin(request)
         result = accounts.invite_account(request.user, password, revision, username, request.POST.get('role', 'user'))
         return {'notice': ui.notice(lang, f"已创建账号邀请：{result['username']}（角色 {result['role']}）。",
                                     f"Account invitation created: {result['username']} (role {result['role']})."),
-                'invitation_token': result['token'], 'invitation_username': result['username']}
+                'invitation_link': origin + '/activate-account?token=' + result['token'],
+                'invitation_username': result['username']}
     if op == 'create_temp':
         result = accounts.create_temporary_account(request.user, password, revision, username)
         return {'notice': ui.notice(lang, f"已创建临时密码账号：{result['username']}。",
@@ -181,7 +187,7 @@ def users_page(request):
     if not request.user.is_authenticated:
         return redirect('/login')
     require(is_account_administrator(request.user), 'forbidden', 403)
-    extra = {'notice': '', 'error': '', 'secret': None, 'invitation_token': None, 'secret_username': '',
+    extra = {'notice': '', 'error': '', 'secret': None, 'secret_username': '',
              'invitation_username': '', 'preview': None, 'invitation_tokens': [], 'import_result': None}
     status = 200
     if request.method == 'POST':

@@ -21,7 +21,7 @@ OWNER_PASSWORD = 'synthetic-test-password'  # from tests/conftest.py setup fixtu
 NEW_PASSWORD = 'synthetic-new-password-2026'
 THIRD_PASSWORD = 'synthetic-third-password-2026'
 SECRET_RE = re.compile(r'data-one-time-secret="1".*?<code>(.*?)</code>', re.S)
-INVITE_RE = re.compile(r'data-one-time-invitation="1".*?<code>/activate-account\?token=(.*?)</code>', re.S)
+INVITE_RE = re.compile(r'data-one-time-invitation="1".*?data-invitation-link="[^"]*/activate-account\?token=([^"&]+)"', re.S)
 ACTIVATION_FAILED = '激活失败：邀请无效、已使用、已撤销或已过期。'
 PREVIEW_RE = re.compile(r'data-preview-id="([0-9a-fA-F-]{36})"')
 

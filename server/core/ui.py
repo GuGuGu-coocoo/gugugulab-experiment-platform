@@ -82,6 +82,8 @@ STRINGS = {
     'activate_hint': {'zh': '新账号设置密码（至少 16 字符）；已有账号请先登录，不会修改密码', 'en': 'New accounts set a password (at least 16 characters); existing accounts sign in first and their password is never changed'},
     'activate_submit': {'zh': '激活账号', 'en': 'Activate account'},
     'account_activate_title': {'zh': '接受账号邀请', 'en': 'Accept account invitation'},
+    'account_activate_hint': {'zh': '此页面用于邀请：由被邀请人本人设置密码。临时密码账号不使用此页面，请直接在登录页使用用户名与临时密码登录，首次登录后必须修改密码。',
+                              'en': 'This page is for invitations: the invitee sets their own password. A temporary-password account never uses this page: sign in with the username and the one-time temporary password, then change it at first sign-in.'},
     'account_activated': {'zh': '账号已激活，请登录。', 'en': 'The account is activated. Please sign in.'},
     'account_activate_link': {'zh': '已有账号，直接登录', 'en': 'Already have an account? Sign in'},
     # Modules.
@@ -258,6 +260,9 @@ STRINGS = {
                    'en': 'The Owner comes from the instance pointer only; Admins are appointed or demoted by the Owner. The Owner row is protected even from the Owner: account management cannot change it, so the Owner changes the password under “Change password”. An ordinary Admin can only grant actions they hold as effective and delegable, and only within studies they dominate; appointing or demoting roles is Owner-only. The matrix shows study visibility first, then the explicit actions; clearing visibility also clears child permissions, and the server rejects the contradictory submission. Every authorization change is previewed first and confirmed once with your own password.'},
     'users_secret_note': {'zh': '一次性临时密码（只显示这一次，绝不写入审计或导出）。账号：', 'en': 'One-time temporary password (shown once; never written to the audit log or exports). Account:'},
     'users_invitation_note': {'zh': '账号邀请（24 小时内一次性有效，只显示这一次）。账号：', 'en': 'Account invitation (single use within 24 hours, shown once). Account:'},
+    'users_invitation_link_note': {'zh': '完整设密链接：', 'en': 'Complete password-setup link:'},
+    'users_invitation_help': {'zh': '被邀请人打开完整链接并自行设置密码；临时密码账号不使用该链接，直接用用户名与临时密码登录，并在首次登录后修改密码。',
+                              'en': 'The invitee opens the complete link and sets their own password; a temporary-password account never uses that link and signs in with the username and one-time temporary password, then changes it at first sign-in.'},
     'users_import_invitation_note': {'zh': '导入邀请（只显示这一次）。账号：', 'en': 'Imported invitation (shown once). Account:'},
     'users_preview_heading': {'zh': '更改预览（未执行）', 'en': 'Change preview (not executed)'},
     'users_preview_joiner': {'zh': '、', 'en': ', '},
@@ -379,6 +384,7 @@ def notice(lang, zh_text, en_text):
 
 
 ERRORS_EN = {
+    'admin_origin': 'The admin origin configuration is invalid, so no link was generated.',
     'unknown_operation': 'Unknown operation.',
     'reauth_failed': 'Re-authentication failed: the actor password is wrong; nothing was changed.',
     'revision_conflict': 'The governance revision changed; refresh and retry. Nothing was changed.',

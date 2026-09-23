@@ -4,12 +4,20 @@ Demonstrates: Owner temporary-password create and invite; forced first-login
 password change; Owner row read-only for Admin; ordinary users denied /users.
 """
 import os
+import re
 import subprocess
 from pathlib import Path
 
 import pytest
 
 pytestmark = pytest.mark.skipif(os.environ.get('GEP_T17_BROWSER') != '1', reason='Set GEP_T17_BROWSER=1 to run the isolated Chromium check')
+
+TOKEN_PARAM_RE = re.compile(r'token=[A-Za-z0-9_\-]+')
+
+
+def redact(text):
+    """Never print a complete one-time token from a failed browser run."""
+    return TOKEN_PARAM_RE.sub('token=<redacted>', text)
 
 SCRIPT = r'''
 import {chromium,expect} from '@playwright/test';
@@ -51,8 +59,10 @@ try {
   await inviteForm.locator('[name=password]').fill(ownerPassword);
   await inviteForm.getByRole('button',{name:'生成邀请（本人设置密码）'}).click();
   await page.waitForLoadState('load');
-  const invitation=await page.locator('[data-one-time-invitation] code').innerText();
-  const inviteToken=invitation.split('token=')[1];
+  const invitationLink=await page.locator('[data-one-time-invitation] a[data-invitation-link]').getAttribute('href');
+  const inviteToken=new URL(invitationLink).searchParams.get('token');
+  expect(await page.locator('[data-one-time-invitation] a[data-invitation-link]').count()).toBe(1);
+  expect(await page.locator('[data-one-time-invitation] code').count()).toBe(0);
   expect(inviteToken.length).toBeGreaterThan(20);
 
   await createForm.locator('[name=username]').fill('browser_admin');
@@ -146,4 +156,4 @@ def test_actual_chrome_instance_account_governance(live_server, setup):
                GEP_USER_PASSWORD='synthetic-browser-user-password',
                GEP_INVITEE_PASSWORD='synthetic-browser-invitee-password')
     result = subprocess.run(['node', '--input-type=module', '-e', SCRIPT], cwd=Path(__file__).resolve().parents[1], env=env, capture_output=True, text=True, timeout=120)
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.returncode == 0, redact(result.stdout + result.stderr)

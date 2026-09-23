@@ -9,6 +9,7 @@ import secrets
 import zipfile
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import urlparse
 from django.conf import settings
 from django.contrib.auth import authenticate, login, logout, get_user_model
 from django.contrib.auth.hashers import make_password
@@ -39,6 +40,47 @@ def _bump(instance):
 
 def admin_host(request):
     require(request.get_host().split(':')[0] in (settings.ADMIN_HOST,'localhost','testserver'),'wrong_host',403)
+
+
+def admin_origin(request):
+    """The absolute admin origin for one-time links (never a request Host echo).
+
+    An explicitly configured ``settings.ADMIN_ORIGIN`` wins: it must be a bare
+    ``http``/``https`` origin whose hostname is the approved admin entry (or an
+    explicit local compatibility entry), without credentials, path, query or
+    fragment, and with a valid port (1..65535, or none for the scheme default).
+    Without an explicit origin, the approved request hostname is combined with
+    the server-owned ``SERVER_PORT`` the request really reached this server on:
+    the port of the client-supplied ``Host`` header and ``X-Forwarded-*``
+    headers are never trusted, and a reverse proxy that publishes a different
+    external port must configure ``ADMIN_ORIGIN``. Any unusable configuration,
+    including ``urlparse``/``parsed.port`` errors, fails closed with a
+    controlled rejection instead of an attacker-shaped or broken link.
+    """
+    configured=(getattr(settings,'ADMIN_ORIGIN','') or '').strip()
+    if configured:
+        try:
+            parsed=urlparse(configured)
+        except ValueError:
+            raise Rejected('admin_origin',409)
+        require(parsed.scheme in ('http','https') and bool(parsed.netloc) and '@' not in parsed.netloc
+                and not parsed.path and not parsed.query and not parsed.fragment
+                and not parsed.netloc.endswith(':'),'admin_origin',409)
+        try:
+            authority=(parsed.hostname,parsed.port)
+        except ValueError:
+            raise Rejected('admin_origin',409)
+        require(authority[0] in (settings.ADMIN_HOST,'localhost','testserver'),'admin_origin',409)
+        require(authority[1] is None or 1 <= authority[1] <= 65535,'admin_origin',409)
+        return configured.rstrip('/')
+    host=request.get_host().split(':')[0]
+    require(host in (settings.ADMIN_HOST,'localhost','testserver'),'wrong_host',403)
+    try:
+        port=int(request.get_port())
+    except (KeyError, TypeError, ValueError):
+        raise Rejected('admin_origin',409)
+    require(1 <= port <= 65535,'admin_origin',409)
+    return ('https' if request.is_secure() else 'http')+'://'+host+':'+str(port)
 
 
 def public_api_url():

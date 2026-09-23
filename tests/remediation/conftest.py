@@ -5,9 +5,16 @@ root under ``local_data/phase03_remediation_20260923/<task>/<UTC stamp>-<random>
 and never writes to an existing root, so a failed attempt keeps its files.
 Fixtures here are synthetic only and state the current authorization semantics
 explicitly (experiments with ``authorization_version`` belong to the R02 suites).
+
+Secrets policy: one-time invitation tokens stay in process memory. The
+``run_chrome_tokens`` helper returns the real token(s) a browser script minted
+through an anonymous pipe (never through a file or stdout), so a test can scan
+its evidence and every captured diagnostic for leaks.
 """
 import json
+import os
 import secrets
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -60,9 +67,37 @@ def evidence(evidence_root):
     """Write one evidence file in this run's root; return the path written."""
     def write(name, payload):
         path = evidence_root / name
+        # Containment: an evidence name must stay inside this run's own root.
+        if evidence_root.resolve() not in path.resolve().parents:
+            raise AssertionError(f'evidence name escapes its run root: {name!r}')
         if isinstance(payload, (bytes, bytearray)):
             path.write_bytes(bytes(payload))
         else:
             path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
         return path
     return write
+
+
+@pytest.fixture(scope='session')
+def run_chrome_tokens():
+    """Run one Node/Playwright script with an in-memory one-time token channel.
+
+    The script writes one token per line to the inherited fd named in
+    ``GEP_TOKEN_FD``. The tokens never touch a file, stdout or stderr; they are
+    returned so the test can independently scan evidence and captured browser
+    output for leaks. Anything the script prints must already be redacted.
+    """
+    def run(script, env, timeout=240):
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        try:
+            result = subprocess.run(['node', '--input-type=module', '-e', script],
+                                    cwd=REPO_ROOT, env=dict(env, GEP_TOKEN_FD=str(write_fd)),
+                                    pass_fds=(write_fd,), capture_output=True, text=True,
+                                    timeout=timeout)
+            reported = os.read(read_fd, 8192).decode('utf-8', 'replace')
+        finally:
+            os.close(write_fd)
+            os.close(read_fd)
+        return result, [line for line in reported.splitlines() if line]
+    return run

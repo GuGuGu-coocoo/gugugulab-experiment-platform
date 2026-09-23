@@ -7,6 +7,14 @@ SECRET_KEY = os.environ.get('GEP_SECRET_KEY', 'test-only-not-a-running-instance'
 DEBUG = False
 EXPERIMENT_HOST = os.environ.get('GEP_EXPERIMENT_HOST', 'experiment.localhost')
 ADMIN_HOST = os.environ.get('GEP_ADMIN_HOST', 'admin.localhost')
+# Explicit absolute origin for one-time administrative links (invitation and
+# account activation addresses), for example ``http://admin.localhost:8040``.
+# It is the only source that may name a port different from the server's own
+# ``SERVER_PORT``; request Host ports and X-Forwarded-* values are never
+# trusted. When empty, the approved request hostname plus the server-owned
+# ``SERVER_PORT`` the request really reached this server on is used, so a
+# reverse proxy that publishes another external port must set this explicitly.
+ADMIN_ORIGIN = os.environ.get('GEP_ADMIN_ORIGIN', '')
 WWW_HOST = os.environ.get('GEP_WWW_HOST', 'www.localhost')
 ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'admin.localhost', 'experiment.localhost', 'testserver', EXPERIMENT_HOST, ADMIN_HOST, WWW_HOST]
 ROOT_URLCONF = 'gep.urls'

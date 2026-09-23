@@ -2,6 +2,7 @@
 {% if done %}<div class="notice" role="status" aria-live="polite">{{ui.account_activated}} {{username}} · <a href="/login">{{ui.login_submit}}</a>。</div>
 {% else %}
 {% if error %}<div class="error" role="alert">{{error}}</div>{% endif %}
+<p class="muted">{{ui.account_activate_hint}}</p>
 <form method="post">{% csrf_token %}
 <label>{{ui.activate_token}} <input name="token" value="{{token}}" type="password" autocomplete="one-time-code" required></label>
 <label>{{ui.password_new}} <input type="password" name="password" minlength="16" autocomplete="new-password" required></label>
