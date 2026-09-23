@@ -16,7 +16,9 @@ never the implementation under test:
   whitespace text: an all-whitespace ID is a per-row ``id_whitespace`` error
   with its real source row number, a mixed batch writes nothing, and a
   whitespace-only password with a valid ID is kept exactly and admits exactly;
-
+- the updated acceptance tools create the roster through the shared HTTP helper
+  (preview + operator-password commit) over a real server and the synthetic
+  database, and the legacy direct-write call is gone from both kits.
 
 Evidence stays under this module's unique
 ``local_data/phase03_remediation_20260923/p03r06r/<UTC>-<random>/`` root.
@@ -25,6 +27,7 @@ import io
 import json
 import os
 import re
+import sys
 import uuid
 from pathlib import Path
 
@@ -40,6 +43,14 @@ from core.models import (AccountProfile, Build, Instance, Participant, Principal
                          Release, Session, Study)
 
 ROOT = Path(__file__).resolve().parents[2]
+TOOLS = ROOT / 'tools'
+if str(TOOLS) not in sys.path:
+    sys.path.insert(0, str(TOOLS))
+
+import roster_import_client  # noqa: E402  (tools/ path above)
+import phase03_designer_kit as designer_kit  # noqa: E402
+import phase03_windows_kit as windows_kit  # noqa: E402
+
 CREATOR_PASSWORD = 'synthetic-p03r06r-creator-password'
 CREATOR_PASSWORD_2 = 'synthetic-p03r06r-creator-password-two'
 VIEWER_PASSWORD = 'synthetic-p03r06r-viewer-password'
@@ -283,6 +294,58 @@ def test_new_writes_require_preview_and_current_password(world):
     done = roster_commit(current_client, study, preview, CREATOR_PASSWORD_2)
     assert done.status_code == 200 and '名单导入完成' in done.content.decode()
     assert codes_of(study) == {'reauth-1'}
+
+
+# --- the affected tools go through the real HTTP entry -----------------------
+
+def test_shared_tool_helper_imports_over_real_http(live_server, world, evidence):
+    study = world['study']
+    port = int(live_server.url.rsplit(':', 1)[-1])
+    http = windows_kit.HttpClient(port)
+    http.login('p03r06r_creator', CREATOR_PASSWORD)
+
+    added = roster_import_client.preview_and_commit(http, str(study.pk), 'http-1,http-pass',
+                                                    CREATOR_PASSWORD)
+    assert added == 1
+    assert Participant.objects.filter(study=study, code='http-1').exists()
+    assert check_password('http-pass', Participant.objects.get(study=study, code='http-1').password_hash)
+    assert admit(Client(), world, 'http-1', 'http-pass').status_code == 200
+
+    # A wrong confirmation password is refused by the real server with zero
+    # writes, and the helper reports it instead of a fake success.
+    with pytest.raises(roster_import_client.RosterImportError) as refused:
+        roster_import_client.preview_and_commit(http, str(study.pk), 'http-2,http-pass', 'wrong-password')
+    assert '403' in str(refused.value)
+    assert not Participant.objects.filter(study=study, code='http-2').exists()
+
+    # The legacy write entry is refused over the same real HTTP session.
+    status, _payload, _ = http.post_form(f'/studies/{study.pk}',
+                                         [('op', 'roster'), ('roster_format', 'legacy_tab'),
+                                          ('roster', 'http-legacy\tx')], expect_redirect=False)
+    assert status == 409
+    assert not Participant.objects.filter(study=study, code='http-legacy').exists()
+
+    evidence('tool_http_import.json', {
+        'helper_added': added, 'admitted_http_1': True, 'wrong_password_refused': True,
+        'legacy_http_status': status, 'codes': sorted(codes_of(study))})
+
+
+def test_affected_kits_route_roster_creation_through_the_shared_helper():
+    # Both kits delegate to the one shared HTTP helper...
+    assert designer_kit.preview_and_commit is roster_import_client.preview_and_commit
+    assert windows_kit.preview_and_commit is roster_import_client.preview_and_commit
+    # ...and the legacy direct-write call is gone from their sources.
+    for module in (designer_kit, windows_kit):
+        source = Path(module.__file__).read_text(encoding='utf-8')
+        assert '"op", "roster"' not in source
+        assert "'op', 'roster'" not in source
+        assert 'legacy_tab' not in source
+    # The helper itself never writes the database or re-implements server rules:
+    # it only speaks the public study-page HTTP entry.
+    helper = Path(roster_import_client.__file__).read_text(encoding='utf-8')
+    assert 'sqlite3' not in helper and 'Participant' not in helper
+    assert roster_import_client.PREVIEW_OP == 'import_roster_preview'
+    assert roster_import_client.COMMIT_OP == 'import_roster_commit'
 
 
 # --- real Chrome: the closed legacy entry and the current entry together -----

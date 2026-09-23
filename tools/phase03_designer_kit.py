@@ -56,6 +56,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ROOT / "tools"
 if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
+from roster_import_client import preview_and_commit, roster_csv  # noqa: E402  (tools/ path above)
 PHASE_ROOT = ROOT / "local_data" / "phase03_20260920"
 FREEZE_ROOT = ROOT / "build" / "phase03_20260920"
 VENV_PYTHON = ROOT / ".venv" / "bin" / "python"
@@ -301,9 +302,14 @@ class PlatformClient:
         self.http = windows_kit.HttpClient(port)
         self.port = port
         self.db_path = Path(db_path)
+        self.password = None
 
     def login(self, username, password):
         self.http.login(username, password)
+        # The study-page roster commit re-authenticates with the operator's own
+        # password, so the kit keeps it for that step only (never written to
+        # evidence or logs).
+        self.password = password
 
     def rows(self, sql, params=()):
         connection = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=20)
@@ -331,10 +337,22 @@ class PlatformClient:
         self.study_operation(study_id, [("op", "configure"), ("mode", mode), ("max_sessions", str(max_sessions))])
 
     def roster(self, study_id, mode):
+        """Create the labelled sample participant through the real study entry.
+
+        The batch is encoded as real CSV rows by the shared
+        ``roster_import_client.roster_csv`` (``csv.writer``, exact values, no
+        hand-joined tabs) and then previewed and committed with the operator's
+        own password (the study-page ``roster-import`` flow); the legacy direct
+        write entry is refused by the platform and is never used here.
+        """
         if mode == "anonymous":
             return
-        row = f"{ROSTER_ID}\t{ROSTER_PASSWORD}" if mode == "password" else ROSTER_ID
-        self.study_operation(study_id, [("op", "roster"), ("roster_format", "legacy_tab"), ("roster", row)])
+        if not self.password:
+            raise DesignerKitError("roster import needs the logged-in operator password for confirmation")
+        rows = [(ROSTER_ID, ROSTER_PASSWORD)] if mode == "password" else [(ROSTER_ID,)]
+        added = preview_and_commit(self.http, study_id, roster_csv(rows), self.password)
+        if added != 1:
+            raise DesignerKitError(f"roster import reported {added} new IDs instead of 1")
         codes = [row[0] for row in self.rows("select code from core_participant where study_id=?",
                                              [study_id.replace("-", "")])]
         if codes != [ROSTER_ID]:

@@ -13,7 +13,8 @@ researcher lifecycle over authenticated HTTP exactly as the GUI does:
 * upload the *same* immutable Windows x64 program archive to all three studies, so
   one program build serves every frozen mode, and prove the approved study mode
   cannot be edited afterwards (``policy_frozen_after_release``);
-* create real participant accounts through the roster operation, invite and
+* create real participant accounts through the study-page roster preview and its
+  password-confirmed commit, invite and
   activate one scoped research member through the real invitation flow, and record
   real logins plus real HTTP admissions (one per mode, plus a wrong-credential
   refusal) against the frozen releases;
@@ -56,6 +57,10 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import quote as urlquote
 
 ROOT = Path(__file__).resolve().parents[1]
+TOOLS = ROOT / "tools"
+if str(TOOLS) not in sys.path:
+    sys.path.insert(0, str(TOOLS))
+from roster_import_client import preview_and_commit, roster_csv  # noqa: E402  (tools/ path above)
 PHASE_ROOT = ROOT / "local_data" / "phase03_20260920"
 RUN_ROOT = PHASE_ROOT / "p0308"
 VENV_PYTHON = ROOT / ".venv" / "bin" / "python"
@@ -528,8 +533,8 @@ class KitBuilder:
 
     # ------------------------------------------------------------------ helpers
     def study_operation(self, study_id, fields, expect=(200, 302)):
-        # A successful op returns a redirect; a page-rendering op (roster,
-        # recovery code, invitation) returns 200 with the notice. Both are
+        # A successful op returns a redirect; a page-rendering op (recovery code,
+        # invitation) returns 200 with the notice. Both are
         # verified against the database right after the call.
         status, payload, record = self.http.post_form(f"/studies/{study_id}", fields, expect_redirect=False)
         if status not in expect:
@@ -616,6 +621,31 @@ class KitBuilder:
             raise KitError(f"study creation failed for mode {mode}: HTTP {status} {location!r}")
         return match.group(1)
 
+    def _import_roster(self, study_id, mode, rows):
+        """Create real participant accounts through the study-page roster entry.
+
+        ``rows`` is the explicit batch the caller decided for this mode (one
+        tuple per participant: the ID, plus the password in password mode; an
+        empty batch, the anonymous mode, imports nothing). The batch is encoded
+        as real CSV by the shared ``roster_import_client.roster_csv`` -
+        ``csv.writer``, never a hand-joined tab/comma string - so commas,
+        quotes, newlines, Unicode and surrounding whitespace travel exactly,
+        then previewed over real HTTP and committed with the operator's own
+        password. The legacy direct write entry is refused by the platform and
+        is never used here. Returns the number of new IDs the commit reported;
+        the caller owns the mode's account bookkeeping.
+        """
+        if not rows:
+            return 0
+        added = preview_and_commit(self.http, study_id, roster_csv(rows), self.instance.owner_password)
+        self.require(added == len(rows), f"{mode}：真实名单导入报告新增 {added} 个 ID",
+                     {"added": added, "expected": len(rows)})
+        codes = self.instance.participant_codes(study_id)
+        expected = sorted(row[0] for row in rows)
+        self.require(codes == expected, f"{mode}：真实名单账号已创建",
+                     {"codes": codes, "count": len(codes)})
+        return added
+
     def _prepare_mode(self, mode):
         study_id = self._create_study(mode)
         # The engineering cases create real sessions through the same roster code
@@ -634,17 +664,12 @@ class KitBuilder:
         self.require(build["descriptor"] == descriptor, "平台登记的描述等于上传的描述", build["id"])
 
         if mode == "id":
-            roster = "\n".join(ID_CODES)
+            rows = [(code,) for code in ID_CODES]
         elif mode == "password":
-            roster = "\n".join(f"{code}\t{self.participant_passwords[code]}" for code in ID_CODES)
+            rows = [(code, self.participant_passwords[code]) for code in ID_CODES]
         else:
-            roster = ""
-        if roster:
-            self.study_operation(study_id, [("op", "roster"), ("roster_format", "legacy_tab"), ("roster", roster)],
-                                 expect=(200, 302))
-            codes = self.instance.participant_codes(study_id)
-            self.require(codes == list(ID_CODES), f"{mode}：真实名单账号已创建",
-                         {"codes": codes, "count": len(codes)})
+            rows = []
+        if self._import_roster(study_id, mode, rows):
             for code in ID_CODES:
                 self.accounts["participants"].setdefault(mode, {})[code] = {
                     "code": code,

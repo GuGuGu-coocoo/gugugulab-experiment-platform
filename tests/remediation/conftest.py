@@ -58,6 +58,26 @@ def evidence_session_roots():
     return {}
 
 
+def ensure_evidence_root(evidence_session_roots, task):
+    """The session-unique evidence root for one task, created on first use.
+
+    One root per task and session even when module-scoped fixtures (a real
+    isolated instance, for example) and function-scoped tests both need it.
+    """
+    if task not in evidence_session_roots:
+        stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+        root = EVIDENCE_BASE / task / f'{stamp}-{secrets.token_hex(4)}'
+        root.mkdir(parents=True, exist_ok=False)
+        evidence_session_roots[task] = root
+    return evidence_session_roots[task]
+
+
+@pytest.fixture(scope='session')
+def evidence_root_for(evidence_session_roots):
+    """Task name -> this session's unique evidence root, for wider fixtures."""
+    return lambda task: ensure_evidence_root(evidence_session_roots, task)
+
+
 @pytest.fixture
 def evidence_root(request, evidence_session_roots):
     """This session's unique evidence root for the requesting module's task.
@@ -71,12 +91,7 @@ def evidence_root(request, evidence_session_roots):
     task = request.module.__name__.rsplit('.', 1)[-1]
     if task.startswith('test_'):
         task = task[len('test_'):]
-    if task not in evidence_session_roots:
-        stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-        root = EVIDENCE_BASE / task / f'{stamp}-{secrets.token_hex(4)}'
-        root.mkdir(parents=True, exist_ok=False)
-        evidence_session_roots[task] = root
-    return evidence_session_roots[task]
+    return ensure_evidence_root(evidence_session_roots, task)
 
 
 @pytest.fixture
