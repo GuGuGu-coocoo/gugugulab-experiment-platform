@@ -1,17 +1,38 @@
 {% if can_upload %}<section data-native-register="1"><h2>{{ui.builds_register_native}}</h2><p class="muted">{{ui.builds_register_native_hint}}</p>
 <form method="post">{% csrf_token %}<input type="hidden" name="op" value="native"><label>{{ui.builds_descriptor}} <textarea name="descriptor" placeholder="JSON" required></textarea></label><button>{{ui.builds_register_submit}}</button></form>
 <h3>{{ui.builds_upload_native}}</h3><p class="muted">{{ui.builds_upload_native_hint}}</p>
-<form id="native-package-upload" method="post" enctype="multipart/form-data">{% csrf_token %}<input type="hidden" name="op" value="native_archive"><label>{{ui.builds_list}} <select name="build_id">{% for build in builds %}{% if build.descriptor.platform in native_platforms %}<option value="{{build.id}}">{{build.descriptor.version}} · {{build.digest|slice:":12"}}{% if build.package_path %} · {{ui.builds_bound_package}}{% endif %}</option>{% endif %}{% endfor %}</select></label><input name="package" type="file" accept=".zip" required><button>{{ui.builds_upload_submit}}</button></form>
+<form id="native-package-upload" data-package-upload="1" method="post" enctype="multipart/form-data">{% csrf_token %}<input type="hidden" name="op" value="native_archive"><label>{{ui.builds_list}} <select name="build_id">{% for build in builds %}{% if build.descriptor.platform in native_platforms %}<option value="{{build.id}}">{{build.descriptor.version}} · {{build.digest|slice:":12"}}{% if build.package_path %} · {{ui.builds_bound_package}}{% endif %}</option>{% endif %}{% endfor %}</select></label><input name="package" type="file" accept=".zip" required><button>{{ui.builds_upload_submit}}</button><progress max="100" value="0" hidden></progress><p data-upload-status="1" role="status" aria-live="polite"></p></form>
 <h3>{{ui.builds_upload_web}}</h3><p class="muted">{{ui.builds_upload_web_hint}}</p>
-<form id="package-upload" method="post" enctype="multipart/form-data">{% csrf_token %}<input type="hidden" name="op" value="upload"><label>{{ui.builds_upload_web}} <input name="package" type="file" accept=".zip" required></label><button>{{ui.builds_upload_submit}}</button><progress id="upload-progress" max="100" value="0" hidden></progress><p id="upload-status" role="status" aria-live="polite"></p></form>
+<form id="package-upload" data-package-upload="1" method="post" enctype="multipart/form-data">{% csrf_token %}<input type="hidden" name="op" value="upload"><label>{{ui.builds_upload_web}} <input name="package" type="file" accept=".zip" required></label><button>{{ui.builds_upload_submit}}</button><progress id="upload-progress" max="100" value="0" hidden></progress><p id="upload-status" data-upload-status="1" role="status" aria-live="polite"></p></form>
 </section>{% endif %}
 <section data-builds-list="1"><h2>{{ui.builds_list}}</h2>{% for build in builds %}<article class="panel" data-build-row="{{build.id}}"><strong>{{build.descriptor.platform|default:"—"}} · {{build.descriptor.version|default:"—"}}</strong><p><code>{{build.digest}}</code></p>{% if build.package_path %}<p>{{ui.builds_bound_package}}：<code>{{build.package_path}}</code></p>{% elif build.descriptor.platform in native_platforms %}<p class="muted">{{ui.builds_registered_only}}</p>{% endif %}{% if can_approve %}<form method="post">{% csrf_token %}<input type="hidden" name="op" value="approve"><input type="hidden" name="build_id" value="{{build.id}}"><button>{{ui.builds_approve}}</button></form>{% endif %}{% if build.package_path and can_preview %}<form method="post" target="_blank">{% csrf_token %}<input type="hidden" name="op" value="preview"><input type="hidden" name="build_id" value="{{build.id}}"><button>{{ui.builds_preview}}</button></form>{% endif %}</article>{% empty %}<p data-builds-empty="1">{{ui.builds_empty}}</p>{% endfor %}</section>
-<section data-releases-list="1"><h2>{{ui.builds_releases}}</h2>{% for release in releases %}<p data-release-row="{{release.id}}"><strong>{{release.platform|default:"—"}} · {{release.version|default:"—"}}</strong> <small>{{release.id}}</small>
+<section data-releases-list="1"><h2>{{ui.builds_releases}}</h2>{% for release in releases %}<p data-release-row="{{release.id}}" id="release-{{release.id}}"><strong>{{release.platform|default:"—"}} · {{release.version|default:"—"}}</strong> <small>{{release.id}}</small>
 {% if not release.approved %} · <span class="badge">{{ui.builds_release_unapproved}}</span>{% elif release.platform in native_platforms %}{% if release.artifact_ready %} · <span class="badge ok">{{ui.builds_release_native_complete}}</span>{% else %} · <span class="badge">{{ui.builds_release_native_missing}}</span>{% endif %}{% elif not release.build.package_path %} · <span class="badge">{{ui.builds_release_no_web}}</span>{% else %} · <span class="badge">{{ui.builds_release_web}}</span>{% endif %}
 {% if release.artifact_ready and can_upload %} · <a href="/releases/{{release.id}}/artifact" data-artifact="{{release.id}}">{{ui.builds_download_artifact}}</a> · <a href="/releases/{{release.id}}/artifact/artifact_manifest.json">{{ui.builds_manifest}}</a> · <a href="/releases/{{release.id}}/artifact/{{release.artifact_config_member}}">connection.json</a>{% endif %}
 {% if can_configure %} · <a href="/releases/{{release.id}}/config">{{ui.builds_config_link}}</a>{% endif %}
 {% if release.approved and release.platform == "godot_web" and release.build.package_path %} · <a href="{{public_api_url}}/run/{{release.id}}/web/index.html" target="_blank" rel="noopener noreferrer">{{ui.builds_open_entry}}</a>{% endif %}
 </p>{% empty %}<p data-releases-empty="1">{{ui.builds_releases_empty}}</p>{% endfor %}</section>
 <script>
-if(document.querySelector('#package-upload')) document.querySelector('#package-upload').onsubmit=e=>{e.preventDefault();const form=e.target,button=form.querySelector('button'),bar=document.querySelector('#upload-progress'),status=document.querySelector('#upload-status');button.disabled=true;bar.hidden=false;const xhr=new XMLHttpRequest();xhr.open('POST',location.pathname);xhr.upload.onprogress=e=>{if(e.lengthComputable){bar.value=100*e.loaded/e.total;status.textContent=bar.value<100?'{{ui.builds_uploading|escapejs}}':'{{ui.builds_verifying|escapejs}}'}};xhr.onload=()=>{if(xhr.status>=200&&xhr.status<300){location.reload()}else{button.disabled=false;status.textContent='{{ui.builds_upload_failed|escapejs}}'}};xhr.onerror=()=>{button.disabled=false;status.textContent='{{ui.builds_network_failed|escapejs}}'};xhr.send(new FormData(form));};
+document.querySelectorAll('form[data-package-upload]').forEach(form=>{
+ form.addEventListener('submit',event=>{
+  event.preventDefault();
+  const button=form.querySelector('button'),bar=form.querySelector('progress'),status=form.querySelector('[data-upload-status]');
+  const show=(message,isError)=>{if(status){status.textContent=message;status.className=isError?'error':'';}};
+  if(button)button.disabled=true;
+  if(bar)bar.hidden=false;
+  const xhr=new XMLHttpRequest();
+  xhr.open('POST',location.pathname);
+  xhr.setRequestHeader('Accept','application/json');
+  xhr.upload.onprogress=e=>{if(e.lengthComputable&&bar){bar.value=100*e.loaded/e.total;show(bar.value<100?'{{ui.builds_uploading|escapejs}}':'{{ui.builds_verifying|escapejs}}',false);}};
+  xhr.onload=()=>{
+   if(xhr.status>=200&&xhr.status<300){location.reload();return;}
+   if(button)button.disabled=false;
+   let message='{{ui.builds_upload_failed|escapejs}}';
+   try{const data=JSON.parse(xhr.responseText);if(data&&data.error)message=data.error;}catch(_){}
+   show(message,true);
+  };
+  xhr.onerror=()=>{if(button)button.disabled=false;show('{{ui.builds_network_failed|escapejs}}',true);};
+  xhr.send(new FormData(form));
+ });
+});
 </script>

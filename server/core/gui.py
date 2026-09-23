@@ -10,6 +10,7 @@ import zipfile
 from datetime import timedelta
 from pathlib import Path
 from urllib.parse import urlparse
+from jsonschema.exceptions import SchemaError
 from django.conf import settings
 from django.contrib.auth import authenticate, login, logout, get_user_model
 from django.contrib.auth.hashers import make_password
@@ -182,6 +183,61 @@ STUDY_MESSAGES = {
     'release_not_found':'所选发行不存在或不属于本研究，未执行任何更改。',
     'release_unapproved':'只能把已批准的发行设为当前发行。',
     'release_unavailable':'该发行没有可用的已发布资源（Web 包或平台完整原生包），不能作为当前发行。',
+    # Upload / descriptor / native program rejection reasons (bilingual via
+    # ui.ERRORS_EN). Every message states the reason and that nothing changed;
+    # none of them echoes a file path or other server-side location.
+    'archive_limit':'文件超过上传大小上限，已整体拒绝，未登记任何构建。',
+    'file_count':'压缩包文件数量超出上限，已整体拒绝。',
+    'unsafe_path':'压缩包内存在不安全的成员路径（绝对路径、越级目录、反斜杠或冒号），已整体拒绝。',
+    'duplicate_path':'压缩包内存在重复成员路径（大小写或 Unicode 折叠后相同），已整体拒绝。',
+    'non_regular_file':'压缩包包含链接或非普通文件，已整体拒绝。',
+    'reserved_path':'压缩包成员位置不受支持（Web 包只允许 web/ 与 manifest.json）。',
+    'expanded_limit':'压缩包展开后超过大小上限，已整体拒绝。',
+    'compression_ratio':'压缩包压缩比异常，已整体拒绝。',
+    'entry_missing':'Web 包缺少入口 web/index.html。',
+    'program_digest_mismatch':'程序摘要与描述不一致，文件可能被修改，已整体拒绝。',
+    'invalid_archive':'文件不是有效的 ZIP 压缩包，已整体拒绝。',
+    'invalid_json':'描述或 manifest 不是有效 JSON。',
+    'schema_object':'schema 必须是 JSON 对象。',
+    'schema_definition':'schema 定义不合法：每项必须包含 id、version 与合法 schema。',
+    'schema_references_unsupported':'schema 不接受 $ref/$dynamicRef/$id 引用。',
+    'schema_limit':'schema 数量必须在 1–16 之间。',
+    'schema_invalid':'schema 不是合法的 JSON Schema 定义。',
+    'descriptor_fields':'构建描述字段不完整或包含未知字段，已整体拒绝。',
+    'incompatible_build':'构建的协议、SDK 或引擎版本与本平台不兼容。',
+    'unsupported_platform':'构建平台不在受支持平台列表内。',
+    'build_version':'版本字符串不合法（1–64 字符）。',
+    'program_digest':'程序摘要必须是 64 位小写十六进制。',
+    'codebook_required':'构建描述必须包含非空 codebook。',
+    'package_metadata':'程序包元数据（根目录、入口、依赖、扩展清单）不合法，已整体拒绝。',
+    'native_platform':'该构建不是受支持的独立原生平台。',
+    'version_content_conflict':'同一版本与平台已登记不同的程序摘要，本次未登记任何构建。',
+    'build_conflict':'已存在同摘要但描述或程序包不同的不可变构建，本次未做更改。',
+    'web_preview_only':'该构建没有可预览的程序包。',
+    'native_program_missing':'该原生构建还没有完整程序包，不能批准发行。',
+    'unsafe_script':'程序包包含可执行脚本，已整体拒绝。',
+    'undeclared_executable':'程序包包含未声明的可执行映像，已整体拒绝。',
+    'multiple_bundles':'程序包包含多个根目录或应用包，已整体拒绝。',
+    'missing_binary':'macOS 包缺少 Contents/MacOS 下的可执行二进制。',
+    'missing_info_plist':'macOS 包缺少 Info.plist。',
+    'missing_pck':'程序包缺少 PCK 资源文件。',
+    'missing_entry':'程序包缺少描述声明的入口文件。',
+    'missing_dependencies':'程序包缺少描述声明的原生依赖。',
+    'invalid_entry':'入口程序不是匹配架构的 x86-64 可执行文件。',
+    'invalid_dependency':'声明的依赖不是匹配架构的 x86-64 DLL。',
+    'invalid_image':'程序映像不是有效的 PE 文件。',
+    'wrong_architecture':'程序映像不是 x86-64 架构，已整体拒绝。',
+    'invalid_pck':'PCK 文件不合法，已整体拒绝。',
+    'unsupported_pck':'PCK 格式不受支持，已整体拒绝。',
+    'engine_version_mismatch':'PCK 记录的引擎版本与描述不符（本平台为 4.7.2）。',
+    'invalid_extension':'GDExtension 清单不是有效的 UTF-8 文本清单。',
+    'extension_configuration_missing':'GDExtension 清单缺少 [configuration] 段。',
+    'extension_entry_symbol':'GDExtension 清单的 entry_symbol 不合法。',
+    'extension_libraries_missing':'GDExtension 清单缺少 [libraries] 段。',
+    'extension_library_missing':'GDExtension 清单缺少 windows.release.x86_64 的 res:// 引用。',
+    'extension_dependency_missing':'GDExtension 清单引用的库不是描述声明的依赖。',
+    'frozen_path_conflict':'程序包成员与冻结生成的配置或清单路径冲突，已整体拒绝。',
+    'admin_origin':'管理地址配置无效，未生成任何链接。',
 }
 
 
@@ -283,6 +339,7 @@ def study_page(request,study_id,module='overview'):
       if request.method=='POST':
         op=request.POST.get('op')
         audited=False
+        target=''
         with transaction.atomic():
             instance=Instance.objects.select_for_update().get(pk=1)
             study=Study.objects.select_for_update().get(pk=study_id)
@@ -362,7 +419,8 @@ def study_page(request,study_id,module='overview'):
                     release.approved=True;release.save(update_fields=['approved'])
                     audited=True
                 else:
-                    Release.objects.create(study=study,build=build,approved=True,config=config)
+                    release=Release.objects.create(study=study,build=build,approved=True,config=config)
+                target=workbench.module_url(study,'builds')+'#release-'+str(release.id)
             elif op=='recruitment':
                 guard(request.user,study,'recruitment.manage')
                 state=request.POST['state'];require(state in ('open','paused','closed'),'state')
@@ -433,13 +491,18 @@ def study_page(request,study_id,module='overview'):
       context=study_context(request,study,notice,module)
       context.update(workbench.module_context(request,study,module))
       if request.method=='POST' and not notice:
-        return redirect(workbench.module_url(study,module))
+        return redirect(target or workbench.module_url(study,module))
       return render(request,'core/study.html',context)
-    except (Rejected,ObjectDoesNotExist,ValueError,KeyError,TypeError,csv.Error) as error:
-      if 'text/html' not in request.headers.get('Accept',''):
-        raise
-      code=error.code if isinstance(error,Rejected) else 'invalid_request'
+    except (Rejected,ObjectDoesNotExist,ValueError,KeyError,TypeError,csv.Error,SchemaError) as error:
+      code=(error.code if isinstance(error,Rejected)
+            else 'schema_invalid' if isinstance(error,SchemaError)
+            else 'invalid_request')
       status=error.status if isinstance(error,Rejected) else 400
+      accept=request.headers.get('Accept','')
+      if 'text/html' not in accept:
+        if 'application/json' in accept:
+          return JsonResponse({'code':code,'error':study_error_message(request,code)},status=status)
+        raise
       context=study_context(request,study,notice,module)
       context.update(error=study_error_message(request,code),error_code=code,module_error=True)
       return render(request,'core/study.html',context,status=status)
