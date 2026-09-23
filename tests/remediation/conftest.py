@@ -52,17 +52,6 @@ def _drain_tokens(read_fd, limit=TOKEN_DRAIN_LIMIT):
 
 
 
-@pytest.fixture(scope='session', autouse=True)
-def browser_static_urls(django_test_environment):
-    """Django's live-server static wrapper requires string URL prefixes."""
-    from django.conf import settings
-    before = (settings.STATIC_URL, settings.MEDIA_URL)
-    settings.STATIC_URL = '/static/'
-    settings.MEDIA_URL = '/media/'
-    yield
-    settings.STATIC_URL, settings.MEDIA_URL = before
-
-
 @pytest.fixture(scope='session')
 def evidence_session_roots():
     """Task name -> this session's evidence root (created on first use)."""

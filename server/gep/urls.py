@@ -33,3 +33,7 @@ urlpatterns += [
     path('account/password',gui_accounts.password_page),
     path('activate-account',gui_accounts.activate_account_page),
 ]
+
+# Fixed public browser assets (exact whitelist; no directory serving).
+from core import assets
+urlpatterns += [path('static/<path:asset_path>',assets.asset)]

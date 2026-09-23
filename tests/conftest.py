@@ -1,9 +1,12 @@
 import os
 import uuid
+from pathlib import Path
 import pytest
 from django.contrib.auth import get_user_model
 from core.models import Instance, Study, Build, Release
 from core.services import admit
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 @pytest.fixture(scope='session')
 def django_db_modify_db_settings():
@@ -38,6 +41,17 @@ def live_server(request):
     from pytest_django.live_server_helper import LiveServer
     addr = (request.config.getvalue('liveserver')
             or os.getenv('DJANGO_LIVE_TEST_SERVER_ADDRESS') or 'localhost')
+    # Django's live-server thread always installs its private static-file
+    # wrapper, which needs a string STATIC_URL/STATIC_ROOT to initialize. The
+    # wrapper is pointed at a path that does not exist, so every /static/...
+    # request raises Http404 inside it and falls through to the application's
+    # own whitelist route (core.assets): the asset is served by exactly the code
+    # path the running application uses, with no test-only static serving.
+    from django.conf import settings
+    before = (settings.STATIC_URL, settings.STATIC_ROOT)
+    if not settings.STATIC_URL:
+        settings.STATIC_URL = '/static/'
+    settings.STATIC_ROOT = str(REPO_ROOT / '.live-server-no-static-root')
     server = LiveServer(addr, start=False)
     # The shared connection is the race; the server thread and its request
     # threads open their own connections to the same shared-cache database.
@@ -45,6 +59,7 @@ def live_server(request):
     server.start()
     yield server
     server.stop()
+    settings.STATIC_URL, settings.STATIC_ROOT = before
 
 @pytest.fixture
 def setup(db):

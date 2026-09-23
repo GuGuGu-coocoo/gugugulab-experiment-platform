@@ -8,6 +8,7 @@ operations at /users.
 """
 from django.contrib.auth import get_user_model, update_session_auth_hash
 from django.core.exceptions import ObjectDoesNotExist
+from django.http import JsonResponse
 from django.shortcuts import redirect, render
 from django.utils import timezone
 
@@ -88,6 +89,10 @@ MESSAGES = {
     'unknown_choice_required': '未知项必须逐条给出明确选择后才能启用；本次未写入任何更改。',
     'unknown_choice_invalid': '未知项的选择值不受支持；本次未写入任何更改。',
     'unknown_choice_unknown': '提交中包含预览之外的未知项选择；本次未写入任何更改。',
+    'invisible_subaction': '研究不可见时不能保留子权限；本次未写入任何更改。',
+    'platform_required': '请至少选择一项平台开关再预览。',
+    'platform_value': '平台开关的取值必须是允许或不允许。',
+    'authorization_upgrade_required': '平台开关需要 v2 授权；本次未写入任何更改。',
 }
 
 
@@ -180,7 +185,10 @@ def _apply(request):
         else:
             shown = '、'.join(result['actions']) or '无显式动作'
             notice = f"权限矩阵已更新：{result['username']} · {result['study']} → {shown}。"
-        return {'notice': notice}
+        # The committed marker lets the client drop exactly this entry's draft
+        # after the server really stored it; the marker carries no secret.
+        return {'notice': notice, 'committed': {'kind': 'matrix', 'user_id': result['user_id'],
+                                                'study_id': result['study_id']}}
     if op == 'platform_preview':
         preview = permissions.preview_platform(request.user, request.POST)
         return {'preview': permissions.preview_payload(preview, lang), 'commit_op': 'platform_commit'}
@@ -190,7 +198,7 @@ def _apply(request):
             notice = f"Platform permissions updated: {result['username']} → {', '.join(result['platform'])}."
         else:
             notice = f"平台权限已更新：{result['username']} → {'、'.join(result['platform'])}。"
-        return {'notice': notice}
+        return {'notice': notice, 'committed': {'kind': 'platform', 'user_id': result['user_id']}}
     if op == 'migration_diff':
         # Read-only, Owner-only: no preview row, no permission write, no
         # version change. An ordinary Admin never receives the instance-wide
@@ -250,9 +258,14 @@ def users_page(request):
     # One version-routed governance gate: v1 keeps the Owner/Admin boundary,
     # v2 needs the finite accounts.view platform action from the stored policy.
     require(allowed_platform(request.user, 'accounts.view'), 'forbidden', 403)
+    if request.method == 'GET' and request.GET.get('preview_status'):
+        # Read-only unknown-result check for the unified confirmation dialog:
+        # it reports whether the actor's own preview was consumed, still pending
+        # or expired, and returns no staged secret. Nothing is written here.
+        return JsonResponse(permissions.preview_status(request.user, request.GET.get('preview_status', '')))
     extra = {'notice': '', 'error': '', 'secret': None, 'secret_username': '',
              'invitation_username': '', 'preview': None, 'invitation_tokens': [], 'import_result': None,
-             'deleted_principal': '', 'deleted_username': ''}
+             'deleted_principal': '', 'deleted_username': '', 'committed': None}
     status = 200
     if request.method == 'POST':
         try:
@@ -262,7 +275,9 @@ def users_page(request):
             extra['error'] = message_for(code, ui.lang_of(request))
             status = error.status if isinstance(error, Rejected) else 400
             # A rejected confirmation (for example a wrong own password) keeps the
-            # still-valid preview visible so the actor can retry it.
+            # still-valid preview visible so the actor can retry it, but only
+            # while the current authority for that exact operation still holds;
+            # a lost scope never re-renders the stored account/study names.
             pending = permissions.pending_preview(request.user, request.POST.get('preview_id'))
             if pending is not None and permissions.preview_retry_authorized(request.user, pending):
                 extra['preview'] = permissions.preview_payload(pending, ui.lang_of(request))

@@ -1,14 +1,15 @@
 {% extends 'core/workbench.html' %}{% block content %}
 <h1>{{ui.users_title}}</h1>
-<p>{{ui.users_intro}}</p>
+<p>{% if matrix.version == 2 %}{{ui.users_intro_v2}}{% else %}{{ui.users_intro}}{% endif %}</p>
 <p><a href="/">{{ui.back_to_studies}}</a> · <a href="/account/password">{{ui.nav_password}}</a></p>
-{% if notice %}<div class="notice"{% if deleted_principal %} data-deleted-principal="{{deleted_principal}}" data-deleted-username="{{deleted_username}}"{% endif %}>{{notice}}</div>{% endif %}
+{% if notice %}<div class="notice" tabindex="-1"{% if committed %} data-committed-kind="{{committed.kind}}"{% if committed.user_id %} data-committed-user="{{committed.user_id}}"{% endif %}{% if committed.study_id %} data-committed-study="{{committed.study_id}}"{% endif %}{% endif %}{% if deleted_principal %} data-deleted-principal="{{deleted_principal}}" data-deleted-username="{{deleted_username}}"{% endif %}>{{notice}}</div>{% endif %}
 {% if secret %}<div class="notice" data-one-time-secret="1">{{ui.users_secret_note}} {{secret_username}} <code>{{secret}}</code></div>{% endif %}
 {% if invitation_link %}<div class="notice" data-one-time-invitation="1">{{ui.users_invitation_note}} {{invitation_username}} · {{ui.users_invitation_link_note}} <a href="{{invitation_link}}" data-invitation-link="{{invitation_link}}">{{invitation_link}}</a> <small>{{ui.users_invitation_help}}</small></div>{% endif %}
 {% for invite in invitation_tokens %}<div class="notice" data-one-time-invitation="1">{{ui.users_import_invitation_note}} {{invite.username}} · {{ui.users_invitation_link_note}} <a href="{{invite.link}}" data-invitation-link="{{invite.link}}">{{invite.link}}</a> <small>{{ui.users_invitation_help}}</small></div>{% endfor %}
 {% if error %}<div class="error" role="alert">{{error}}</div>{% endif %}
 {% if preview %}<section data-preview="{{preview.preview_kind}}" data-preview-id="{{preview.preview_id}}"><h2>{{ui.users_preview_heading}}</h2>
 {% if preview.preview_kind == 'matrix' %}<p>{% if lang == 'en' %}Account {{preview.preview_summary.username}} · study {{preview.preview_summary.study}}: add {{preview.preview_summary.add|join:", "|default:"none"}}; remove {{preview.preview_summary.remove|join:", "|default:"none"}}; delegable-flag changes {{preview.preview_summary.delegable_changed|join:", "|default:"none"}}. Actions after the change: {{preview.preview_summary.target|join:", "|default:"no explicit actions"}}.{% else %}账号 {{preview.preview_summary.username}} · 研究 {{preview.preview_summary.study}}：新增 {{preview.preview_summary.add|join:"、"|default:"无"}}；移除 {{preview.preview_summary.remove|join:"、"|default:"无"}}；委派标记变化 {{preview.preview_summary.delegable_changed|join:"、"|default:"无"}}。变更后动作：{{preview.preview_summary.target|join:"、"|default:"无显式动作"}}。{% endif %}</p>{% endif %}
+{% if preview.preview_kind == 'platform' %}<p data-platform-preview="1">{{preview.preview_summary.username}} · {{ui.users_platform_before}}：{% if lang == 'en' %}{{preview.preview_summary.before|join:", "|default:"—"}}{% else %}{{preview.preview_summary.before|join:"、"|default:"—"}}{% endif %}；{{ui.users_platform_after}}：{% if lang == 'en' %}{{preview.preview_summary.after|join:", "|default:"—"}}{% else %}{{preview.preview_summary.after|join:"、"|default:"—"}}{% endif %}。{{ui.users_platform_note}}</p>{% endif %}
 {% if preview.preview_kind == 'reconcile' %}<div class="table-wrap"><table><tr><th>{{ui.common_username}}</th><th>{{ui.common_study}}</th><th>{{ui.users_conflict_actions}}</th></tr>{% for row in preview.preview_summary.rows %}<tr><td>{{row.username}}</td><td>{{row.study}}</td><td>{{row.actions|join:"、"}}</td></tr>{% endfor %}</table></div><p>{% if lang == 'en' %}{{ui.users_choice}}: {% if preview.preview_summary.choice == 'grant_view' %}{{ui.users_choice_grant_view}}{% else %}{{ui.users_choice_remove_conflicting}}{% endif %}. {{ui.users_preview_reconcile_note}}{% else %}{{ui.users_choice}}：{% if preview.preview_summary.choice == 'grant_view' %}{{ui.users_choice_grant_view}}{% else %}{{ui.users_choice_remove_conflicting}}{% endif %}。{{ui.users_preview_reconcile_note}}{% endif %}</p>{% endif %}
 {% if preview.preview_kind == 'users_import' %}<p>{% if lang == 'en' %}Read {{preview.preview_summary.rows}} rows; {{preview.preview_summary.operations|length}} operations can run; invitations to issue: {{preview.preview_summary.invitations|join:", "|default:"none"}}. Existing passwords are never reset by imports.{% else %}共读取 {{preview.preview_summary.rows}} 行，可执行 {{preview.preview_summary.operations|length}} 项；将发出邀请：{{preview.preview_summary.invitations|join:"、"|default:"无"}}。已有密码永不被导入重置。{% endif %}</p><div class="table-wrap"><table><tr><th>{{ui.users_import_col_row}}</th><th>{{ui.users_import_col_operation}}</th><th>{{ui.users_import_col_username}}</th><th>{{ui.users_import_col_study}}</th><th>{{ui.users_import_col_actions}}</th></tr>{% for row in preview.preview_summary.operations %}<tr><td>{{row.row}}</td><td>{{row.operation}}</td><td>{{row.username}}</td><td>{{row.study_id|default:"—"}}</td><td>{{row.actions|join:"、"|default:"—"}}</td></tr>{% endfor %}</table></div>{% endif %}
 {% if preview.preview_kind == 'roster_import' %}<p>{% if lang == 'en' %}Study {{preview.preview_summary.study}} (mode {{preview.preview_summary.mode}}): read {{preview.preview_summary.rows}} rows, append {{preview.preview_summary.new_ids}} new IDs; {% if preview.preview_summary.passwords_set %}passwords were hashed into private staging immediately, so previews, sessions, logs and exports never contain plaintext.{% else %}this mode does not read a password column.{% endif %}{% else %}研究 {{preview.preview_summary.study}}（模式 {{preview.preview_summary.mode}}）：读取 {{preview.preview_summary.rows}} 行，追加 {{preview.preview_summary.new_ids}} 个新 ID；{% if preview.preview_summary.passwords_set %}密码已立即哈希到私密暂存，预览、会话、日志与导出都不含明文。{% else %}本模式不读取密码列。{% endif %}{% endif %}</p>{% endif %}
@@ -22,7 +23,7 @@
 <td>{% for row in subject.studies %}{% if row.preserved %}{% if lang == 'en' %}{{row.title}}: {{row.preserved|join:", "}}{% else %}{{row.title}}: {{row.preserved|join:"、"}}{% endif %}<br>{% endif %}{% endfor %}</td>
 <td>{% if subject.future.actions %}{% if lang == 'en' %}{{subject.future.actions|join:", "}}{% else %}{{subject.future.actions|join:"、"}}{% endif %}{% else %}—{% endif %}{% if subject.future.choice %} <small>[{{subject.future.choice}}]</small>{% endif %}</td></tr>{% endfor %}</table></div></div>{% endif %}
 {% if preview.preview_errors %}<h3>{{ui.users_row_errors}}</h3><div class="table-wrap"><table><tr><th>{{ui.users_import_col_row}}</th><th>{{ui.users_error_col_code}}</th><th>{{ui.users_error_col_message}}</th></tr>{% for item in preview.preview_errors %}<tr><td>{{item.row}}</td><td>{{item.code}}</td><td>{{item.message}}</td></tr>{% endfor %}</table></div>{% else %}
-<form method="post">{% csrf_token %}<input type="hidden" name="op" value="{{commit_op}}"><input type="hidden" name="preview_id" value="{{preview.preview_id}}"><input type="hidden" name="revision" value="{{revision}}">
+<form method="post"{% if preview.preview_kind == 'platform' or preview.preview_kind == 'matrix' and matrix.version == 2 %} data-confirm="password"{% endif %}>{% csrf_token %}<input type="hidden" name="op" value="{{commit_op}}"><input type="hidden" name="preview_id" value="{{preview.preview_id}}"><input type="hidden" name="revision" value="{{revision}}">
 <label>{{ui.users_confirm_password}}<input type="password" name="password" required></label><button>{{ui.users_confirm_commit}}{% if lang == 'en' %} (valid once before {{preview.preview_expires_at|date:"H:i"}}){% else %}（{{preview.preview_expires_at|date:"H:i"}} {{ui.users_confirm_expiry}}）{% endif %}</button></form>{% endif %}</section>{% endif %}
 <section data-accounts><h2>{{ui.users_accounts}}</h2>
 <p class="muted" data-accounts-total="{{matrix.total}}">{% if lang == 'en' %}{{ui.users_accounts_note}} {{matrix.total}} ({{ui.common_page}} {{matrix.page}} / {{matrix.pages}}){% else %}{{ui.users_accounts_note}} 共 {{matrix.total}} 个账号（{{matrix.page}} / {{matrix.pages}} {{ui.common_page}}）{% endif %}</p>
@@ -34,21 +35,55 @@
 <form method="post">{% csrf_token %}<input type="hidden" name="op" value="reset_password"><input type="hidden" name="username" value="{{row.username}}"><input type="hidden" name="revision" value="{{revision}}"><input type="password" name="password" placeholder="{{ui.users_your_password}}" required><button>{{ui.users_reset_password}}</button></form>
 {% if is_owner %}<form method="post">{% csrf_token %}<input type="hidden" name="op" value="set_role"><input type="hidden" name="username" value="{{row.username}}"><input type="hidden" name="revision" value="{{revision}}"><select name="role"><option value="user"{% if row.role == 'user' %} selected{% endif %}>user</option><option value="admin"{% if row.role == 'admin' %} selected{% endif %}>admin</option></select><input type="password" name="password" placeholder="{{ui.users_your_password}}" required><button>{{ui.users_save_role}}</button></form>{% endif %}
 {% if row.is_active %}<form method="post">{% csrf_token %}<input type="hidden" name="op" value="disable"><input type="hidden" name="username" value="{{row.username}}"><input type="hidden" name="revision" value="{{revision}}"><input type="password" name="password" placeholder="{{ui.users_your_password}}" required><button>{{ui.users_disable}}</button></form>{% else %}<form method="post">{% csrf_token %}<input type="hidden" name="op" value="enable"><input type="hidden" name="username" value="{{row.username}}"><input type="hidden" name="revision" value="{{revision}}"><input type="password" name="password" placeholder="{{ui.users_your_password}}" required><button>{{ui.users_enable}}</button></form>{% endif %}
-{% if row.can_delete %}<details data-delete-account="{{row.id}}"><summary style="color:var(--danger)">{{ui.users_delete_summary}}</summary>
+{% if row.can_delete %}{% if matrix.version == 2 %}<button type="button" data-delete-account="{{row.id}}" data-danger="1" data-confirm-open="delete" data-confirm-op="delete" data-confirm-username="{{row.username}}" data-confirm-title="{{ui.users_delete_summary}}" data-revision="{{revision}}">{{ui.users_delete_summary}}</button>{% else %}<details data-delete-account="{{row.id}}"><summary style="color:var(--danger)">{{ui.users_delete_summary}}</summary>
 <p class="muted">{{ui.users_delete_warning}}</p>
 <form method="post" data-delete-form="1">{% csrf_token %}<input type="hidden" name="op" value="delete"><input type="hidden" name="username" value="{{row.username}}"><input type="hidden" name="revision" value="{{revision}}">
 <label>{{ui.users_delete_confirm_username}}<input name="confirm_username" maxlength="150" autocomplete="off" required></label>
 <label>{{ui.users_confirm_password}}<input type="password" name="password" autocomplete="off" required></label>
-<button class="error" data-danger="1">{{ui.users_delete_submit}}</button></form></details>{% endif %}
+<button class="error" data-danger="1">{{ui.users_delete_submit}}</button></form></details>{% endif %}{% endif %}
 {% endif %}</td></tr>{% endfor %}</table></div>
 {% if matrix.page_links %}<nav class="pager" data-account-pager aria-label="{{ui.users_account_pager}}">{% for link in matrix.page_links %}<a href="{{link.url}}"{% if link.current %} aria-current="page"{% endif %}>{{link.number}}</a>{% endfor %}</nav>{% endif %}</section>
 <section data-account-audit><h2>{{ui.users_audit_title}}</h2><p class="muted">{{ui.users_audit_note}}</p>
 {% if account_audit %}<div class="table-wrap"><table><tr><th>{{ui.users_audit_time}}</th><th>{{ui.users_audit_actor}}</th><th>{{ui.users_audit_action}}</th><th>{{ui.users_audit_target}}</th></tr>
 {% for item in account_audit %}<tr data-audit-row="{{item.action}}" data-audit-actor="{{item.actor}}"{% if item.actor_principal %} data-audit-principal="{{item.actor_principal}}"{% endif %} data-audit-deleted="{{item.actor_deleted|yesno:'1,0'}}"><td>{{item.created_at}}</td><td>{{item.actor}}</td><td>{{item.action}}</td><td>{{item.target}}</td></tr>{% endfor %}</table></div>{% else %}<p data-account-audit-empty="1">{{ui.users_audit_empty}}</p>{% endif %}</section>
-<section data-permission-matrix><h2>{{ui.users_matrix}}</h2><p>{{ui.users_matrix_help}}</p>
+<section data-permission-matrix data-matrix-version="{{matrix.version}}" data-instance-revision="{{revision}}"{% if matrix.draft_scope %} data-draft-scope="{{matrix.draft_scope}}"{% endif %}><h2>{{ui.users_matrix}}</h2><p>{% if matrix.version == 2 %}{{ui.users_matrix_help_v2}}{% else %}{{ui.users_matrix_help}}{% endif %}</p>
 {% if not matrix.owner_scope %}<p class="muted" data-matrix-scope="1">{{ui.users_matrix_scope_note}}</p>{% endif %}
 <form method="get" data-matrix-search="1"><label>{{ui.users_matrix_search}} <input name="q" value="{{matrix.search}}" maxlength="150"></label><button>{{ui.common_search}}</button>{% if matrix.search %} <a href="/users">{{ui.users_matrix_clear}}</a>{% endif %}</form>
 <p class="muted" data-matrix-total="{{matrix.total}}">{% if lang == 'en' %}{{ui.users_matrix_total}}: {{matrix.total}} ({{ui.common_page}} {{matrix.page}} / {{matrix.pages}}){% else %}{{ui.users_matrix_total}}：{{matrix.total}}（{{matrix.page}} / {{matrix.pages}} {{ui.common_page}}）{% endif %}</p>
+{% if matrix.version == 2 %}
+<div class="draft-banner" data-draft-banner hidden><strong>{{ui.users_draft_banner}}</strong> <span data-draft-count>0</span> {{ui.users_draft_items}} <span data-draft-stale hidden><b data-draft-stale-count>0</b> {{ui.users_draft_stale}}</span> <button type="button" class="secondary" data-draft-clear>{{ui.users_draft_clear}}</button> <small class="muted">{{ui.users_draft_note}}</small></div>
+<div class="table-wrap matrix-wrap">
+<table class="matrix-table"><tr><th>{{ui.common_username}}</th><th>{{ui.common_role}}</th><th>{{ui.users_editable_scope}}</th><th>{{ui.common_actions}}</th></tr>
+{% for row in matrix.rows %}
+<tr data-matrix-user-row="{{row.id}}" data-owner-row="{{row.is_owner|yesno:'1,0'}}" data-account-role="{{row.role}}">
+<th scope="row" data-matrix-account="{{row.id}}">{{row.username}} <small>{% if row.is_owner %}{{ui.users_badge_owner}}{% elif row.role == 'admin' %}{{ui.role_admin}}{% else %}{{ui.role_user}}{% endif %}</small></th>
+<td>{% if row.is_active %}{{ui.users_state_active}}{% else %}{{ui.users_state_disabled}}{% endif %}{% if row.must_change_password %} · {{ui.users_password_change}}{% endif %}</td>
+<td><small data-hidden-studies="{{row.hidden_studies}}">{% if row.hidden_studies %}{{ui.users_hidden_studies}} {{row.hidden_studies}} {{ui.users_hidden_studies_note}}{% else %}{{ui.users_no_hidden_studies}}{% endif %}</small>
+{% if row.editable_studies %}<br><label class="inline"><input type="checkbox" data-select-all-user="{{row.id}}"> {{ui.users_select_all_scope}}（{{row.editable_studies}} {{ui.users_unit_studies}} / {{row.editable_actions}} {{ui.users_unit_actions}}）</label> <small data-scope-state="{{row.id}}">{{ui.users_scope_changes}} <b data-change-count>0</b> {{ui.users_unit_items}}</small>{% endif %}</td>
+<td>{% if row.studies %}<button type="button" data-matrix-toggle="{{row.id}}" aria-expanded="true">{{ui.users_expand_studies}}</button>{% endif %}
+{% if row.platform_editable %}<details data-platform-switches="{{row.id}}"><summary>{{ui.users_platform_title}}</summary>
+<p class="muted">{{ui.users_platform_help}}</p>
+<form method="post" data-platform-form="1">{% csrf_token %}<input type="hidden" name="op" value="platform_preview"><input type="hidden" name="username" value="{{row.username}}"><input type="hidden" name="revision" value="{{revision}}">
+{% for option in row.platform_options %}<span class="platform-switch" data-platform-switch="{{option.action}}"><label class="inline"><input type="radio" name="platform:{{option.action}}" value="1" {% if option.checked %}checked{% endif %}> {{ui.users_platform_allow}}</label><label class="inline"><input type="radio" name="platform:{{option.action}}" value="0" {% if not option.checked %}checked{% endif %}> {{ui.users_platform_deny}}</label> {{option.label}} <small>{{option.action}}</small></span>
+{% endfor %}<button>{{ui.users_platform_preview}}</button></form></details>{% endif %}</td>
+</tr>
+<tr data-matrix-studies="{{row.id}}"><td colspan="4">
+{% for entry in row.studies %}<span class="study-chip" data-matrix-row="{{row.id}}-{{entry.study.id}}"{% if entry.readonly %} data-readonly-reason="{{entry.readonly_reason}}" data-locked-entry="{{row.id}}-{{entry.study.id}}"{% endif %}>
+<strong>{{entry.study.title}}</strong> <small data-study-source="{{entry.source}}">{{entry.source_label}}</small>
+{% if entry.editable %}<form method="post" data-visibility-form data-matrix-entry="{{row.id}}-{{entry.study.id}}">{% csrf_token %}
+<input type="hidden" name="op" value="matrix_preview"><input type="hidden" name="user_id" value="{{row.id}}"><input type="hidden" name="study_id" value="{{entry.study.id}}">
+<label class="inline"><input type="checkbox" name="visibility" value="1" data-stored="{{entry.visibility|yesno:'1,0'}}" {% if entry.visibility %}checked{% endif %}> {{ui.users_visibility_short}} <small>study.view</small></label>
+<details data-matrix-expand="1"><summary>{{ui.users_study_actions_expand}}（{{entry.checks|length}} {{ui.users_unit_items}}）</summary>
+<label class="inline"><input type="checkbox" data-select-all-study="{{row.id}}-{{entry.study.id}}"> {{ui.users_select_all_study}}（{{entry.checks|length}} {{ui.users_unit_items}}）</label> <small data-entry-state="{{row.id}}-{{entry.study.id}}">{{ui.users_scope_changes}} <b data-change-count>0</b> {{ui.users_unit_items}}</small>
+{% for check in entry.checks %}<label class="inline"><input type="checkbox" name="action:{{check.action}}" value="1" data-child="1" data-stored="{{check.checked|yesno:'1,0'}}" {% if check.checked %}checked{% endif %}> {{check.label}} <small>{{check.action}}</small></label>{% endfor %}
+</details>
+<button>{{ui.users_preview_matrix}}</button></form>
+{% else %}<span class="muted">{{ui.users_effective_actions}}：{{entry.summary}}</span>{% if entry.readonly %} <small data-readonly-reason="{{entry.readonly_reason}}">{{ui.users_readonly}}</small>{% endif %}{% endif %}</span>
+{% empty %}<span class="muted">{{ui.users_matrix_empty}}</span>{% endfor %}</td></tr>
+{% empty %}<tr data-matrix-empty="1"><td colspan="4">{{ui.users_matrix_empty}}</td></tr>
+{% endfor %}</table>
+</div>
+{% else %}
 <div class="table-wrap matrix-wrap">
 <table class="matrix-table"><tr><th>{{ui.common_username}}</th><th>{{ui.common_study}}</th><th>{{ui.users_matrix_column}}</th></tr>
 {% for row in matrix.rows %}{% for entry in row.studies %}<tr data-matrix-row="{{row.id}}-{{entry.study.id}}">
@@ -63,6 +98,7 @@
 {% else %}{{entry.summary}}{% if entry.readonly %} <small data-readonly-reason="{{entry.readonly_reason}}">{{ui.users_readonly}}</small>{% endif %}{% endif %}
 </td></tr>{% endfor %}{% empty %}<tr data-matrix-empty="1"><td colspan="3">{{ui.users_matrix_empty}}</td></tr>{% endfor %}</table>
 </div>
+{% endif %}
 {% if matrix.page_links %}<nav class="pager" data-matrix-pager aria-label="{{ui.users_matrix_pager}}">{% for link in matrix.page_links %}<a href="{{link.url}}"{% if link.current %} aria-current="page"{% endif %}>{{link.number}}</a>{% endfor %}</nav>{% endif %}
 </section>
 <section><h2>{{ui.users_import}}</h2>
@@ -120,4 +156,25 @@
 <script>
 document.querySelectorAll('[data-visibility-form]').forEach(form=>{const box=form.querySelector('[name=visibility]');if(!box)return;box.addEventListener('change',()=>{if(!box.checked){form.querySelectorAll('[data-child]').forEach(child=>{child.checked=false})}})});
 </script>
+{% if matrix.version == 2 %}
+<dialog id="gep-confirm-dialog" data-confirm-dialog="1"
+ data-label-cancel="{{ui.users_confirm_cancel}}" data-label-submit="{{ui.users_confirm_commit}}"
+ data-label-retry="{{ui.users_confirm_retry}}" data-label-refresh="{{ui.users_confirm_refresh}}"
+ data-label-checking="{{ui.users_confirm_checking}}" data-label-unknown="{{ui.users_confirm_unknown}}"
+ data-label-pending="{{ui.users_confirm_pending}}" data-label-committed="{{ui.users_confirm_committed}}"
+ data-label-refused="{{ui.users_confirm_error}}" data-label-status="{{ui.users_confirm_status}}"
+ data-delete-impact="{{ui.users_delete_warning}}">
+<form method="post" data-confirm-form="1">{% csrf_token %}
+<h2>{{ui.users_confirm_dialog_title}}</h2>
+<p class="muted" data-confirm-impact hidden></p>
+<p class="error" data-confirm-error role="alert" hidden></p>
+<p class="muted" data-confirm-state hidden></p>
+<input type="hidden" name="op" value=""><input type="hidden" name="username" value="">
+<input type="hidden" name="revision" value="{{revision}}"><input type="hidden" name="preview_id" value="">
+<label data-confirm-username-row hidden>{{ui.users_delete_confirm_username}}<input name="confirm_username" maxlength="150" autocomplete="off"></label>
+<label>{{ui.users_confirm_password}}<input type="password" name="password" autocomplete="off" required></label>
+<p class="row"><button type="submit" data-confirm-submit>{{ui.users_confirm_commit}}</button><button type="button" class="secondary" data-confirm-retry hidden>{{ui.users_confirm_retry}}</button><button type="button" class="secondary" data-confirm-refresh hidden>{{ui.users_confirm_refresh}}</button><button type="button" class="secondary" data-confirm-cancel>{{ui.users_confirm_cancel}}</button></p>
+</form></dialog>
+<script src="/static/core/permissions.js" defer></script>
+{% endif %}
 {% endblock %}

@@ -853,6 +853,9 @@ def test_actual_chrome_delete_confirmation_red_entry_and_refusals(
     assert reported == []
     observations = json.loads(re.search(r'P03R03B_OBSERVATIONS (\{.*\})', result.stdout).group(1))
     assert observations['red_danger'] is True
+    assert observations['dialog_danger_button'] is True
+    assert observations['escape_cancelled'] is True
+    assert observations['focus_returned'] is True
     assert observations['owner_row_no_delete'] is True
     assert observations['wrong_confirm_refused'] is True
     assert observations['wrong_password_refused'] is True
@@ -895,12 +898,17 @@ function redDominant(rgb){
   return parts[0]>parts[1]&&parts[0]>parts[2];
 }
 async function attemptDelete(page,rowId,confirm,password){
-  const entry=page.locator('[data-account-row="'+rowId+'"] [data-delete-account]');
-  if(!await entry.evaluate(el=>el.open)){await entry.locator('summary').click();}
-  const form=entry.locator('[data-delete-form="1"]');
-  await form.locator('[name=confirm_username]').fill(confirm);
-  await form.locator('[name=password]').fill(password);
-  await form.getByRole('button',{name:'永久删除账号'}).click();
+  // R05 unified confirmation dialog: the red trigger opens a password-only
+  // dialog (typed username + own password); cancel/Escape send no request.
+  // The server-rendered result replaces the document, which closes the dialog:
+  // waiting for that is the real "the request finished" edge (no fixed sleeps).
+  await page.locator('[data-account-row="'+rowId+'"] [data-delete-account]').click();
+  const dialog=page.locator('[data-confirm-dialog][open]');
+  await expect(dialog).toBeVisible();
+  await dialog.locator('[name=confirm_username]').fill(confirm);
+  await dialog.locator('[name=password]').fill(password);
+  await dialog.locator('[data-confirm-submit]').click();
+  await page.waitForFunction(()=>document.querySelector('[data-confirm-dialog][open]')===null);
   await page.waitForLoadState('load');
 }
 try {
@@ -915,13 +923,20 @@ try {
   await expect(victimRow).toBeVisible();
   const deleteEntry=victimRow.locator('[data-delete-account]');
   expect(await deleteEntry.count()).toBe(1);
-  await deleteEntry.locator('summary').click();
-  const dangerButton=deleteEntry.locator('button[data-danger="1"]');
+  await deleteEntry.click();
+  const dangerButton=page.locator('[data-confirm-dialog][open] [data-confirm-submit]');
   await expect(dangerButton).toBeVisible();
-  const dangerColor=await dangerButton.evaluate(el=>getComputedStyle(el).color);
+  const dangerColor=await deleteEntry.evaluate(el=>getComputedStyle(el).color);
   observations.red_danger=redDominant(dangerColor);
   observations.danger_color=dangerColor;
+  observations.dialog_danger_button=redDominant(await dangerButton.evaluate(el=>getComputedStyle(el).backgroundColor));
   observations.owner_row_no_delete=(await page.locator('[data-owner-row="1"] [data-delete-account]').count())===0;
+  // Cancel sends no request and returns the focus to the trigger.
+  await page.keyboard.press('Escape');
+  observations.escape_cancelled=(await page.locator('[data-confirm-dialog][open]').count())===0;
+  observations.focus_returned=await page.evaluate(
+    id=>document.activeElement===document.querySelector('[data-account-row="'+id+'"] [data-delete-account]'),victimId);
+  expect(await page.locator('[data-account-row="'+victimId+'"]').count()).toBe(1);
 
   // 2) The confirmation needs the exact username and the actor password.
   await attemptDelete(page,victimId,'p03r03b_browser_wrong',ownerPassword);

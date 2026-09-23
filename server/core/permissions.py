@@ -41,6 +41,70 @@ RECONCILE_KIND = 'reconcile'
 USERS_KIND = 'users_import'
 ROSTER_KIND = 'roster_import'
 PLATFORM_KIND = 'platform'
+# The kinds the unified confirmation dialog can ask about. Any other kind is
+# refused by :func:`preview_status` instead of exposing stored object data.
+DIALOG_STATUS_KINDS = (MATRIX_KIND, PLATFORM_KIND)
+
+# Display-only source labels for one account/study effective selection. They
+# explain where the final checkboxes come from; they never authorize anything.
+SOURCE_KEYS = {
+    'owner': 'users_source_owner',
+    'override': 'users_source_override',
+    'role_default': 'users_source_role_default',
+    'grants': 'users_source_grants',
+    'none': 'users_source_none',
+}
+
+PLATFORM_LABEL_KEYS = {
+    'study.create': 'platform_study_create',
+    'accounts.view': 'platform_accounts_view',
+    'accounts.create_user': 'platform_accounts_create_user',
+    'accounts.manage_user': 'platform_accounts_manage_user',
+    'accounts.create_admin': 'platform_accounts_create_admin',
+    'accounts.manage_admin': 'platform_accounts_manage_admin',
+    'accounts.delete_admin': 'platform_accounts_delete_admin',
+}
+
+
+def platform_label(action, lang='zh'):
+    """Bilingual label for one finite platform action (code never changes)."""
+    return ui.tr(lang, PLATFORM_LABEL_KEYS.get(action, action))
+
+
+STUDY_LABEL_KEYS = {'study.delete': 'study_action_delete'}
+
+
+def study_action_label(action, lang='zh'):
+    """Bilingual label for one study action; unknown codes stay the raw code.
+
+    ``study.delete`` is a v2-only catalog entry, so its label lives in the shared
+    string table instead of the historical v1 label map.
+    """
+    if action in STUDY_LABEL_KEYS:
+        return ui.tr(lang, STUDY_LABEL_KEYS[action])
+    from .gui import action_label
+    return action_label(action, lang)
+
+
+def study_source(policy, is_owner_row, study_key):
+    """Where a target's stored selection for one study comes from (display).
+
+    Owner rows always render the fixed Owner catalog; an explicit complete
+    override wins; otherwise an Admin follows the role default/future bound and
+    an ordinary account follows its explicit grants. This is presentation only
+    and reads the same canonical policy the kernel already computed.
+    """
+    if is_owner_row:
+        return 'owner'
+    if policy is None:
+        return 'none'
+    if study_key in policy.study_overrides:
+        return 'override'
+    if policy.role == 'admin':
+        return 'role_default'
+    if policy.grants.get(study_key):
+        return 'grants'
+    return 'none'
 
 
 def _canonical(value):
@@ -164,6 +228,43 @@ def pending_preview(actor, preview_id):
                                                 consumed=False, expires_at__gt=timezone.now()).first()
     except (ValueError, ValidationError):
         return None
+
+
+def preview_status(actor, preview_id):
+    """Minimal read-only state of one own preview for the confirmation dialog.
+
+    The unified confirmation dialog calls this after a submit whose network
+    result is unknown. It reports only the state of the actor's own preview of
+    the kinds that dialog can confirm: a consumed preview proves the operation
+    already ran (the server replays it idempotently and never writes twice),
+    while a pending preview proves nothing about the original request beyond
+    "not finished at query time". No stored result, staged intent, study name,
+    account name, identity or token is returned: a caller that needs object data
+    must re-authorize a fresh object read. Revoked scope, a downgraded or
+    disabled actor, a must-change account, another actor's preview and an
+    unknown kind all fail closed here.
+    """
+    require(getattr(actor, 'is_authenticated', False) and getattr(actor, 'pk', None), 'auth_required', 403)
+    require(bool(preview_id), 'preview_required', 400)
+    # Same governance gate as every permission entry: the check never becomes a
+    # way to read past a lost ``accounts.view`` or a forced password change.
+    require(access.allowed_platform(actor, 'accounts.view'), 'forbidden', 403)
+    profile = _profile(actor.pk)
+    require(not (profile is not None and profile.must_change_password), 'password_change_required', 403)
+    try:
+        row = PermissionPreview.objects.filter(pk=preview_id, actor_id=actor.pk).first()
+    except (ValueError, ValidationError):
+        row = None
+    require(row is not None, 'preview_invalid', 404)
+    require(row.kind in DIALOG_STATUS_KINDS, 'preview_invalid', 404)
+    if row.consumed:
+        state = 'consumed'
+    elif row.expires_at > timezone.now():
+        state = 'pending'
+    else:
+        state = 'expired'
+    return {'preview_id': str(row.id), 'kind': row.kind, 'state': state,
+            'expires_at': row.expires_at.isoformat()}
 
 
 def preview_retry_authorized(actor, row):
@@ -306,9 +407,9 @@ def _matrix_page_v2(actor, search='', page=1, lang='zh'):
     exactly the actor's assignable set and only while the whole-account takeover
     comparison still holds.
     """
-    from .gui import action_label
     User = get_user_model()
-    owner_id = Instance.objects.get(pk=1).owner_id
+    instance = Instance.objects.get(pk=1)
+    owner_id = instance.owner_id
     search = (search or '').strip()
     try:
         actor_policy = access.canonical_policy(actor)
@@ -372,14 +473,28 @@ def _matrix_page_v2(actor, search='', page=1, lang='zh'):
                 reason = 'outside'
             else:
                 reason = ''
+            source = study_source(target_policy, is_owner_row, key)
             entries.append({'study': study, 'granted': bool(current),
                             'current': {action: False for action in current},
                             'visibility': 'study.view' in current,
                             'summary': joiner.join(sorted(current)) if current else ui.tr(lang, 'users_preview_none_actions'),
+                            'effective': sorted(current), 'source': source,
+                            'source_label': ui.tr(lang, SOURCE_KEYS[source]),
                             'editable': not reason, 'readonly': bool(reason), 'readonly_reason': reason,
-                            'checks': [{'action': action, 'label': action_label(action, lang),
+                            'checks': [{'action': action, 'label': study_action_label(action, lang),
                                         'checked': action in current, 'delegable': False}
                                        for action in sorted(manageable) if action != 'study.view']})
+        # Owner platform switches (display facts only; every write re-authorizes
+        # through preview_platform/commit_platform). The section is offered only
+        # to the Owner and never for the Owner or own row, so an Admin can never
+        # reach or self-grant the three Owner-controlled switches from the page.
+        platform_effective, platform_overrides = set(), {}
+        if target_policy is not None:
+            platform_effective = set(access.configured_platform_actions(target_policy))
+            platform_overrides = dict(target_policy.platform_overrides)
+        platform_editable = (owner_scope and not (is_owner_row or own_row)
+                             and target_policy is not None
+                             and profiles.get(user.pk) is not None)
         # The red permanent-delete entry is offered exactly where the delete
         # transaction would accept it (platform switches and whole-account
         # scope); every value comes from the canonical policies already loaded
@@ -399,9 +514,26 @@ def _matrix_page_v2(actor, search='', page=1, lang='zh'):
                      'is_active': user.is_active,
                      'must_change_password': bool(profile.must_change_password) if profile is not None else False,
                      'hidden_studies': len(hidden), 'studies': entries,
+                     'study_count': len(entries),
+                     'editable_studies': sum(1 for entry in entries if entry['editable']),
+                     'editable_actions': sum(len(entry['checks']) for entry in entries if entry['editable']),
+                     'platform_effective': sorted(platform_effective),
+                     'platform_overrides': platform_overrides,
+                     'platform_options': [{'action': action, 'label': platform_label(action, lang),
+                                           'checked': action in platform_effective}
+                                          for action in sorted(access.PLATFORM_V2_ACTIONS)],
+                     'platform_editable': platform_editable,
                      'can_delete': can_delete})
+    # Browser-session drafts are keyed by this stable scope (instance identity
+    # plus the actor's stable subject), never by revision alone: another account
+    # or another instance in the same tab never reads the previous actor's
+    # drafts, and a revision change keeps the batch instead of silently
+    # dropping it (the client marks such entries as needing a fresh preview).
+    principal_id = Principal.objects.filter(user_id=actor.pk).values_list('pk', flat=True).first()
     return {'rows': rows, 'search': search, 'page': page, 'pages': pages, 'total': total,
-            'page_links': _pager_links('page', page, pages, {'q': search}), 'owner_scope': owner_scope}
+            'page_links': _pager_links('page', page, pages, {'q': search}), 'owner_scope': owner_scope,
+            'draft_scope': f'{instance.instance_id}:{principal_id or actor.pk}',
+            'version': 2}
 
 
 def authorization_default_has_view(policy):
@@ -522,7 +654,8 @@ def _matrix_page_v1(actor, search='', page=1, lang='zh'):
                      'must_change_password': bool(profile.must_change_password) if profile is not None else False,
                      'studies': entries, 'can_delete': can_delete})
     return {'rows': rows, 'search': search, 'page': page, 'pages': pages, 'total': total,
-            'page_links': _pager_links('page', page, pages, {'q': search}), 'owner_scope': owner}
+            'page_links': _pager_links('page', page, pages, {'q': search}), 'owner_scope': owner,
+            'version': 1}
 
 
 def _conflict_groups():
@@ -776,7 +909,8 @@ def commit_matrix(actor, password, preview_id):
                 access.with_study_override(policy_before, study.pk, target))
         accounts.audit(locked, 'permission.matrix_changed', f'{user.pk}:{study.pk}',
                        before=change_before, after=change_after)
-        result = {'username': user.username, 'study': study.title, 'actions': sorted(target)}
+        result = {'username': user.username, 'study': study.title, 'actions': sorted(target),
+                  'user_id': user.pk, 'study_id': str(study.pk)}
         _finish(row, instance, result)
     return result
 
@@ -878,7 +1012,7 @@ def commit_platform(actor, password, preview_id):
                                'policy': access.policy_snapshot(before_policy)},
                        after={'platform': after_set, 'platform_overrides': overrides,
                               'policy': access.policy_snapshot(after_policy)})
-        result = {'username': target.username, 'platform': after_set}
+        result = {'username': target.username, 'platform': after_set, 'user_id': target.pk}
         _finish(row, instance, result)
     return result
 

@@ -721,8 +721,15 @@ async function hideStudy(page,accountId,studyId){
   await page.waitForLoadState('load');
   const preview=page.locator('[data-preview="matrix"]');
   await expect(preview).toBeVisible();
-  await preview.locator('[name=password]').fill(ownerPassword);
-  await preview.locator('button').click();
+  // P03R05R: the v2 matrix commit now confirms through the unified dialog (the
+  // same password-only interaction as delete and platform switches). The
+  // server-rendered result replaces the document, which closes the dialog.
+  await preview.getByRole('button',{name:/确认执行/}).click();
+  const dialog=page.locator('[data-confirm-dialog][open]');
+  await expect(dialog).toBeVisible();
+  await dialog.locator('[name=password]').fill(ownerPassword);
+  await dialog.locator('[data-confirm-submit]').click();
+  await page.waitForFunction(()=>document.querySelector('[data-confirm-dialog][open]')===null);
   await page.waitForLoadState('load');
 }
 try {
