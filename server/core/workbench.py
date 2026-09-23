@@ -295,21 +295,28 @@ def participation_module(request, study):
 def exports_module(request, study):
     """Fixed snapshots plus the authorization-aware v2 preview.
 
-    Each row names its frozen version/view/language and counts, and the preview
-    block carries accurate counts and field-permission text only for the views
-    this actor could really create, so the page can explain what an identified
-    or unmapped application would contain before anything is written.
+    Each row names its frozen version/view/language, but its counts and download
+    links are only offered while the actor still holds every action frozen with
+    that export; an identified export therefore never exposes its roster counts
+    to a raw-only reader. The preview block carries accurate counts and
+    field-permission text only for the views this actor could really create, so
+    the page can explain what an identified or unmapped application would
+    contain before anything is written.
     """
     exports = Export.objects.filter(study=study).order_by('-created_at', '-id')[:50]
     rows = []
     for item in exports:
         snapshot = item.snapshot if isinstance(item.snapshot, dict) else {}
         version = str(snapshot.get('format_version') or '1')
+        required = export_core.required_actions(item)
+        permitted = all(allowed(request.user, study, action) for action in required)
         rows.append({'id': item.id, 'created_local': local_time(item.created_at),
                      'format_version': version,
                      'view': snapshot.get('view') if version == '2' else None,
                      'language': snapshot.get('language') if version == '2' else None,
-                     'counts': snapshot.get('counts') if version == '2' else None})
+                     'counts': snapshot.get('counts') if version == '2' and permitted else None,
+                     'required_actions': list(required),
+                     'permitted': permitted})
     return {'exports_rows': rows, 'exports_options': export_core.export_options(request.user, study)}
 
 

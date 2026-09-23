@@ -92,8 +92,10 @@ def exports(request, export_id=None):
         for action in export_core.required_actions(item):
             guard(request.user,item.study,action)
         fmt=request.GET.get('format','jsonl')
-        require(fmt in ('jsonl','csv','metadata'),'export_format')
+        require(fmt in ('jsonl','csv','metadata','zip'),'export_format')
         response=export_core.render_download(item,fmt)
+        # The download file name is always the immutable export UUID plus the
+        # fixed extension; no title or other request value can reach it.
         extension='metadata.json' if fmt=='metadata' else fmt
         response['Content-Disposition']=f'attachment; filename="{item.id}.{extension}"'
         return response

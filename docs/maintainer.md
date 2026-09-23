@@ -27,3 +27,6 @@ v2 合成迁移演练：`.venv/bin/python tools/remediation_migration.py --verif
 真实研究、VPS/DNS/TLS、独立备份恢复与科学验收仍需另行授权。发布不得包含内部开发文档、数据库、凭据、下载或恢复文件。
 
 导出容量验证可运行 `.venv/bin/python tools/remediation_export_capacity.py --verify`：仅建立新的隔离合成实例，测量最大数量、精确字节／单元格边界与生成时间，报告内存峰值。每轮证据目录必须全新，成功和失败的合成数据库均保留；不对现有验收实例执行该工具。此检查不替代 ZIP 文件交付、真实电子表格查看或人工测试。
+
+
+导出 ZIP 交付的派生缓存位于 `GEP_DATA_DIR/exports/<export_id>.zip`（0700 目录、文件名只取导出 UUID）：它只是冻结快照的重新生成结果，不是新数据源。每次下载都会用冻结快照重新生成确定性字节，并只在该文件与重新生成结果逐字节相同时才提供下载；另一视图／语言／导出的有效 ZIP 放在该路径会被原子替换而不会原样提供，缺失、截断、成员错误、超限或符号链接文件都按未知状态处理，符号链接的目录组件在写出任何内容前拒绝。服务端提供的一定是本次已验证的字节（缓存命中时同一个已打开句柄，缓存替换时本次刚提交的内存字节），不会在校验后重新打开另一路径；最终 ZIP 与解压 CSV 合计都不超过 64 MiB，缓存比较与文件提交都在同一次生成时限内。并发同导出请求只做原子发布，超时清理仅删除本次自己发布的那个文件（设备+inode 一致），不会删除并发的成功下载。研究删除/导出清理（R04）移除导出行时必须同时删除对应文件。临时文件（`.<id>.<random>.tmp`）永远不对外提供。受影响测试命令：`GEP_T17_BROWSER=1 .venv/bin/pytest -q tests/remediation/test_p03r08.py tests/remediation/test_p03r07.py tests/remediation/test_p03r07r.py tests/test_phase03_ui_browser.py tests/test_t17_browser.py tests/test_phase03_queries.py`。

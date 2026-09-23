@@ -176,3 +176,15 @@ browser=PASS（6 个规格 exit 0）, windows_preparation=PASS（229 项检查 0
 - **边界**：工程侧启动成功不等于设计者体验通过；原设计者自主体验与独立 T17 仍为 `NOT_RUN`。
 
 **状态边界**：Windows x64 实机工程门槛已通过；2026-09-21 人工测试已发生并形成修复反馈，修复后的完整回归与新一轮人工测试尚未进行（T17 保留编号，帮助/失败/未运行如实记录）。`tools/phase03_acceptance.py --verify` 未显式选择有效 Windows 运行/准备对时保持非 0；03F 工程产物已交付，但 **Phase 03 仍未完成**（完成本轮修复与工程回归后安排新的人工测试）。
+
+## Phase 03 人工反馈修复 R08（概览 + 明细 ZIP 与电子表格查看准备）
+
+2026-09-24：R08 在异常退出复核后于同一 Task 内完成修正并复验；证据全部来自隔离合成实例（pytest 临时数据库与回环 live server）与真实 Chrome。Required Verification 三条命令均前台真实退出：
+
+- 两条独立复核用例 → **2 passed**（原两条独立 probe 现全部通过：混入另一视图缓存的有效 ZIP 不再被提供；raw-only 表单的唯一可选视图默认选中）。
+- `GEP_T17_BROWSER=1 .venv/bin/pytest -q tests/remediation/test_p03r08.py tests/remediation/test_p03r07.py tests/remediation/test_p03r07r.py tests/test_phase03_ui_browser.py tests/test_t17_browser.py tests/test_phase03_queries.py` → **39 passed in 39.03s**（无跳过、无失败；含真实 Chrome 7 项：新增 raw-only 主按钮直点流程与 ZIP 失败反馈 2 项）。
+
+- **缓存绑定与容量**：每次 ZIP 下载都由该导出自己的冻结快照确定性重建，并只在与已存文件逐字节一致时才提供（缓存命中时服务同一个已打开并验证的句柄；替换时服务本次刚原子提交的字节），另一视图／语言／导出的有效 ZIP 放在缓存路径会被原子替换，绝不原样提供；最终压缩 ZIP 与解压 CSV 合计都 ≤64 MiB（`limits` 新增 `max_zip_bytes`），超限返回 413 `export_limit_zip` 且保留 JSONL；符号链接目录组件在写出前拒绝，`mkdir`／打开／写入／flush／fsync／rename 故障映射为 503 `export_generation_failed`（`jsonl_available: true`，无 Content-Disposition、无半包）；超时清理按设备+inode 只删除本次自己发布的文件，不删除并发的成功下载。
+- **raw-only 浏览器工作流**：无身份映射读取权的账号在导出页只看到“不含名单 ID”选项且默认选中，直接点击主按钮即可创建并下载；真实 Chrome 保存的 ZIP 以独立 csv/json 解析器对账为 unmapped golden（无 `participant_code` 列、无未参与名单），页面显示下载已开始。对同一账号制造真实服务端 ZIP 失败（单元格超限 413 `export_cell_limit`）与真实网络失败（请求中止）时，页面如实显示错误代码、不出现“下载已开始”、不触发任何下载，并保留显式 ZIP 重试链接与可用 JSONL 链接（JSONL 下载成功且完整保留超限载荷）。
+- **权限与列表投影**：ZIP 与 metadata 每次下载重验冻结所需权限（raw-only 读者对 identified 产物 403、撤权后整份拒绝）；列表行只在当前账号仍持有冻结权限时显示计数与链接；`default_view` 使被隐藏的 identified 选项不会抢走 raw-only 读者的选择。v1 字节与三种旧格式保持，v1 `format=zip` 明确 400，v2 单文件 CSV 仍 409 `export_zip_required`。
+- **边界**：`READY_FOR_R11_REAL_VIEW` 只表示软件存在、可供 R11 门槛使用，不是软件通过；Windows Excel/WPS 实机查看与新一轮人工测试仍未运行（T17 保留编号，帮助/失败/未运行分别记录）。证据在本地忽略目录：浏览器轮 `local_data/phase03_remediation_20260923/p03r08/20260923T162447Z-ae70081b/`（含 `chrome_raw_unmapped.zip`、`chrome_raw_lossless.jsonl`、`chrome_download.zip`、`cache_binding.json`、`spool_safety.json` 等）与 UI 轮 `.../test_phase03_ui_browser/20260923T162447Z-56e9d04e/`；工具轮 `.../p03r08/20260923T162532Z-3bbeca5f/`；失败现场与旧证据不清理。以上为合成工程证据，**Phase 03 仍未完成**。

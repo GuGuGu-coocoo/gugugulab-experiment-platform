@@ -1,10 +1,71 @@
 <section data-exports="1"><h2>{{ui.exports_title}}</h2><p class="muted">{{ui.exports_intro}}</p>
-<form id="export-form">{% csrf_token %}<button>{{ui.exports_create}}</button></form><p id="export-result" role="status" aria-live="polite"></p>
+<form id="export-form" data-exports-form="1">{% csrf_token %}
+<fieldset data-export-views="1"><legend>{{ui.exports_view_label}}</legend>
+{% for option in exports_options.views %}{% if option.allowed %}<label data-export-view-option="{{option.value}}"><input type="radio" name="view" value="{{option.value}}" data-export-view="{{option.value}}" {% if option.value == exports_options.default_view %}checked{% endif %}> {% if option.value == 'identified' %}{{ui.exports_view_identified}} <small data-export-recommended="1">{{ui.exports_view_recommended}}</small>{% else %}{{ui.exports_view_unmapped}}{% endif %} <span class="muted" data-export-view-counts="{{option.value}}">{% if option.value == 'identified' %}{{ui.exports_count_roster}}{% else %}{{ui.exports_count_participants}}{% endif %} {{option.counts.participants}} · {{ui.exports_count_sessions}} {{option.counts.sessions}} · {{ui.exports_count_events}} {{option.counts.events}}</span></label>
+{% endif %}{% endfor %}</fieldset>
+{% if exports_options.unmapped_only %}<p class="muted" data-export-unmapped-note="1">{{ui.exports_view_unmapped_note}}</p>{% endif %}
+<label>{{ui.exports_language_label}} <select name="language" data-export-language="1"><option value="zh" selected>{{ui.exports_language_zh}}</option><option value="en">{{ui.exports_language_en}}</option></select></label>
+<button data-export-submit="1">{{ui.exports_create}}</button>
+<button class="muted" data-export-v1-submit="1">{{ui.exports_create_v1}}</button>
+</form><p id="export-result" role="status" aria-live="polite"></p>
+<p class="muted" data-export-zip-note="1">{{ui.exports_zip_note}}</p>
 <h3>{{ui.exports_list}}</h3>
 {% if exports_rows %}<div class="table-wrap"><table><caption>{{ui.exports_list}}</caption><thead><tr><th scope="col">ID</th><th scope="col">{{ui.exports_col_created}}</th><th scope="col">{{ui.exports_col_formats}}</th></tr></thead><tbody>
-{% for row in exports_rows %}<tr data-export-row="{{row.id}}"><td><code>{{row.id}}</code></td><td data-local-time="{{row.created_local}}">{{row.created_local}}</td><td><a href="/v1/admin/exports/{{row.id}}/download" data-download="{{row.id}}" data-format="jsonl">{{ui.exports_download}}</a> · <a href="/v1/admin/exports/{{row.id}}/download?format=csv" data-format="csv">csv</a> · <a href="/v1/admin/exports/{{row.id}}/download?format=metadata" data-format="metadata">metadata</a></td></tr>{% endfor %}
+{% for row in exports_rows %}<tr data-export-row="{{row.id}}" data-export-version="{{row.format_version}}" data-export-row-view="{{row.view|default:''}}"><td><code>{{row.id}}</code></td><td data-local-time="{{row.created_local}}">{{row.created_local}}</td><td>
+{% if row.format_version == '2' %}<span data-export-meta="1">v2 · {{row.view}} · {{row.language}}{% if row.counts %} · {{ui.exports_count_roster}} {{row.counts.participants}} · {{ui.exports_count_sessions}} {{row.counts.sessions}} · {{ui.exports_count_events}} {{row.counts.events}}{% endif %}</span> {% if row.permitted %}<a href="/v1/admin/exports/{{row.id}}/download?format=zip" data-download="{{row.id}}" data-format="zip">{{ui.exports_zip_download}}</a> · <a href="/v1/admin/exports/{{row.id}}/download" data-download="{{row.id}}" data-format="jsonl">{{ui.exports_download}}</a> · <a href="/v1/admin/exports/{{row.id}}/download?format=metadata" data-format="metadata">metadata</a>{% else %}<small data-export-restricted="1">{{ui.exports_restricted}}</small>{% endif %}
+{% else %}<span data-export-meta="1">{{ui.exports_v1}}</span> <a href="/v1/admin/exports/{{row.id}}/download" data-download="{{row.id}}" data-format="jsonl">{{ui.exports_download}}</a> · <a href="/v1/admin/exports/{{row.id}}/download?format=csv" data-format="csv">csv</a> · <a href="/v1/admin/exports/{{row.id}}/download?format=metadata" data-format="metadata">metadata</a>{% endif %}
+</td></tr>{% endfor %}
 </tbody></table></div>{% else %}<p data-exports-empty="1">{{ui.exports_empty}}</p>{% endif %}
 </section>
 <script>
-if(document.querySelector('#export-form')) document.querySelector('#export-form').onsubmit=async e=>{e.preventDefault();let r=await fetch('/v1/admin/exports',{method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':e.target.querySelector('[name=csrfmiddlewaretoken]').value},body:JSON.stringify({study_id:'{{study.id}}'})});let d=await r.json(),out=document.querySelector('#export-result');out.textContent=r.ok?'{{ui.exports_created|escapejs}}':d.code;if(r.ok){let a=document.createElement('a');a.href='/v1/admin/exports/'+d.export_id+'/download';a.textContent='{{ui.exports_download|escapejs}}';out.append(a);for(const fmt of ['csv','metadata']){let link=document.createElement('a');link.href=a.href+'?format='+fmt;link.textContent=' · '+fmt;out.append(link)}}};
+(()=>{
+const form=document.querySelector('#export-form');
+if(!form)return;
+const out=document.querySelector('#export-result');
+const strings={
+ created:'{{ui.exports_created|escapejs}}',createdV1:'{{ui.exports_created_v1|escapejs}}',
+ started:'{{ui.exports_download_started|escapejs}}',zipFailed:'{{ui.exports_zip_failed|escapejs}}',
+ zipFailedRetry:'{{ui.exports_zip_failed_retry|escapejs}}',createFailed:'{{ui.exports_create_failed|escapejs}}',
+ networkFailed:'{{ui.exports_network_failed|escapejs}}',viewRequired:'{{ui.exports_view_label|escapejs}}',
+ download:'{{ui.exports_download|escapejs}}',zipDownload:'{{ui.exports_zip_download|escapejs}}'};
+function message(text){let status=out.querySelector('[data-export-status]');if(!status){status=document.createElement('span');status.setAttribute('data-export-status','1');out.prepend(status);}status.textContent=text;}
+function codeOf(status,data){return data&&data.code?data.code:String(status||'error');}
+async function post(body){const response=await fetch('/v1/admin/exports',{method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':form.querySelector('[name=csrfmiddlewaretoken]').value},body:JSON.stringify(body)});let data=null;try{data=await response.json();}catch(error){data=null;}return {ok:response.ok,status:response.status,data:data};}
+function link(exportId,fmt,label){const anchor=document.createElement('a');anchor.href='/v1/admin/exports/'+exportId+'/download'+(fmt?'?format='+fmt:'');anchor.textContent=' · '+label;anchor.setAttribute('data-created-format',fmt||'jsonl');out.append(anchor);return anchor;}
+form.onsubmit=async e=>{
+ e.preventDefault();
+ out.textContent='';
+ const view=form.querySelector('[name=view]:checked'),language=form.querySelector('[name=language]');
+ try{
+  if(e.submitter&&e.submitter.hasAttribute('data-export-v1-submit')){
+   const created=await post({study_id:'{{study.id}}'});
+   if(!created.ok){message(strings.createFailed+codeOf(created.status,created.data));return;}
+   message(strings.createdV1);link(created.data.export_id,null,strings.download);link(created.data.export_id,'csv','csv');link(created.data.export_id,'metadata','metadata');return;
+  }
+  if(!view){message(strings.viewRequired);return;}
+  const created=await post({study_id:'{{study.id}}',format_version:'2',view:view.value,language:language?language.value:'zh'});
+  if(!created.ok){message(strings.createFailed+codeOf(created.status,created.data));return;}
+  const exportId=created.data.export_id;
+  message(strings.created);
+  const zipLink=link(exportId,'zip',strings.zipDownload);
+  link(exportId,null,strings.download);
+  link(exportId,'metadata','metadata');
+  let blob=null,zipError=null;
+  try{
+   const response=await fetch(zipLink.href);
+   if(response.ok){blob=await response.blob();}
+   else{let data=null;try{data=await response.json();}catch(error){data=null;}zipError=codeOf(response.status,data);}
+  }catch(error){zipError='network';}
+  if(blob){
+   const objectUrl=URL.createObjectURL(blob);
+   const anchor=document.createElement('a');
+   anchor.href=objectUrl;anchor.download=exportId+'.zip';anchor.click();
+   setTimeout(()=>URL.revokeObjectURL(objectUrl),60000);
+   message(strings.created+strings.started);
+  }else{
+   message(strings.created+strings.zipFailed+zipError+strings.zipFailedRetry);
+  }
+ }catch(error){message(strings.networkFailed);}
+};
+})();
 </script>

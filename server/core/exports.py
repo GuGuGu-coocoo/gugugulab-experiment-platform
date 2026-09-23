@@ -20,17 +20,28 @@ The export contracts live in exactly one module:
   checked before a row exists (an over-limit snapshot leaves no half-ready
   export), and an over-limit spreadsheet cell refuses only the CSV/ZIP
   rendering: the lossless JSONL path stays available.
+* **A stored ZIP is never trusted by its name.** The spreadsheet bundle is a
+  deterministic function of the frozen snapshot, so a download rebuilds it and
+  serves the stored file only when the same opened stream carries exactly those
+  bytes. A valid ZIP of another view, language or export can therefore never be
+  served through this export's permission check.
 """
 import csv
 import io
 import json
+import os
+import secrets
+import stat
 import time
 import uuid
+import zipfile
 from datetime import timezone as dt_timezone
+from pathlib import Path
 
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Count
-from django.http import HttpResponse, JsonResponse
+from django.http import FileResponse, HttpResponse, JsonResponse
 from django.utils import timezone
 
 from .access import allowed, guard
@@ -44,6 +55,10 @@ VIEWS = ('identified', 'unmapped')
 LANGUAGES = ('zh', 'en')
 TEXT_PREFIX = 'text:'
 JSON_PREFIX = 'json:'
+# The v2 spreadsheet bundle contains exactly these two members, in this order.
+EXPORT_ZIP_MEMBERS = ('participants.csv', 'events.csv')
+# Deterministic member timestamps keep repeated downloads byte-identical.
+ZIP_TIME = (1980, 1, 1, 0, 0, 0)
 CSV_ENCODING = ('utf-8-sig (BOM); RFC 4180 quoting with doubled double quotes; '
                 'text/ID cells start with text: and JSON cells with json:; '
                 'UUID, numeric and fixed-enum cells stay literal; timestamps are UTC Z '
@@ -55,6 +70,8 @@ MAX_PARTICIPANTS = 10000
 MAX_SESSIONS = 20000
 MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024
 MAX_CSV_TOTAL_BYTES = 64 * 1024 * 1024
+# The final compressed ZIP carries the same boundary as the decompressed pair.
+MAX_ZIP_BYTES = 64 * 1024 * 1024
 MAX_CELL_CHARS = 32767
 MAX_CELL_BYTES = 131068
 MAX_GENERATION_SECONDS = 30.0
@@ -107,6 +124,22 @@ class ExportCellLimit(Rejected):
                        'max_cell_chars': max_chars, 'max_cell_bytes': max_bytes}
 
 
+class ExportFileFailure(Rejected):
+    """The ZIP file step failed: no half package is served, JSONL stays open."""
+
+    def __init__(self):
+        super().__init__('export_generation_failed', 503)
+        self.detail = {'jsonl_available': True}
+
+
+class ExportZipLimit(Rejected):
+    """The final compressed ZIP exceeds its boundary: JSONL stays available."""
+
+    def __init__(self):
+        super().__init__('export_limit_zip', 413)
+        self.detail = {'jsonl_available': True, 'max_zip_bytes': MAX_ZIP_BYTES}
+
+
 def limits_document(scope=None):
     """Frozen capacity boundaries; a requested export adds its frozen ``scope``.
 
@@ -116,7 +149,8 @@ def limits_document(scope=None):
     """
     document = {'max_events': MAX_EVENTS, 'max_participants': MAX_PARTICIPANTS,
                 'max_sessions': MAX_SESSIONS, 'max_snapshot_bytes': MAX_SNAPSHOT_BYTES,
-                'max_csv_total_bytes': MAX_CSV_TOTAL_BYTES, 'max_csv_cell_chars': MAX_CELL_CHARS,
+                'max_csv_total_bytes': MAX_CSV_TOTAL_BYTES, 'max_zip_bytes': MAX_ZIP_BYTES,
+                'max_csv_cell_chars': MAX_CELL_CHARS,
                 'max_csv_cell_bytes': MAX_CELL_BYTES, 'max_generation_seconds': MAX_GENERATION_SECONDS}
     if scope is not None:
         document['scope'] = scope
@@ -396,11 +430,18 @@ def export_options(user, study):
 
     Counts are only computed for a view this actor could really create, so the
     preview can never become a counting oracle for an actor without the action.
+    ``default_view`` names the view the form preselects: the identified view
+    only with its identity action, otherwise the unmapped view. A hidden
+    identified option must never steal the selection from the only option a
+    raw-only reader may create.
     """
-    options = {'limits': limits_document(), 'languages': list(LANGUAGES), 'views': []}
+    options = {'limits': limits_document(), 'languages': list(LANGUAGES), 'views': [],
+               'unmapped_only': True, 'default_view': None}
     if not allowed(user, study, 'data.export_raw'):
         return options
     identity = allowed(user, study, 'identity_mapping.read')
+    options['unmapped_only'] = not identity
+    options['default_view'] = 'identified' if identity else 'unmapped'
     full_roster = _scope_queryset_participants(study, None, 'identified')
     scoped_roster = _scope_queryset_participants(study, None, 'unmapped')
     sessions = _session_scope(study, None)
@@ -522,6 +563,184 @@ def render_csv_bundle(snapshot):
     return participants, events
 
 
+def export_spool_root():
+    """Private server-owned spool for the frozen ZIP delivery (created lazily).
+
+    A symlinked data or spool component, a non-directory and any filesystem
+    setup error are refused as the documented file failure instead of being
+    followed or half-created, so nothing outside the intended tree is written.
+    """
+    base = Path(settings.DATA_DIR)
+    root = base / 'exports'
+    if base.is_symlink() or root.is_symlink():
+        raise ExportFileFailure()
+    try:
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError:
+        raise ExportFileFailure()
+    if root.is_symlink() or not root.is_dir():
+        raise ExportFileFailure()
+    return root
+
+
+def export_zip_path(item):
+    """The one READY path of one export: the file name is its immutable UUID."""
+    return export_spool_root() / f'{item.id}.zip'
+
+
+def _zip_info(name):
+    info = zipfile.ZipInfo(name, date_time=ZIP_TIME)
+    info.create_system = 3
+    info.external_attr = (stat.S_IFREG | 0o644) << 16
+    info.compress_type = zipfile.ZIP_DEFLATED
+    return info
+
+
+def build_export_zip(snapshot, deadline):
+    """One deterministic ZIP with exactly the two CSV members.
+
+    Serialization, compression and the final deadline check share the same
+    generation budget as the CSV rendering, so an over-budget compression is
+    refused before any file is published. The fixed member order, fixed member
+    metadata and fixed timestamps make the bytes a deterministic function of the
+    frozen snapshot, which is what lets a stored file be verified against the
+    current export instead of trusted by its name.
+    """
+    participants, events = render_csv_bundle(snapshot)
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in zip(EXPORT_ZIP_MEMBERS, (participants, events)):
+            _check_deadline(deadline)
+            archive.writestr(_zip_info(name), payload)
+        _check_deadline(deadline)
+    return output.getvalue()
+
+
+def _store_export_zip(root, path, payload):
+    """Publish one complete ZIP through a temp file and one atomic rename.
+
+    A failure while writing, flushing, fsyncing or renaming leaves neither a
+    partial file at the final path nor a temp file behind, so the caller can
+    only ever serve a complete package. The returned ``(device, inode)`` names
+    the published file, so a later cleanup can never remove a file that a
+    concurrent request has already replaced with its own complete package.
+    """
+    temp = root / f'.{path.stem}.{secrets.token_hex(8)}.tmp'
+    identity = None
+    try:
+        descriptor = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, 'wb') as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+            published = os.fstat(stream.fileno())
+            identity = (published.st_dev, published.st_ino)
+        os.replace(temp, path)
+    finally:
+        if temp.exists():
+            temp.unlink()
+    return identity
+
+
+def _open_verified_cache(path, payload, deadline):
+    """Open the stored ZIP once and serve only those exact verified bytes.
+
+    The deterministic rebuild of the frozen snapshot is the expected package: a
+    stored file is READY only when the same opened stream carries exactly those
+    bytes, so a valid ZIP of another view, language or export can never be
+    served through this export's permission check. A missing, symlinked,
+    oversized or different file is an unknown state that is never served. The
+    declared size is bounded before any read and the deadline covers the
+    comparison. Returns an open stream positioned at 0, or ``None``.
+    """
+    if path.is_symlink() or not path.is_file():
+        return None
+    if len(payload) > MAX_ZIP_BYTES:
+        return None
+    try:
+        if path.stat().st_size != len(payload):
+            return None
+    except OSError:
+        return None
+    _check_deadline(deadline)
+    stream = None
+    try:
+        stream = open(path, 'rb')
+        if stream.read(len(payload) + 1) != payload:
+            stream.close()
+            return None
+        _check_deadline(deadline)
+        stream.seek(0)
+        return stream
+    except Rejected:
+        if stream is not None:
+            stream.close()
+        raise
+    except OSError:
+        if stream is not None:
+            stream.close()
+        return None
+
+
+def _discard_export_zip(path, identity):
+    """Remove only the exact file this request published, never a successor.
+
+    A crossing deadline discards the just-committed package, but a concurrent
+    request may already have replaced it with the same complete bytes; the
+    ``(device, inode)`` identity check leaves that file (and any open download
+    of it) untouched.
+    """
+    try:
+        if identity is not None:
+            current = path.stat()
+            if (current.st_dev, current.st_ino) != identity:
+                return
+        path.unlink()
+    except OSError:
+        pass
+
+
+def render_zip_download(item, *, generation_seconds=MAX_GENERATION_SECONDS):
+    """The v2 spreadsheet bundle: exactly participants.csv and events.csv.
+
+    The expected package is deterministically rebuilt from the frozen snapshot;
+    a stored file is served only when the same opened stream carries exactly
+    those bytes, so no cached ZIP can cross this export's frozen view, language
+    or permission check. A missing or different file is replaced through one
+    atomic rename, and a valid stored file is left alone, so concurrent
+    same-export requests can neither delete a successful download nor return
+    mixed bytes. The deadline covers serialization, compression, cache
+    comparison and the file commit; the final compressed ZIP is bounded like the
+    decompressed CSV pair. Any filesystem setup/open/write/flush/rename failure
+    refuses only this download: the lossless JSONL path stays open.
+    """
+    snapshot = item.snapshot if isinstance(item.snapshot, dict) else {}
+    require(format_version_of(item) == '2', 'export_format', 400)
+    deadline = time.monotonic() + float(generation_seconds)
+    path = export_zip_path(item)
+    payload = build_export_zip(snapshot, deadline)
+    if len(payload) > MAX_ZIP_BYTES:
+        raise ExportZipLimit()
+    _check_deadline(deadline)
+    stream = _open_verified_cache(path, payload, deadline)
+    if stream is not None:
+        return FileResponse(stream, as_attachment=True, filename=f'{item.id}.zip',
+                            content_type='application/zip')
+    try:
+        identity = _store_export_zip(path.parent, path, payload)
+    except OSError:
+        raise ExportFileFailure()
+    try:
+        _check_deadline(deadline)
+    except Rejected:
+        _discard_export_zip(path, identity)
+        raise
+    # The served bytes are exactly the bytes this request built and committed;
+    # no unchecked path is re-opened after validation.
+    return FileResponse(io.BytesIO(payload), as_attachment=True, filename=f'{item.id}.zip',
+                        content_type='application/zip')
+
+
 def _jsonl_line(snapshot, event, code):
     line = {'format_version': '2', 'view': snapshot.get('view'), 'study_id': snapshot.get('study_id'),
             'title': snapshot.get('title'), 'participant_uuid': event['participant_uuid'],
@@ -547,6 +766,10 @@ def render_download(item, fmt):
     """The frozen bytes of one export format; v1 keeps the original rendering."""
     snapshot = item.snapshot if isinstance(item.snapshot, dict) else {}
     if format_version_of(item) != '2':
+        # v1 has no two-CSV bundle: an explicit zip request fails closed instead
+        # of silently returning the legacy JSONL under the wrong format.
+        if fmt == 'zip':
+            raise Rejected('export_format', 400)
         if fmt == 'metadata':
             return JsonResponse({key: value for key, value in snapshot.items() if key != 'records'})
         if fmt == 'csv':
@@ -564,6 +787,8 @@ def render_download(item, fmt):
         return JsonResponse(metadata_document(item))
     if fmt == 'jsonl':
         return HttpResponse(render_jsonl(snapshot), content_type='application/x-ndjson')
+    if fmt == 'zip':
+        return render_zip_download(item)
     if fmt == 'csv':
         # A v2 CSV is delivered as the ZIP bundle (participants.csv + events.csv)
         # with the metadata beside it; a single-file CSV would be a half package.
