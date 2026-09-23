@@ -84,6 +84,14 @@ godot --headless --path examples/synthetic_experiment -- --local --synthetic-aut
 
 记录提交与完成集合都写入独立 SQLite 后才返回 `finished_saved` 与 `remote_status: unsupported`，界面显示“本地测试完成”，不连接服务器、不伪造上传回执；任一写入失败立即报 `storage_error` 并保留本机记录。结果 JSONL 只在明确点击“保存结果 JSONL（本地测试）”时写入：先在所选目录写同目录临时文件、核对完整内容后原子替换旧目标，打开后写入/flush 失败报 `results_export_unavailable`，旧文件与本机记录保持不变；保存提示独立于完成状态，未完成时只显示“结果已保存”与实际最终文件路径，目录反馈和“打开结果目录”指向该实际父目录（默认目录为 `GEP_SYNTHETIC_RESULTS`，未设置时为 `user://local_results`）。Web 隔离预览由参与者点击“下载结果 JSONL（本地测试）”下载同一结构，且 SDK 只允许导出本机当前未锁定的本地测试会话：缺失/已清理/已锁定/远端会话一律拒绝且不产生下载。普通运行去掉自动输入参数。
 
+薄封装默认字段演示（独立示例，不修改科学任务；真实本地后端、真实 SQLite、零网络）：
+
+```sh
+godot --headless --path examples/synthetic_experiment --script ../data_defaults_demo/demo.gd
+```
+
+成功时打印一行 `DATA_DEFAULTS_DEMO {...}` 并按明确路径保存结果 JSONL；一次声明默认事件类型/schema/显式字段或 snapshot_provider 后的短 `record()`、显式覆盖与错误码见[实验开发者说明](experiment_developer.md)。会被复制的值在复制前后端调用前先做有界检查：直接/间接/混合循环与超过公开 `MAX_VALUE_DEPTH = 64` 的嵌套都报 `invalid_value`，合法共享但无环的结构不受影响；形状校验不代表服务端已登记该 schema，未登记的远端批次会被服务端整批拒绝且不进入 RAW，本机记录与待传数据保留。
+
 ## 最小 Compose（隔离合成环境已实测）
 
 `compose.yaml` 和 `deploy/Dockerfile` 已提供：外部指定卷、非 root、只读容器根目录、无额外 capability、显式实例标记。启动必须同时有数据库、秘密和匹配实例标记；不会自动创建空 Owner。镜像依赖用带哈希的 `requirements.txt`。

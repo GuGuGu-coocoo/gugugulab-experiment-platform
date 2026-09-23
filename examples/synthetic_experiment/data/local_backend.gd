@@ -41,6 +41,11 @@ func prepare(_options: Dictionary = {}) -> Dictionary:
 	return current
 func record(kind: String,payload: Dictionary,schema: Dictionary,observed: Dictionary = {}) -> Dictionary:
 	if current.state != "active" or buffer.size() >= 64: return {"error":"not_recording"}
+	# The backend still owns the schema contract: a declaration without a
+	# usable id/version is a clear error instead of an engine-level key error,
+	# and nothing enters the raw buffer for it.
+	if not (schema.get("id") is String) or schema.id.is_empty() or not (schema.get("version") is String) or schema.version.is_empty():
+		return {"error":"invalid_schema"}
 	sequence += 1
 	var event = {"protocol_version":"local/1","event_id":identifier(),"session_id":session_id,"segment_id":segment_id,"sequence":sequence,"event_type":kind,"schema_id":schema.id,"schema_version":schema.version,"payload":payload.duplicate(true)}
 	if not observed.is_empty(): event.observed_time = observed.duplicate(true)
