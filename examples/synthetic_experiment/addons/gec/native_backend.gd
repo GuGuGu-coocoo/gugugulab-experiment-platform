@@ -1,5 +1,6 @@
 extends Node
 ## Native SQLite transactions and asynchronous HTTP; no JavaScript dependency.
+const DELIVERY_VERSION := 2
 var db
 var writer_lock
 var config: Dictionary = {}
@@ -11,6 +12,17 @@ var sequence := 0
 var buffer: Array = []
 var sending := false
 var timer: Timer
+func default_delivery() -> Dictionary:
+	return {"initial_failed":false,"retry_failures":0,"round_id":0,"last_error":"","last_error_kind":"","ack_progress":0,"terminal_reason":"","inflight":false}
+func delivery_of(s: Dictionary) -> Dictionary:
+	## Reading an old record only fills the missing delivery defaults; the legacy
+	## attempts/retry_at/paused and records/proof/binding are never touched.
+	var delivery := default_delivery()
+	var stored = s.get("delivery")
+	if stored is Dictionary:
+		for key in delivery:
+			if stored.has(key): delivery[key] = stored[key]
+	return delivery
 func uuid() -> String:
 	var bytes = Crypto.new().generate_random_bytes(16)
 	bytes[6] = (bytes[6] & 15) | 64
@@ -51,9 +63,43 @@ func initialize_queue() -> Dictionary:
 	if int(db.query_result[0].user_version) > 1: return {"error":"unsupported_storage_version"}
 	if not query("PRAGMA journal_mode=WAL") or not query("PRAGMA synchronous=FULL") or not query("CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY,value TEXT NOT NULL)"): return {"error":"storage_prepare"}
 	if not query("PRAGMA user_version=1"): return {"error":"storage_version"}
+	if not reconcile_queue(): return {"error":"storage_prepare"}
 	segment = uuid()
 	start_uploader()
 	return {"state":"ready"}
+func reconcile_queue() -> bool:
+	## One durable pass over the queue: an old or partially shaped record only
+	## gains the missing delivery defaults (attempts/records/proof/binding stay),
+	## and a round that an earlier process exit interrupted is conservatively
+	## recorded as outcome_unknown instead of a failure; the next real round
+	## decides.
+	if not query("BEGIN IMMEDIATE"): return false
+	var ok := true
+	for row in rows():
+		if row.get("kind") != "session": continue
+		var delivery = delivery_of(row)
+		var needs: bool = row.get("delivery_version") != DELIVERY_VERSION or not (row.get("delivery") is Dictionary)
+		if not needs:
+			# A version-2 record can still miss individual keys (older build or
+			# partial write); the missing ones are persisted as defaults while
+			# every existing value stays.
+			for key in default_delivery():
+				if not row.delivery.has(key):
+					needs = true
+					break
+		if delivery.inflight:
+			delivery.inflight = false
+			delivery.last_error_kind = "outcome_unknown"
+			delivery.last_error = "outcome_unknown"
+			needs = true
+		if not needs: continue
+		row.delivery_version = DELIVERY_VERSION
+		row.delivery = delivery
+		ok = query("UPDATE sessions SET value=? WHERE id=?",[JSON.stringify(row),row.id]) and ok
+	if not ok or not query("COMMIT"):
+		query("ROLLBACK")
+		return false
+	return true
 func prepare(options: Dictionary = {}) -> Dictionary:
 	if db == null:
 		var prepared = initialize_queue()
@@ -106,7 +152,7 @@ func prepare(options: Dictionary = {}) -> Dictionary:
 	for k in ["instance_id","study_id","release_id","build_id"]:
 		if response.get(k) != config[k]: return {"error":"admission_binding"}
 	session_id = response.session_id
-	var s = {"id":session_id,"kind":"session","config":config,"context":response,"proof":draft.proof,"records":[],"pending":[],"segments":[segment],"checkpoint":null,"completion":null,"complete_ack":null,"front_locked":false}
+	var s = {"id":session_id,"kind":"session","config":config,"context":response,"proof":draft.proof,"records":[],"pending":[],"segments":[segment],"checkpoint":null,"completion":null,"complete_ack":null,"front_locked":false,"delivery_version":DELIVERY_VERSION,"delivery":default_delivery()}
 	if not query("BEGIN IMMEDIATE"): return {"error":"local_commit"}
 	if not query("DELETE FROM sessions WHERE id=?",[draft.id]) or not query("INSERT INTO sessions VALUES(?,?)",[s.id,JSON.stringify(s)]) or not query("COMMIT"):
 		query("ROLLBACK")
@@ -125,16 +171,27 @@ func http(target: Dictionary, path: String, body: Dictionary, token: String = ""
 	if not token.is_empty(): headers.append("Authorization: Bearer " + token)
 	var error = request.request(target.api_url + path,headers,HTTPClient.METHOD_POST,JSON.stringify(body))
 	if error != OK:
-		request.queue_free();return {"error":"network_start"}
+		request.queue_free();return {"error":"network_start","kind":"network","status":0,"retryable":true}
 	var result = await request.request_completed
 	request.queue_free()
-	if result[0] != HTTPRequest.RESULT_SUCCESS or result[1] != 200:
-		var failure := {"error":"http_"+str(result[1])}
+	if result[0] != HTTPRequest.RESULT_SUCCESS:
+		var timed_out: bool = result[0] == HTTPRequest.RESULT_TIMEOUT
+		return {"error":"timeout" if timed_out else "network","kind":"timeout" if timed_out else "network","status":0,"retryable":true}
+	var status := int(result[1])
+	var retry_after := 0
+	for header in result[2]:
+		if String(header).to_lower().begins_with("retry-after:"):
+			var value: String = String(header).substr(String(header).find(":")+1).strip_edges()
+			if value.is_valid_int(): retry_after = value.to_int()
+	if status != 200:
+		var failure := {"error":"http_"+str(status),"kind":"http","status":status,"retryable":status == 0 or not [401,403,409,422].has(status),"retry_after":retry_after}
 		var rejected = JSON.parse_string(result[3].get_string_from_utf8())
-		if rejected is Dictionary and rejected.get("code") is String: failure["code"] = rejected.code
+		if rejected is Dictionary:
+			if rejected.get("code") is String: failure.code = rejected.code
+			if rejected.get("retryable") is bool: failure.retryable = rejected.retryable
 		return failure
 	var parsed = JSON.parse_string(result[3].get_string_from_utf8())
-	return parsed if parsed is Dictionary else {"error":"invalid_response"}
+	return parsed if parsed is Dictionary else {"error":"invalid_ack","kind":"invalid_ack","retryable":true}
 func local_test() -> bool:
 	## Only the independent local backend (and the legacy local-only flag) is a
 	## local test; a configured remote session is not.
@@ -174,12 +231,81 @@ func same_set(a: Array,b: Array) -> bool:
 		if seen.has(x) or not b.has(x): return false
 		seen[x] = true
 	return true
-func retry_later(s: Dictionary, message: String) -> void:
-	current.error = message
-	s.attempts = int(s.get("attempts",0))+1
-	s.paused = message in ["http_401","http_403","http_409","http_422"] or s.attempts >= 32
-	var bytes = Crypto.new().generate_random_bytes(1)
-	s.retry_at = Time.get_unix_time_from_system()+minf(60.0,pow(2.0,minf(s.attempts,6))) * (1.0+float(bytes[0])/255.0)
+func _invalid_event_ack(ack: Dictionary,s: Dictionary,batch: Dictionary,ids: Array) -> bool:
+	if ack.get("protocol_version") != "gep/1" or ack.get("instance_id") != s.config.instance_id or ack.get("session_id") != s.id or ack.get("batch_id") != batch.batch_id: return true
+	# Strict shapes: a missing, null or wrongly typed list is never defaulted to
+	# an empty one, because that would accept an ACK that covers nothing.
+	var accepted = ack.get("accepted")
+	var duplicate = ack.get("duplicate")
+	if not (accepted is Array) or not (duplicate is Array): return true
+	return not same_set(accepted + duplicate,ids)
+func _invalid_completion_ack(ack: Dictionary,s: Dictionary) -> bool:
+	if ack.get("state") != "complete" or ack.get("protocol_version") != "gep/1" or ack.get("instance_id") != s.config.instance_id or ack.get("session_id") != s.id: return true
+	var declaration = ack.get("declaration")
+	if not (declaration is Dictionary): return true
+	var event_ids = declaration.get("event_ids")
+	var segment_ids = declaration.get("segment_ids")
+	var missing = ack.get("missing")
+	# Even an empty declared completion set must carry complete, correctly typed
+	# arrays; the declaration has to match the local set exactly and missing
+	# must be a real empty list.
+	if not (event_ids is Array) or not (segment_ids is Array) or not (missing is Array): return true
+	var declared: Dictionary = s.get("completion",{})
+	if not same_set(event_ids,declared.get("event_ids",[])) or not same_set(segment_ids,declared.get("segment_ids",[])): return true
+	return not missing.is_empty()
+func _round_start(id: String) -> bool:
+	## The round is persisted as inflight before any request is sent, so a
+	## process exit mid-round can be recognised later instead of guessed.
+	var s = read_session(id)
+	if s.is_empty() or s.get("kind") != "session": return false
+	var delivery = delivery_of(s)
+	delivery.round_id = int(delivery.get("round_id",0)) + 1
+	delivery.inflight = true
+	s.delivery_version = DELIVERY_VERSION
+	s.delivery = delivery
+	return save(s)
+func _round_finish(id: String,progress: bool,failure: Dictionary,counting: bool) -> void:
+	## One real transaction for the whole round outcome. The ACK progress itself
+	## was already committed together with the queue change, so this pass never
+	## double-counts it: it only clears the round marker, the diagnostics and the
+	## independent legacy attempts/backoff budget.
+	var s = read_session(id)
+	if s.is_empty() or s.get("kind") != "session": return
+	var delivery = delivery_of(s)
+	if counting: delivery.inflight = false
+	if failure.is_empty():
+		if progress:
+			delivery.last_error = ""
+			delivery.last_error_kind = ""
+	else:
+		delivery.last_error = str(failure.get("error",""))
+		delivery.last_error_kind = str(failure.get("code",failure.get("kind","error")))
+		var is_local: bool = str(failure.get("kind","")) == "local_storage_error"
+		var retryable: bool = bool(failure.get("retryable",true))
+		var status := int(failure.get("status",0))
+		if str(failure.get("code","")) == "study_deleted":
+			# A permanent deletion terminates immediately whether it arrived
+			# during the experiment, on a completion-only round or after a legal
+			# batch ACK in the same round; the persisted progress stays.
+			delivery.terminal_reason = "study_deleted"
+			s.paused = true
+		elif counting and not progress and not is_local and retryable:
+			if not bool(delivery.initial_failed) and int(delivery.get("ack_progress",0)) == 0:
+				delivery.initial_failed = true
+			else:
+				delivery.retry_failures = int(delivery.get("retry_failures",0)) + 1
+		s.attempts = int(s.get("attempts",0)) + 1
+		# A server refusal that is explicitly not retryable (any status) is a
+		# safe pause; a local storage failure is not a remote authorization
+		# denial and must stay retryable instead of locking the queue forever.
+		var permanent: bool = not is_local and (not retryable or [401,403,409,422].has(status))
+		s.paused = bool(s.get("paused",false)) or permanent or int(s.attempts) >= 32
+		var bytes = Crypto.new().generate_random_bytes(1)
+		var backoff: float = minf(60.0,pow(2.0,minf(float(s.attempts),6.0))) * (1.0+float(bytes[0])/255.0)
+		s.retry_at = Time.get_unix_time_from_system()+maxf(float(failure.get("retry_after",0)),backoff)
+		if s.id == session_id: current.error = str(failure.get("error",""))
+	s.delivery_version = DELIVERY_VERSION
+	s.delivery = delivery
 	save(s)
 func flush() -> void:
 	if sending or local_only: return
@@ -189,22 +315,61 @@ func flush() -> void:
 		if s.get("complete_ack") != null and s.pending.is_empty() and s.checkpoint == null:
 			save(_tombstone(s))
 			continue
-		if s.pending.size() > 0:
+		var has_work: bool = not s.pending.is_empty() or s.get("completion") != null
+		if not has_work: continue
+		# Delivery counting only applies to a declared completion set: failures
+		# during the experiment never carry into the finish threshold.
+		var counting: bool = s.get("completion") != null
+		var progress := false
+		var failure: Dictionary = {}
+		if counting and not _round_start(s.id):
+			failure = {"error":"local_storage_error","kind":"local_storage_error","retryable":false}
+		if failure.is_empty() and not s.pending.is_empty():
 			var events: Array = s.records.filter(func(e):return s.pending.has(e.event_id)).slice(0,32)
 			var batch = {"batch_id":uuid(),"events":events}
-			var ack = await http(s.config,"/v1/participant/sessions/"+s.id+"/event-batches",batch,s.context.token)
 			var ids: Array = events.map(func(e):return e.event_id)
-			if ack.get("protocol_version") != "gep/1" or ack.get("instance_id") != s.config.instance_id or ack.get("session_id") != s.id or ack.get("batch_id") != batch.batch_id or not same_set(ack.get("accepted",[])+ack.get("duplicate",[]),ids):
-				retry_later(read_session(s.id),ack.get("error","invalid_ack"));continue
-			s = read_session(s.id)
-			s.pending = s.pending.filter(func(id):return not ids.has(id))
-			if not save(s): current.error = "ack_local_commit";continue
-		if s.completion != null:
-			var ack = await http(s.config,"/v1/participant/sessions/"+s.id+"/completion",s.completion,s.context.token)
-			if ack.get("state") == "complete" and ack.get("protocol_version") == "gep/1" and ack.get("instance_id") == s.config.instance_id and ack.get("session_id") == s.id and same_set(ack.declaration.event_ids,s.completion.event_ids) and same_set(ack.declaration.segment_ids,s.completion.segment_ids) and ack.get("missing",[1]).is_empty() and s.pending.is_empty():
-				s.complete_ack = ack;s.checkpoint = null
-				if save(s) and save(_tombstone(s)):
-					if s.id == session_id: current = {"state":"remote_acknowledged"}
+			var ack = await http(s.config,"/v1/participant/sessions/"+s.id+"/event-batches",batch,s.context.token)
+			if ack.has("error") or _invalid_event_ack(ack,s,batch,ids):
+				failure = ack if ack.has("error") else {"error":"invalid_ack","kind":"invalid_ack","retryable":true}
+			else:
+				# One durable transaction: the pending reduction and the delivery
+				# progress (ack_progress+1, retry_failures=0) commit together, so
+				# a process exit right after the ACK keeps a consistent queue+count.
+				var fresh = read_session(s.id)
+				fresh.pending = fresh.pending.filter(func(id):return not ids.has(id))
+				if counting:
+					var delivery = delivery_of(fresh)
+					delivery.ack_progress = int(delivery.get("ack_progress",0)) + 1
+					delivery.retry_failures = 0
+					fresh.delivery_version = DELIVERY_VERSION
+					fresh.delivery = delivery
+				if save(fresh): progress = true
+				else: failure = {"error":"local_storage_error","kind":"local_storage_error","retryable":false}
+		if failure.is_empty():
+			var fresh = read_session(s.id)
+			# An incomplete completion is never sent: while any pending record
+			# remains, only the next batch is attempted.
+			if fresh.get("completion") != null and fresh.pending.is_empty():
+				var ack = await http(fresh.config,"/v1/participant/sessions/"+fresh.id+"/completion",fresh.completion,fresh.context.token)
+				if ack.has("error") or _invalid_completion_ack(ack,fresh):
+					failure = ack if ack.has("error") else {"error":"invalid_completion_ack","kind":"invalid_ack","retryable":true}
+				else:
+					fresh.complete_ack = ack
+					fresh.checkpoint = null
+					if counting:
+						var delivery = delivery_of(fresh)
+						delivery.ack_progress = int(delivery.get("ack_progress",0)) + 1
+						delivery.retry_failures = 0
+						fresh.delivery_version = DELIVERY_VERSION
+						fresh.delivery = delivery
+					if save(fresh):
+						progress = true
+						if save(_tombstone(fresh)) and fresh.id == session_id:
+							current = {"state":"remote_acknowledged"}
+					else:
+						failure = {"error":"local_storage_error","kind":"local_storage_error","retryable":false}
+		if counting or progress or not failure.is_empty():
+			_round_finish(s.id,progress,failure,counting)
 	sending = false
 func recovery_export() -> Dictionary:
 	var s = read_session(session_id)
@@ -214,11 +379,15 @@ func recovery_export() -> Dictionary:
 		if s.get("config",{}).has(key): binding[key] = s.config[key]
 	return {"format_version":1,"session_id":s.id,"binding":binding,"records":s.records,"checkpoint":s.checkpoint,"pending":s.pending,"completion":s.completion}
 func summary() -> Dictionary:
+	## Rebuilt from the current session's persisted row on every call, so the
+	## pending count, error and failure counters can never leak from another
+	## session or from a stale in-memory state string.
 	var s: Dictionary = read_session(session_id) if not session_id.is_empty() else {}
 	var records: Array = s.get("records",[])
 	var pending: Array = s.get("pending",[])
 	var checkpoint = s.get("checkpoint")
-	return {"state":current.get("state","unprepared"),"error":current.get("error",""),"kind":s.get("kind",""),"records":records.size(),"pending":pending.size(),"checkpoint_next":checkpoint.get("next_trial") if checkpoint is Dictionary else null}
+	var delivery = delivery_of(s)
+	return {"state":current.get("state","unprepared"),"error":delivery.get("last_error","") if not s.is_empty() else current.get("error",""),"kind":s.get("kind",""),"records":records.size(),"pending":pending.size(),"checkpoint_next":checkpoint.get("next_trial") if checkpoint is Dictionary else null,"delivery_version":DELIVERY_VERSION,"delivery":delivery}
 func _study_sessions() -> Array:
 	## Newest first; only sessions of the configured instance/study are candidates.
 	var out: Array = []

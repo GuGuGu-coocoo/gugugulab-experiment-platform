@@ -1,9 +1,18 @@
 /* GEC 0.1.0 / GEP/1. Browser owns record identity and durable queue. */
 export const VERSION = '0.1.0';
+/* Delivery accounting (R00 F): versioned, per-session, persisted in the same
+   transaction as the queue itself. Only the fields below are added; the legacy
+   attempts/retryAt/paused budget stays independent. */
+export const DELIVERY_VERSION = 2;
 const copy = value => structuredClone(value);
 const uuid = () => crypto.randomUUID();
-const fail = message => { throw new Error(message); };
+const fail = (message,kind) => { const error = new Error(message); error.kind = kind ?? message; throw error; };
 const sameSet = (a,b) => a.length === new Set(a).size && b.length === new Set(b).size && a.length === b.length && a.every(x=>b.includes(x));
+const defaultDelivery = () => ({initial_failed:false,retry_failures:0,round_id:0,last_error:'',last_error_kind:'',ack_progress:0,terminal_reason:'',inflight:false});
+const deliveryOf = s => { const delivery = defaultDelivery(); const stored = s && typeof s.delivery === 'object' && s.delivery ? s.delivery : {}; for(const key of Object.keys(delivery)) if(stored[key] !== undefined) delivery[key] = stored[key]; return delivery; };
+const withDelivery = s => { const out = {...s}; out.delivery_version = DELIVERY_VERSION; out.delivery = deliveryOf(s); return out; };
+const isRetryable = error => !(error && (error.retryable === false || [401,403,409,422].includes(error.status)));
+const storageFailure = cause => { const error = new Error('local_storage_error'); error.kind = 'local_storage_error'; error.local = true; error.retryable = false; error.cause = cause; return error; };
 export class GEC {
   constructor(config) { this.config=copy(config);this.localOnly=config.preview===true;this.buffer=[];this.state='unprepared';this.error=null;this.sequence=0;this.segment=uuid();this.busy=false;this.stopped=false; }
   async prepare() {
@@ -18,6 +27,18 @@ export class GEC {
     }));
     this.db=await new Promise((resolve,reject)=>{const r=indexedDB.open('gec-1',1);r.onupgradeneeded=()=>r.result.createObjectStore('sessions',{keyPath:'id'});r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);r.onblocked=()=>reject(new Error('storage_blocked'));});
     await this.mutate(store=>{store.put({id:'preflight',probe:true});store.delete('preflight');});
+    // One reconciliation pass for the durable queue: an old record only gets the
+    // missing delivery defaults (its attempts/records/proof/binding stay), and a
+    // round that was interrupted by a process exit is conservatively recorded as
+    // outcome_unknown instead of a failure; the next real round decides.
+    await this.mutate(store=>{const r=store.getAll();r.onsuccess=()=>{for(const row of r.result){
+      if(!row||row.kind!=='session')continue;
+      const delivery=deliveryOf(row);
+      const needs=row.delivery_version!==DELIVERY_VERSION||!row.delivery||Object.keys(defaultDelivery()).some(key=>row.delivery[key]===undefined)||delivery.inflight===true;
+      if(!needs)continue;
+      if(delivery.inflight){delivery.inflight=false;delivery.last_error_kind='outcome_unknown';delivery.last_error='outcome_unknown';}
+      store.put({...row,delivery_version:DELIVERY_VERSION,delivery});
+    };}});
     this.state='ready';
     if(!this.localOnly)this.timer=setInterval(()=>this.flush(false).catch(e=>this.report(e)),1000);
     return this.status();
@@ -26,8 +47,18 @@ export class GEC {
   all() { return new Promise((resolve,reject)=>{const tx=this.db.transaction('sessions','readonly');const r=tx.objectStore('sessions').getAll();tx.oncomplete=()=>resolve(r.result);tx.onerror=()=>reject(tx.error);}); }
   async get(id){return (await this.all()).find(s=>s.id===id);}
   async request(config,path,body,token) {
-    const response=await fetch(config.api_url+path,{method:body===undefined?'GET':'POST',headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},body:body===undefined?undefined:JSON.stringify(body),credentials:'omit',redirect:'error',signal:AbortSignal.timeout(10000)});
-    if(!response.ok) {const e=new Error('http_'+response.status);e.status=response.status;try{const body=await response.json();if(body&&typeof body.code==='string')e.code=body.code;}catch{}const wait=response.headers.get('Retry-After');e.retryAfter=wait&&/^\d+$/.test(wait)?Number(wait)*1000:0;throw e;}
+    let response;
+    try {
+      response=await fetch(config.api_url+path,{method:body===undefined?'GET':'POST',headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},body:body===undefined?undefined:JSON.stringify(body),credentials:'omit',redirect:'error',signal:AbortSignal.timeout(10000)});
+    } catch(error) {
+      // A real network refusal/timeout is a sent attempt; the transport keeps
+      // the error class so the delivery accounting can count it correctly.
+      const timeout=!!error&&error.name==='TimeoutError';
+      const transport=new Error(timeout?'timeout':'network');
+      transport.kind=timeout?'timeout':'network';transport.retryable=true;
+      throw transport;
+    }
+    if(!response.ok) {const e=new Error('http_'+response.status);e.status=response.status;e.kind='http';try{const body=await response.json();if(body&&typeof body.code==='string')e.code=body.code;if(body&&typeof body.retryable==='boolean')e.retryable=body.retryable;}catch{}const wait=response.headers.get('Retry-After');e.retryAfter=wait&&/^\d+$/.test(wait)?Number(wait)*1000:0;throw e;}
     return response.json();
   }
   /* Local candidate discovery. The shell never asks the participant for a public
@@ -106,7 +137,7 @@ export class GEC {
     for(const k of ['instance_id','study_id','release_id','build_id'])if(response[k]!==c[k])fail('admission_binding');
     if(c.expected_release_id!==undefined&&response.release_id!==c.expected_release_id)fail('admission_binding');
     this.id=response.session_id;
-    await this.mutate(store=>{store.delete(draft.id);store.put({id:this.id,kind:'session',config:c,context:response,records:[],pending:[],segments:[this.segment],checkpoint:null,completion:null,complete_ack:null,front_locked:false,proof:draft.proof});});
+    await this.mutate(store=>{store.delete(draft.id);store.put({id:this.id,kind:'session',config:c,context:response,records:[],pending:[],segments:[this.segment],checkpoint:null,completion:null,complete_ack:null,front_locked:false,proof:draft.proof,delivery_version:DELIVERY_VERSION,delivery:defaultDelivery()});});
     this.state='active';return {session_id:this.id};
   }
   record(type,payload,schema,observed_time) {
@@ -144,31 +175,99 @@ export class GEC {
   async flush(manual=true) {
     if(this.busy||this.stopped)return;
     this.busy=true;let firstError;
-    try {for(const s of await this.all()){
-      if(s.kind!=='session'||s.paused||(!manual&&s.retryAt>Date.now()))continue;
-      try {
+    try {for(const raw of await this.all()){
+      // The durable retry schedule (backoff or Retry-After) is respected by an
+      // automatic and a manual round alike: neither may clear the counters,
+      // lift a safe pause or jump the wait.
+      if(raw.kind!=='session'||raw.paused||raw.retryAt>Date.now())continue;
+      // A browser that already knows it is offline sends nothing for an
+      // automatic round: no request, no attempt and no delivery count.
+      if(!manual&&typeof navigator!=='undefined'&&navigator.onLine===false)continue;
+      const s=withDelivery(raw);
       if(s.complete_ack){await this.cleanup(s.id);continue;}
-      if(s.pending.length){
-        const records=s.records.filter(e=>s.pending.includes(e.event_id)).slice(0,32);const batch={batch_id:uuid(),events:records};
-        const ack=await this.request(s.config,`/v1/participant/sessions/${s.id}/event-batches`,batch,s.context.token);
-        const ids=records.map(e=>e.event_id);
-        if(ack.protocol_version!=='gep/1'||ack.instance_id!==s.config.instance_id||ack.session_id!==s.id||ack.batch_id!==batch.batch_id||!Array.isArray(ack.accepted)||!Array.isArray(ack.duplicate)||!sameSet([...ack.accepted,...ack.duplicate],ids))fail('invalid_ack');
-        await this.mutate(store=>{const r=store.get(s.id);r.onsuccess=()=>{const fresh=r.result;fresh.pending=fresh.pending.filter(id=>!ids.includes(id));store.put(fresh);};});
-      }
-      const fresh=await this.get(s.id);
-      if(fresh.completion){const ack=await this.request(fresh.config,`/v1/participant/sessions/${s.id}/completion`,fresh.completion,fresh.context.token);
-        if(ack.state==='complete'){
-          if(ack.protocol_version!=='gep/1'||ack.instance_id!==fresh.config.instance_id||ack.session_id!==s.id||!sameSet(ack.declaration.event_ids,fresh.completion.event_ids)||!sameSet(ack.declaration.segment_ids,fresh.completion.segment_ids)||ack.missing.length)fail('invalid_completion_ack');
-          await this.mutate(store=>{const r=store.get(s.id);r.onsuccess=()=>{const current=r.result;if(current.pending.length)return;current.complete_ack=ack;current.checkpoint=null;store.put(current);};});
-          await this.cleanup(s.id);
+      if(!s.pending.length&&!s.completion)continue;
+      // Delivery counting only applies to a declared completion set: failures
+      // during the experiment never carry into the finish threshold.
+      const counting=!!s.completion;
+      let progress=false,failure=null;
+      try {
+        if(counting){
+          try {
+            await this.mutate(store=>{const r=store.get(s.id);r.onsuccess=()=>{const fresh=r.result;if(!fresh||fresh.kind!=='session')return;const delivery=deliveryOf(fresh);delivery.round_id=(Number(delivery.round_id)||0)+1;delivery.inflight=true;fresh.delivery_version=DELIVERY_VERSION;fresh.delivery=delivery;store.put(fresh);};});
+          } catch(error) { failure=storageFailure(error); }
         }
-      }
-      } catch(error) {
-        firstError??=error;
-        await this.mutate(store=>{const r=store.get(s.id);r.onsuccess=()=>{const current=r.result;if(!current||current.kind!=='session')return;current.attempts=(current.attempts||0)+1;current.paused=[401,403,409,422].includes(error.status)||current.attempts>=32;const jitter=crypto.getRandomValues(new Uint32Array(1))[0]/4294967296;current.retryAt=Date.now()+Math.max(error.retryAfter||0,Math.min(60000,1000*2**Math.min(current.attempts,6))*(1+jitter));store.put(current);};});
+        if(!failure&&s.pending.length){
+          const records=s.records.filter(e=>s.pending.includes(e.event_id)).slice(0,32);const batch={batch_id:uuid(),events:records};
+          const ack=await this.request(s.config,`/v1/participant/sessions/${s.id}/event-batches`,batch,s.context.token);
+          const ids=records.map(e=>e.event_id);
+          if(ack.protocol_version!=='gep/1'||ack.instance_id!==s.config.instance_id||ack.session_id!==s.id||ack.batch_id!==batch.batch_id||!Array.isArray(ack.accepted)||!Array.isArray(ack.duplicate)||!sameSet([...ack.accepted,...ack.duplicate],ids))fail('invalid_ack','invalid_ack');
+          try {
+            // One durable transaction: the pending reduction and the delivery
+            // progress (ack_progress+1, retry_failures=0) commit together, so a
+            // process exit right after the ACK keeps a consistent queue+count.
+            await this.mutate(store=>{const r=store.get(s.id);r.onsuccess=()=>{const fresh=r.result;if(!fresh||fresh.kind!=='session')return;fresh.pending=fresh.pending.filter(id=>!ids.includes(id));if(counting){const delivery=deliveryOf(fresh);delivery.ack_progress=(Number(delivery.ack_progress)||0)+1;delivery.retry_failures=0;fresh.delivery_version=DELIVERY_VERSION;fresh.delivery=delivery;}store.put(fresh);};});
+            progress=true;
+          } catch(error) { failure=storageFailure(error); }
+        }
+        if(!failure){
+          const fresh=await this.get(s.id);
+          // An incomplete completion is never sent: while any pending record
+          // remains, only the next batch is attempted.
+          if(fresh.completion&&!fresh.pending.length){
+            const ack=await this.request(fresh.config,`/v1/participant/sessions/${s.id}/completion`,fresh.completion,fresh.context.token);
+            const declaration=ack.declaration??{};
+            if(ack.state!=='complete'||ack.protocol_version!=='gep/1'||ack.instance_id!==fresh.config.instance_id||ack.session_id!==s.id||!Array.isArray(declaration.event_ids)||!Array.isArray(declaration.segment_ids)||!sameSet(declaration.event_ids,fresh.completion.event_ids)||!sameSet(declaration.segment_ids,fresh.completion.segment_ids)||!Array.isArray(ack.missing)||ack.missing.length)fail('invalid_completion_ack','invalid_ack');
+            try {
+              await this.mutate(store=>{const r=store.get(s.id);r.onsuccess=()=>{const current=r.result;if(!current||current.pending.length)return;current.complete_ack=ack;current.checkpoint=null;if(counting){const delivery=deliveryOf(current);delivery.ack_progress=(Number(delivery.ack_progress)||0)+1;delivery.retry_failures=0;current.delivery_version=DELIVERY_VERSION;current.delivery=delivery;}store.put(current);};});
+              progress=true;
+              await this.cleanup(s.id);
+            } catch(error) { failure=storageFailure(error); }
+          }
+        }
+      } catch(error) { failure=failure??error; }
+      if(failure&&failure.session_id===undefined)failure.session_id=s.id;
+      if(failure)firstError??=failure;
+      if(counting||progress||failure){
+        try { await this.finishRound(s.id,progress,failure,counting); }
+        catch(error) { firstError??=error; }
       }
     }} finally {this.busy=false;}
     if(firstError)throw firstError;
+  }
+  async finishRound(id,progress,failure,counting){
+    /* One real transaction records the whole round outcome. The ACK progress
+       itself was already committed in the same transaction as the queue change,
+       so this pass never double-counts it: it only clears the round marker, the
+       diagnostics and the independent legacy attempts/backoff budget. */
+    await this.mutate(store=>{const r=store.get(id);r.onsuccess=()=>{
+      const s=r.result;if(!s||s.kind!=='session')return;
+      const delivery=deliveryOf(s);
+      if(counting)delivery.inflight=false;
+      if(!failure){
+        if(progress){delivery.last_error='';delivery.last_error_kind='';}
+      } else {
+        delivery.last_error=String(failure.message||failure.kind||'error');
+        delivery.last_error_kind=String(failure.code||failure.kind||'error');
+        const local=!!failure.local;
+        if(failure.code==='study_deleted'){
+          // A permanent deletion terminates immediately whether it arrived
+          // during the experiment, on a completion-only round or after a legal
+          // batch ACK in the same round; the persisted progress stays.
+          delivery.terminal_reason='study_deleted';s.paused=true;
+        } else if(counting&&!progress&&!local&&isRetryable(failure)){
+          if(!delivery.initial_failed&&!(Number(delivery.ack_progress)>0))delivery.initial_failed=true;
+          else delivery.retry_failures=(Number(delivery.retry_failures)||0)+1;
+        }
+        s.attempts=(s.attempts||0)+1;
+        // A server refusal that is explicitly not retryable (any status) is a
+        // safe pause; a local storage failure is not a remote authorization
+        // denial and must stay retryable instead of locking the queue forever.
+        s.paused=!!s.paused||(!local&&!isRetryable(failure))||s.attempts>=32;
+        const jitter=crypto.getRandomValues(new Uint32Array(1))[0]/4294967296;
+        s.retryAt=Date.now()+Math.max(failure.retryAfter||0,Math.min(60000,1000*2**Math.min(s.attempts,6))*(1+jitter));
+      }
+      s.delivery_version=DELIVERY_VERSION;s.delivery=delivery;store.put(s);
+    };});
   }
   async cleanup(id){await this.mutate(store=>{const r=store.get(id);r.onsuccess=()=>{const s=r.result;if(s.complete_ack&&!s.pending.length&&!s.checkpoint)store.put({id,kind:'cleaned',state:'remote_acknowledged',instance_id:s.config?.instance_id??null,study_id:s.config?.study_id??null});};});if(id===this.id){this.state='remote_acknowledged';this.error=null;}}
   async recover(id,permit){
@@ -186,8 +285,12 @@ export class GEC {
   }
   status(){return {state:this.state,error:this.error,buffered:this.buffer.length};}
   async summary(){
+    // Rebuilt from the current session's persisted row on every call, so the
+    // state, pending, error and failure counters can never leak from another
+    // session or from a stale in-memory state string.
     const s=this.id?await this.get(this.id):null;
-    return {state:this.state,error:this.error,buffered:this.buffer.length,records:s?.records?.length??0,pending:s?.pending?.length??0,kind:s?.kind??null,checkpoint_next:s?.checkpoint?.next_trial??null};
+    const delivery=deliveryOf(s);
+    return {state:this.state,error:s?delivery.last_error:this.error,buffered:this.buffer.length,records:s?.records?.length??0,pending:s?.pending?.length??0,kind:s?.kind??null,checkpoint_next:s?.checkpoint?.next_trial??null,delivery_version:DELIVERY_VERSION,delivery};
   }
   report(error){this.error=error.message;}
   close(){clearInterval(this.timer);this.stopped=true;this.db?.close();this.unlock?.();}
