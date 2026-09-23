@@ -16,6 +16,36 @@ def django_db_modify_db_settings():
     from django.conf import settings
     settings.DATABASES['default'].setdefault('TEST', {})['NAME'] = override
 
+
+@pytest.fixture(scope='session')
+def live_server(request):
+    """pytest-django's live server without the shared in-memory connection.
+
+    For an in-memory SQLite test database, Django's ``LiveServerThread`` hands
+    the *same* connection object to every request thread (``connections_override``
+    plus ``inc_thread_sharing``). Parallel requests for one page -- the GEC Web
+    client's bridge/sdk/inputs/shell.js module graph is exactly that -- then run
+    queries on one connection at the same time and can observe a row that is
+    really there as missing: a real 400 ``Release matching query does not exist``
+    was captured for a release that sibling requests served in the same page load.
+    The in-memory database is created with ``cache=shared``, so each request
+    thread's own connection still sees the same committed data; every test that
+    uses ``live_server`` runs with ``transactional_db`` (pytest-django's helper
+    requests it), so per-thread connections keep the same visibility. The fixture
+    is otherwise identical to pytest-django's, including the modified
+    ``ALLOWED_HOSTS`` handling the autouse helper enables.
+    """
+    from pytest_django.live_server_helper import LiveServer
+    addr = (request.config.getvalue('liveserver')
+            or os.getenv('DJANGO_LIVE_TEST_SERVER_ADDRESS') or 'localhost')
+    server = LiveServer(addr, start=False)
+    # The shared connection is the race; the server thread and its request
+    # threads open their own connections to the same shared-cache database.
+    server.thread.connections_override = {}
+    server.start()
+    yield server
+    server.stop()
+
 @pytest.fixture
 def setup(db):
     owner = get_user_model().objects.create_user('synthetic_owner', password='synthetic-test-password')
