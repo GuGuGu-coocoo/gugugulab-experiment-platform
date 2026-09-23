@@ -30,6 +30,13 @@ func context() -> Dictionary:
 	if bridge == null: return {}
 	var parsed = JSON.parse_string(bridge.context_json())
 	return parsed if parsed is Dictionary else {}
+func local_test() -> bool:
+	## The Web isolated preview runs against the local store only: no server
+	## admission and no remote acknowledgement.
+	var parsed := context()
+	if parsed.has("preview"):
+		return bool(parsed.preview)
+	return bool(config.get("preview", false))
 func prepare(options: Dictionary = {}) -> Dictionary:
 	return await call_bridge("start", [options])
 func record(kind: String, payload: Dictionary, schema: Dictionary, observed: Dictionary = {}) -> Dictionary:
@@ -56,3 +63,5 @@ func recovery_export() -> Dictionary:
 	return await call_bridge("recovery_export")
 func download_recovery() -> Dictionary:
 	return await call_bridge("download_recovery")
+func download_results() -> Dictionary:
+	return await call_bridge("download_results")

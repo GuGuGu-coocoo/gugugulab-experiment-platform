@@ -210,3 +210,11 @@ browser=PASS（6 个规格 exit 0）, windows_preparation=PASS（229 项检查 0
 - **修复内容**：新增可空 `Audit.study_uuid`（迁移 `0015_audit_study_uuid`），清理在同一有界事务为有研究外键的审计写入最小研究 UUID、置空外键并清除原始 before/after（mark 行保留最小 counts），历史已脱钩记录保持 NULL；导出文件清理按真实 unlink 计数（zip 与每个 tmp/链接各一项，`os.scandir` 有界内存扫描、不物化整个目录），未删完的 spool 归属留在持久清单，file-only 批次按真实文件进展继续（不因数据库游标不动而提前停住），`--batch-size 1`/`--max-batches 1` 后如实非 complete、重跑前进并最终完成；旧精确文件名 manifest 兼容，其他导出/未知文件/符号链接目标不误删；`cleanup_deleted_studies` 对 `--batch-size < 1` 与 `--max-batches < 0` 在清理前以非 0 退出；删除状态页只显示作业状态/时间/数量/错误，不显示研究 title。
 - **真实多进程复验**（`tests/remediation/deletion_concurrency_probe.py`，真实 SQLite 文件与 OS 进程）：数据库阶段 SIGKILL 后状态非 complete、重跑完成且依赖全清（kill 触发改为任务真实推进后立即触发，避免落在“数据库行已删、complete 未写”的合法中间窗口）；新增文件阶段 SIGKILL：61 个 spool 文件（中断时剩余 60 个）在 `--batch-size 1` 下被中断时状态非 complete、未完成归属留在清单，重跑删净 owned 文件并保留 3 个无关文件；非法参数 `--batch-size 0`、`--batch-size -3`、`--max-batches -1` 真实退出码均为 1。
 - **边界**：R04/R04R 已通过官方任务验证和关键边界复核；人工测试未重跑，Phase 03 未完成。旧/新客户端三平台联测（旧包 403 暂停实机、新版解析 `study_deleted`）留 R11，不能冒充已跑。证据只写新的唯一目录 `local_data/phase03_remediation_20260923/p03r04r*/<UTC+random>/`，失败现场与旧证据不清理。以上为合成工程证据。
+
+## GEC 本地保存与结果导出（2026-09-24）
+
+R09A/R09AR 已通过任务验证和关键边界复核。正式命令 `GEP_T17_BROWSER=1 .venv/bin/pytest -q tests/remediation/test_p03r09ar.py tests/remediation/test_p03r09a.py tests/test_phase03_shell.py tests/test_phase03_releases_browser.py` → **26 passed，0 failed，0 skipped**；另有两组独立 Chrome/Godot 边界检查通过。补充打包回归 `.venv/bin/pytest -q tests/test_phase03_packages.py tests/test_phase03_windows_build.py` → **46 passed**；这些范围不相加作为一次全量验收。
+
+验证覆盖真实 Godot、本地 SQLite、导出的 Godot Web 构建、Chrome 与 IndexedDB：记录和完成声明持久化后才宣称本地测试完成；锁定、缺失、已清理及远端会话不能使用本地测试结果下载；保存部分结果不表示实验完成；原生文件先写同目录临时文件、核对完整内容后替换，实际文件父目录用于反馈与打开；成功准入或仅数据恢复后退役前置表单，保存失败后也不能从旧入口再次准入。科学任务源码摘要保持不变。
+
+只读目录与不存在路径造成的文件打开失败、SQLite 写入失败为本机文件系统实测；打开成功后的写失败由明确测试钩子注入，浏览器存储失败由 IndexedDB API 边界注入，不声称物理磁盘耗尽。正常与失败路径均保留本机记录，覆盖旧目标文件保护。Windows 上新保存与文件替换行为、完整冻结包、补传轮次与失败收尾的整体联测仍待后续；本轮不代表人工验收，Phase03 未完成。

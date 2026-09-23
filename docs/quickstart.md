@@ -39,7 +39,7 @@ pnpm install --frozen-lockfile
 2. 原生完整包路径（推荐）：粘贴 `build/native/descriptor.json` → 登记构建 → 在“上传完整原生程序包”选择 `.app` ZIP（`build/native/synthetic.zip`）→ 批准合成发行（服务端在此预分配发行 ID、冻结公开配置/schema/codebook/许可证与第三方许可声明并组装清单）→ 在发行列表点击“下载完整发行包”。解包后 `.app` 与 `connection.json` 同级，直接启动 `.app` 即使用包内默认配置，无需手工替换文件。包内 `THIRD_PARTY_NOTICES.txt` 随包冻结 Godot 引擎、godot-sqlite 与 SQLite 的许可证/版权声明，项目 `LICENSE` 只覆盖 GEP 自身代码。程序字节与可执行位原样保留，服务器不执行程序也不抓取外部地址。
 3. Windows x64 完整包路径（同一实验构建，交叉导出）：先按上面的构建命令生成 `build/windows/descriptor.json`，粘贴登记 → 在“上传完整原生程序包”选择 `build/windows/synthetic_windows.zip` → 批准合成发行 → 下载完整包。解包得到一个程序根目录，里面的 EXE、PCK、原生 SQLite DLL 与 `connection.json` 都在同一目录：直接双击 EXE 即用包内默认配置，无需安装 Godot 或替换文件。Windows 包只接受描述显式声明的程序根、入口、依赖与 GDExtension 清单；路径穿越、盘符/UNC、反斜杠、原始空/`.`/`..` 组件、NTFS 非法字符 `<>"|?*`、大小写或 Unicode 归一化重名、文件与目录同名冲突、Windows 设备名、结尾点/空格、ADS、链接/特殊文件、脚本、未声明的可执行文件与错误架构全部拒绝。
 4. 原生描述登记／兼容路径：只登记 `descriptor.json` 时不产生平台完整包，仍可批准发行并导出 `connection.json` 放到 `.app` 同级目录后自行分发。该路径不冒充平台完整下载。
-5. Web 路径：上传 `build/synthetic_web.zip` → 验证成功 → 隔离预览（仅本地保存）→ 批准合成发行 → 开放招募 → 打开参与入口。预览没有管理 Cookie，也不创建正式采集会话。
+5. Web 路径：上传 `build/synthetic_web.zip` → 验证成功 → 隔离预览（仅本地保存）→ 批准合成发行 → 开放招募 → 打开参与入口。预览没有管理 Cookie，也不创建正式采集会话；它在本地保存记录并显示“本地测试完成”，结果 JSONL 只在参与者明确点击“下载结果 JSONL（本地测试）”时下载，且只针对本机当前未锁定的本地测试会话，其他会话不产生下载；不连接服务器、不伪造上传回执。
 6. 点击开始，按左／右方向键完成两个 trial。任务结束与服务器收齐是不同状态。断网时本地保存，恢复网络后补传。关掉程序后不保证上传；重开原存储环境后队列继续按原目标处理。
 7. 研究状态页创建固定快照。JSONL 为原始记录，metadata 包含冻结 build/schema/codebook 与会话收尾信息；三个下载入口都重新检查权限。
 8. CSV 是有限、保真文本格式：固定来源列加 `record_json`，其值为 `json:` 后接完整 JSON。它不展开或分析科学字段。Excel 使用 UTF-8、逗号、双引号文本限定符导入；读取程序去掉 `json:` 后解析 JSON。null、缺失、前导零、多响应不转换，公式样文本不求值。
@@ -76,13 +76,13 @@ Windows 原生实机准备（03F）：`.venv/bin/python tools/phase03_verify_win
 
 所有账号和数据都是合成的；每次运行增加独立测试对象，不清空数据库。测试不代表独立研究人员验收。
 
-单独验证无 GEC 的本地后端：
+单独验证独立本地后端（`--local` 使用 `data/local_backend.gd`，不是原生队列的 local_only 分支）：
 
 ```sh
 godot --headless --path examples/synthetic_experiment -- --local --synthetic-auto
 ```
 
-返回 `local_committed` 和 `remote_status: unsupported`，不伪造服务器确认。普通运行去掉自动输入参数。
+记录提交与完成集合都写入独立 SQLite 后才返回 `finished_saved` 与 `remote_status: unsupported`，界面显示“本地测试完成”，不连接服务器、不伪造上传回执；任一写入失败立即报 `storage_error` 并保留本机记录。结果 JSONL 只在明确点击“保存结果 JSONL（本地测试）”时写入：先在所选目录写同目录临时文件、核对完整内容后原子替换旧目标，打开后写入/flush 失败报 `results_export_unavailable`，旧文件与本机记录保持不变；保存提示独立于完成状态，未完成时只显示“结果已保存”与实际最终文件路径，目录反馈和“打开结果目录”指向该实际父目录（默认目录为 `GEP_SYNTHETIC_RESULTS`，未设置时为 `user://local_results`）。Web 隔离预览由参与者点击“下载结果 JSONL（本地测试）”下载同一结构，且 SDK 只允许导出本机当前未锁定的本地测试会话：缺失/已清理/已锁定/远端会话一律拒绝且不产生下载。普通运行去掉自动输入参数。
 
 ## 最小 Compose（隔离合成环境已实测）
 

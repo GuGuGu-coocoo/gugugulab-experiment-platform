@@ -135,6 +135,10 @@ func http(target: Dictionary, path: String, body: Dictionary, token: String = ""
 		return failure
 	var parsed = JSON.parse_string(result[3].get_string_from_utf8())
 	return parsed if parsed is Dictionary else {"error":"invalid_response"}
+func local_test() -> bool:
+	## Only the independent local backend (and the legacy local-only flag) is a
+	## local test; a configured remote session is not.
+	return local_only
 func record(kind: String, payload: Dictionary, schema: Dictionary, observed: Dictionary = {}) -> Dictionary:
 	if current.state != "active" or buffer.size() >= 64: return {"error":"not_recording_or_backpressure"}
 	sequence += 1

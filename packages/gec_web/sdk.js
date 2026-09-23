@@ -120,7 +120,27 @@ export class GEC {
     await this.mutate(store=>{const r=store.get(this.id);r.onsuccess=()=>{const s=r.result;if(!s||s.completion)fail('session_closed');for(const e of events)if(!s.records.some(x=>x.event_id===e.event_id)){s.records.push(e);if(!this.localOnly)s.pending.push(e.event_id);}if(checkpoint){if(checkpoint.version!==1||!checkpoint.dependencies.every(id=>s.records.some(e=>e.event_id===id))){r.transaction?.abort();fail('checkpoint_dependencies');}s.checkpoint=copy(checkpoint);}store.put(s);};});
     const ids=events.map(e=>e.event_id);this.buffer=this.buffer.filter(e=>!ids.includes(e.event_id));return {state:'local_committed',event_ids:ids};
   }
-  async finish(){await this.commit();await this.mutate(store=>{const r=store.get(this.id);r.onsuccess=()=>{const s=r.result;s.completion={event_ids:s.records.map(e=>e.event_id),segment_ids:s.segments};store.put(s);};});this.state=this.localOnly?'local_committed':'finished';return {state:'local_committed'};}
+  async finish(){
+    // The local test is only finished when both the record commit and the
+    // completion set are durably stored; a failed write rejects and never
+    // reports a saved finish.
+    await this.commit();
+    await this.mutate(store=>{const r=store.get(this.id);r.onsuccess=()=>{const s=r.result;s.completion={event_ids:s.records.map(e=>e.event_id),segment_ids:s.segments};store.put(s);};});
+    this.state=this.localOnly?'finished_saved':'finished';
+    return {state:this.localOnly?'finished_saved':'local_committed'};
+  }
+  /* Explicit local-test result export: the durable record envelopes as JSONL,
+     one original event per line. It never deletes or rewrites the queue.
+     Only this device's own current, unlocked local test session may be
+     exported: a missing, cleaned, front-locked or remote session is refused
+     here, in the SDK, so a stale or hidden panel can never become a download. */
+  async results_jsonl(){
+    const s=this.id?await this.get(this.id):null;
+    if(!this.localOnly||!s||s.kind!=='local'||s.front_locked)fail('results_export_unavailable');
+    const records=s.records??[];
+    return records.map(record=>JSON.stringify(record)).join('\n')+(records.length?'\n':'');
+  }
+  results_filename(){return 'local-results-'+(this.id??'session')+'.jsonl';}
   async flush(manual=true) {
     if(this.busy||this.stopped)return;
     this.busy=true;let firstError;

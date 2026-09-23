@@ -47,9 +47,19 @@ const LOCALIZED := {
 		"recovery_denied": "凭据或本机证明不匹配；未恢复任何会话。",
 		"trial": "第 {n} 次试次：按左或右方向键",
 		"save_failed": "保存失败：{code}",
+		"storage_error": "本地保存失败：数据未全部保存，本机记录仍保留。",
 		"finished_local": "任务已完成；本地记录已提交，等待上传确认。",
+		"local_test_complete": "本地测试完成。",
 		"uploaded": "任务已完成；数据已上传并确认，本地只保留已清理标记。",
 		"data_only": "仅恢复数据：不会再进行试次。",
+		"save_results": "保存结果 JSONL（本地测试）",
+		"download_results": "下载结果 JSONL（本地测试）",
+		"open_results_dir": "打开结果目录",
+		"results_saved": "本地测试完成；结果已保存：{path}",
+		"results_saved_partial": "结果已保存：{path}；本地测试尚未完成。",
+		"results_download": "已请求下载结果 JSONL：{name}",
+		"results_cancelled": "已取消保存；本机记录仍保留。",
+		"export_failed": "导出失败：{code}",
 		"error_prefix": "无法开始：{code}",
 		"retry": "服务器暂时不可用，将按退避自动重试；本地记录不会丢失。",
 		"unsupported": "发行配置的参与能力无法识别，已停止以避免误接。",
@@ -63,6 +73,7 @@ const LOCALIZED := {
 		"err_entry_closed": "该研究当前没有可用的参与版本。",
 		"err_unsupported_capability": "服务器不支持该恢复能力，请联系研究人员。",
 		"err_not_recoverable": "本机没有可恢复的会话。",
+		"err_results_export_unavailable": "结果导出失败：无法写入结果文件；本机记录仍保留。",
 	},
 	"en": {
 		"title": "Synthetic experiment",
@@ -93,9 +104,19 @@ const LOCALIZED := {
 		"recovery_denied": "Credentials or device proof do not match; no session was recovered.",
 		"trial": "Trial {n}: press LEFT or RIGHT",
 		"save_failed": "Save failed: {code}",
+		"storage_error": "Local save failed: not all data was saved; local records are kept.",
 		"finished_local": "Task finished; the local records are committed and waiting for upload confirmation.",
+		"local_test_complete": "Local test complete.",
 		"uploaded": "Task finished; data is uploaded and confirmed, and only the cleaned marker remains.",
 		"data_only": "Data recovery only: no trials will resume.",
+		"save_results": "Save results JSONL (local test)",
+		"download_results": "Download results JSONL (local test)",
+		"open_results_dir": "Open results folder",
+		"results_saved": "Local test complete; results saved: {path}",
+		"results_saved_partial": "Results saved: {path}; the local test is not finished yet.",
+		"results_download": "Results JSONL download requested: {name}",
+		"results_cancelled": "Save cancelled; local records are kept.",
+		"export_failed": "Export failed: {code}",
 		"error_prefix": "Cannot start: {code}",
 		"retry": "The server is temporarily unavailable; retries back off automatically and local records are kept.",
 		"unsupported": "The release capability is not recognized, so the shell stopped instead of guessing.",
@@ -109,6 +130,7 @@ const LOCALIZED := {
 		"err_entry_closed": "This study has no available participation release.",
 		"err_unsupported_capability": "The server does not support this recovery capability.",
 		"err_not_recoverable": "No recoverable session exists on this device.",
+		"err_results_export_unavailable": "Results export failed: the results file could not be written; local records are kept.",
 	},
 }
 
@@ -120,6 +142,8 @@ var state := "unprepared"
 var locale := "zh"
 var data_only := false
 var finished_announced := false
+var local_test_mode := false
+var entry_locked := false
 var pending: Dictionary = {}
 var pending_credentials: Dictionary = {}
 
@@ -139,9 +163,16 @@ var confirm_label: Label
 var confirm_continue: Button
 var confirm_new: Button
 var confirm_cancel: Button
+var recover_button: Button
+var permit_button: Button
+var save_results_button: Button
+var open_results_button: Button
+var save_results_dialog: FileDialog
+var shell_box: VBoxContainer
 
 var _callbacks: Array = []
 var _reported_state := ""
+var _results_directory := ""
 var _refresh: Timer
 
 
@@ -154,6 +185,8 @@ func setup(selected: Node) -> Dictionary:
 		config = backend.config
 	_resolve_locale()
 	_resolve_mode()
+	if backend != null and backend.has_method("local_test"):
+		local_test_mode = bool(backend.local_test())
 	if state == "unsupported":
 		_build_native_ui()
 		announce(t("unsupported"))
@@ -241,6 +274,10 @@ func set_locale(code: String) -> void:
 		start.text = t("start")
 	if export_button != null:
 		export_button.text = t("export")
+	if save_results_button != null:
+		save_results_button.text = t("save_results")
+	if open_results_button != null:
+		open_results_button.text = t("open_results_dir")
 	if confirm_continue != null:
 		confirm_continue.text = t("continue_")
 	if confirm_new != null:
@@ -255,6 +292,7 @@ func code_field() -> LineEdit:
 
 func _build_native_ui() -> void:
 	var box = VBoxContainer.new()
+	shell_box = box
 	box.position = Vector2(70, 70)
 	box.size = Vector2(850, 560)
 	add_child(box)
@@ -286,7 +324,7 @@ func _build_native_ui() -> void:
 		short_code.max_length = 6
 		short_code.placeholder_text = t("short_code")
 		box.add_child(short_code)
-		var recover_button = Button.new()
+		recover_button = Button.new()
 		recover_button.text = t("recover")
 		recover_button.pressed.connect(func(): await submit_entry({"short_code": short_code.text}))
 		box.add_child(recover_button)
@@ -304,7 +342,7 @@ func _build_native_ui() -> void:
 		permit.secret = true
 		permit.placeholder_text = t("permit")
 		advanced_box.add_child(permit)
-		var permit_button = Button.new()
+		permit_button = Button.new()
 		permit_button.text = t("recover_permit")
 		permit_button.pressed.connect(func(): await submit_entry({"recovery": recovery.text, "permit": permit.text}))
 		advanced_box.add_child(permit_button)
@@ -318,6 +356,16 @@ func _build_native_ui() -> void:
 	export_button.text = t("export")
 	export_button.pressed.connect(export_recovery)
 	box.add_child(export_button)
+	if backend != null and backend.has_method("save_results"):
+		save_results_button = Button.new()
+		save_results_button.text = t("save_results")
+		save_results_button.pressed.connect(_on_save_results_pressed)
+		box.add_child(save_results_button)
+		open_results_button = Button.new()
+		open_results_button.text = t("open_results_dir")
+		open_results_button.visible = false
+		open_results_button.pressed.connect(_on_open_results_pressed)
+		box.add_child(open_results_button)
 	confirm_box = HBoxContainer.new()
 	confirm_box.visible = false
 	box.add_child(confirm_box)
@@ -344,6 +392,43 @@ func _toggle_advanced() -> void:
 		advanced_box.visible = not advanced_box.visible
 
 
+func _lock_entry_form() -> void:
+	## Successful admission retires the entry surface for good: hidden, disabled
+	## and unfocused, so it cannot be submitted twice, cannot consume the science
+	## keys and cannot cover the stimulus. The status line and the recovery export
+	## stay available.
+	entry_locked = true
+	for control in [code, password, short_code, recovery, permit, hint, start,
+			advanced_toggle, recover_button, permit_button]:
+		if control == null:
+			continue
+		control.visible = false
+		if control is BaseButton:
+			control.disabled = true
+		elif control is LineEdit:
+			control.editable = false
+	if advanced_box != null:
+		advanced_box.visible = false
+	if confirm_box != null:
+		confirm_box.visible = false
+	# Remove the entry callbacks as well: a retired form must not be able to
+	# start, recover or re-submit even if a control were reached again.
+	for button in [start, recover_button, permit_button, advanced_toggle]:
+		if button == null:
+			continue
+		for connection in button.pressed.get_connections():
+			button.pressed.disconnect(connection["callable"])
+	if shell_box != null:
+		shell_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		if message != null:
+			shell_box.size = Vector2(shell_box.size.x, message.get_combined_minimum_size().y + 12)
+	var focused = get_viewport().gui_get_focus_owner() if get_viewport() != null else null
+	if focused != null:
+		focused.release_focus()
+	if web:
+		_web_state({"entry_hidden": true, "busy": false})
+
+
 func _mount_web_shell() -> void:
 	for _i in range(180):
 		var bridge = JavaScriptBridge.get_interface("GECBridge")
@@ -356,6 +441,7 @@ func _mount_web_shell() -> void:
 				"status": t("status"),
 				"mode": mode,
 				"show_code": mode == "legacy",
+				"local_only": local_test_mode,
 				"messages": {
 					"anonymous": t("anonymous"),
 					"code": t("code"),
@@ -369,6 +455,7 @@ func _mount_web_shell() -> void:
 					"recover_permit": t("recover_permit"),
 					"start": t("start"),
 					"export": t("export"),
+					"download_results": t("download_results"),
 					"continue_": t("continue_"),
 					"start_new": t("start_new"),
 					"cancel": t("cancel"),
@@ -381,6 +468,10 @@ func _mount_web_shell() -> void:
 
 func _on_web_action(args: Array) -> void:
 	var action := str(args[0]) if args.size() > 0 else ""
+	if entry_locked and action in ["start", "recover-code", "recover-permit"]:
+		# The entry callbacks are retired with the form; the panel is also hidden
+		# and disabled, so this only fails closed for a stale click.
+		return
 	_focus_canvas()
 	match action:
 		"start":
@@ -397,6 +488,8 @@ func _on_web_action(args: Array) -> void:
 			await confirm_new_session()
 		"confirm-cancel":
 			cancel_confirmation()
+		"download-results":
+			await export_results()
 	_focus_canvas()
 
 
@@ -454,7 +547,7 @@ func _set_busy(busy: bool) -> void:
 		_web_state({"busy": busy})
 		return
 	if start != null:
-		start.disabled = busy
+		start.disabled = busy or entry_locked
 
 
 func _web_state(spec: Dictionary) -> void:
@@ -510,8 +603,15 @@ func _set_error(text: String, reason := "", raw := "") -> void:
 func submit_entry(overrides: Dictionary = {}) -> Dictionary:
 	if state == "unsupported":
 		return {"error": "unsupported_configuration"}
+	if entry_locked:
+		# A retired entry stays retired even when a later save failure moved the
+		# state to "error": a stale submit must never open a new session next to
+		# the records of the admitted one.
+		return {"error": "already_started"}
 	if state == "busy":
 		return {"error": "busy"}
+	if state in ["active", "data_only"] or finished_announced:
+		return {"error": "already_started"}
 	state = "busy"
 	var values := _read_values()
 	for key in overrides:
@@ -667,7 +767,10 @@ func _apply_prepare(result: Dictionary) -> Dictionary:
 	if str(result.get("state", "")) == "data_only":
 		data_only = true
 		state = "data_only"
-		_reported_state = "data_only"
+		_reported_state = _fingerprint("data_only", "")
+		# A successful data-only recovery retires the entry surface exactly like
+		# a normal admission: it must not be able to start a second participation.
+		_lock_entry_form()
 		announce(t("data_only"))
 		print("SYNTHETIC_DATA_ONLY")
 		emit_signal("session_data_only")
@@ -675,14 +778,33 @@ func _apply_prepare(result: Dictionary) -> Dictionary:
 	state = "active"
 	data_only = false
 	finished_announced = false
-	_reported_state = "active"
+	_reported_state = _fingerprint("active", "")
 	_web_state({"reason": ""})
+	_lock_entry_form()
 	emit_signal("session_started", result.get("checkpoint"))
 	return result
 
 
-func announce_finished(_result: Dictionary = {}) -> void:
+func _fingerprint(state_name: String, error: String) -> String:
+	## The refresh comparison includes the error, so a changed error message is
+	## announced even while the state string itself stays the same.
+	return state_name + "|" + error
+
+
+func announce_finished(result: Dictionary = {}) -> void:
+	if result.has("error"):
+		## A failed finish is never a saved finish: no completion is announced and
+		## the records stay available for a retry or an explicit result export.
+		finished_announced = false
+		state = "error"
+		announce(t("storage_error"))
+		_web_state({"busy": false, "reason": str(result.get("error", "storage_error"))})
+		return
 	finished_announced = true
+	if local_test_mode:
+		state = "finished_local_test"
+		announce(t("local_test_complete"))
+		return
 	announce(t("finished_local"))
 
 
@@ -695,16 +817,22 @@ func _refresh_state() -> void:
 	elif backend.has_method("status"):
 		summary = backend.status()
 	var current := str(summary.get("state", "unprepared"))
-	if current == _reported_state:
+	var current_error := str(summary.get("error", ""))
+	var fingerprint := _fingerprint(current, current_error)
+	if fingerprint == _reported_state:
 		return
-	_reported_state = current
+	_reported_state = fingerprint
 	if current == "remote_acknowledged":
 		state = "uploaded"
 		announce(t("uploaded"))
+	elif current == "finished_saved" and local_test_mode:
+		state = "finished_local_test"
+		finished_announced = true
+		announce(t("local_test_complete"))
 	elif current == "local_committed" and finished_announced:
-		announce(t("finished_local"))
-	elif current in ["active", "local_committed"] and not str(summary.get("error", "")).is_empty():
-		announce(t("retry") + " (" + str(summary.get("error", "")) + ")")
+		announce(t("local_test_complete") if local_test_mode else t("finished_local"))
+	elif current in ["active", "local_committed", "finished_saved"] and not current_error.is_empty():
+		announce(t("retry") + " (" + current_error + ")")
 
 
 func export_recovery() -> void:
@@ -752,6 +880,91 @@ func export_recovery_to(path: String) -> Dictionary:
 	file.store_string(JSON.stringify(recovery_data))
 	file.close()
 	return {"state": "exported", "path": path}
+
+
+func results_directory() -> String:
+	if not _results_directory.is_empty():
+		# After an explicit save this is the actual final file parent, not the
+		# default results directory.
+		return _results_directory
+	if backend != null and backend.has_method("results_directory"):
+		return str(backend.results_directory())
+	return _results_directory
+
+
+func save_results_to(path: String) -> Dictionary:
+	## Automation entry for the explicit local-results save. It writes exactly the
+	## document the GUI save dialog writes and never deletes the local records.
+	if backend == null or not backend.has_method("save_results"):
+		return {"error": "results_export_unavailable"}
+	var result: Dictionary = await backend.save_results(path)
+	if result.has("error"):
+		announce(t("export_failed", {"code": str(result.get("error", ""))}))
+		return result
+	_announce_results_saved(result)
+	return result
+
+
+func export_results() -> Dictionary:
+	## Explicit Web download of the local test results as JSONL.
+	if backend == null or not backend.has_method("download_results"):
+		return {"error": "results_export_unavailable"}
+	var result: Dictionary = await backend.download_results()
+	if result.has("error"):
+		announce(t("export_failed", {"code": str(result.get("error", ""))}))
+		return result
+	announce(t("results_download", {"name": str(result.get("filename", ""))}))
+	return result
+
+
+func _announce_results_saved(result: Dictionary) -> void:
+	var directory := str(result.get("directory", ""))
+	if not directory.is_empty():
+		_results_directory = directory
+	if open_results_button != null:
+		open_results_button.visible = true
+	# Saving results and finishing the local test are separate facts: only the
+	# finish that durably stored both the commit and the completion set may say
+	# the local test is complete.
+	var finished := finished_announced
+	if not finished and backend != null and backend.has_method("status"):
+		finished = str(backend.status().get("state", "")) == "finished_saved"
+	var path := str(result.get("path", ""))
+	if finished:
+		announce(t("results_saved", {"path": path}))
+	else:
+		announce(t("results_saved_partial", {"path": path}))
+
+
+func _on_save_results_pressed() -> void:
+	if web:
+		await export_results()
+		return
+	if backend == null or not backend.has_method("save_results"):
+		return
+	if save_results_dialog == null:
+		save_results_dialog = FileDialog.new()
+		save_results_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
+		save_results_dialog.access = FileDialog.ACCESS_FILESYSTEM
+		# A native dialog needs a real display server; headless runs use the
+		# engine's own dialog so the same handler path stays testable.
+		save_results_dialog.use_native_dialog = DisplayServer.get_name() != "headless"
+		save_results_dialog.filters = PackedStringArray(["*.jsonl ; Local results JSONL"])
+		save_results_dialog.file_selected.connect(func(path): await save_results_to(path))
+		save_results_dialog.canceled.connect(func(): announce(t("results_cancelled")))
+		add_child(save_results_dialog)
+	save_results_dialog.current_dir = results_directory()
+	if not save_results_dialog.current_dir.is_empty():
+		DirAccess.make_dir_recursive_absolute(save_results_dialog.current_dir)
+	save_results_dialog.current_file = "local-results.jsonl"
+	save_results_dialog.popup_centered(Vector2i(800, 500))
+
+
+func _on_open_results_pressed() -> void:
+	var directory := results_directory()
+	if directory.is_empty():
+		return
+	OS.shell_open(directory)
 
 
 ## Harness entry used by the synthetic automation: it fills the same shell fields

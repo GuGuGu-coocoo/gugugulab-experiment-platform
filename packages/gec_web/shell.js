@@ -25,6 +25,7 @@ export function installShell(specification,action) {
   const spec=JSON.parse(specification);
   const canvas=document.getElementById('canvas');
   const panel=el('div',{id:'gec-shell','data-gec-shell':'1',role:'form','aria-label':spec.title},{position:'fixed',zIndex:'5',boxSizing:'border-box',display:'flex',flexDirection:'column',gap:'8px',padding:'12px 16px',background:'rgba(24,24,24,0.92)',color:'#eee',border:'1px solid #777',borderRadius:'6px',fontFamily:'sans-serif',overflow:'auto'});
+  panel.dataset.localOnly=spec.local_only?'1':'0';
   const fields=new Map();
   const buttons=new Map();
 
@@ -74,6 +75,9 @@ export function installShell(specification,action) {
 
   const actions=el('div',{},{display:'flex',gap:'8px',flexWrap:'wrap'});
   actions.append(button('start',spec.messages.start),button('export',spec.messages.export));
+  // Local-only preview: the participant explicitly downloads the JSONL result
+  // document; nothing is exported silently and no server receipt is implied.
+  if(spec.local_only)actions.append(button('download-results',spec.messages.download_results||'Download results JSONL'));
   panel.append(actions);
 
   const confirm=el('div',{id:'gec-shell-confirm',role:'alertdialog','aria-modal':'false'},{display:'none',border:'1px solid #d0a',borderRadius:'4px',padding:'8px',gap:'8px',flexWrap:'wrap',alignItems:'center'});
@@ -98,7 +102,15 @@ export function installShell(specification,action) {
     setState(state){
       if(state.status!==undefined)document.getElementById('gec-shell-status').textContent=state.status;
       if(state.reason!==undefined)document.getElementById('gec-shell-status').dataset.reason=state.reason;
-      if(state.busy!==undefined)for(const node of buttons.values())node.disabled=state.busy&&node.id!=='gec-confirm-cancel';
+      if(state.busy!==undefined)for(const [name,node] of buttons)node.disabled=(state.busy||(panel.dataset.entryHidden==='1'&&['start','recover-code','recover-permit'].includes(name)))&&node.id!=='gec-confirm-cancel';
+      if(state.entry_hidden){
+        // A successful admission retires the pre-entry form: hidden, disabled
+        // and unfocused, so it cannot be submitted twice or cover the stimulus.
+        panel.dataset.entryHidden='1';
+        for(const [name,node] of fields){node.disabled=true;node.blur();const label=node.closest('label');if(label)label.style.display='none';}
+        for(const name of ['start','recover-code','recover-permit']){const node=buttons.get(name);if(node){node.disabled=true;node.style.display='none';}}
+        recovery.style.display='none';confirm.style.display='none';
+      }
       if(state.visible)for(const [name,node] of buttons)if(!['confirm-continue','confirm-new','confirm-cancel'].includes(name))node.style.display=state.visible.includes(name)?'':'none';
       if(state.confirm!==undefined){
         if(state.confirm){confirmText.textContent=state.confirm.text;buttons.get('confirm-new').style.display=state.confirm.new_session?'':'none';confirm.style.display='flex';}
