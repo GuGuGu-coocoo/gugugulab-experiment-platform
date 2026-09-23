@@ -44,7 +44,10 @@ from core import access, excel
 from core.models import AccountInvitation, Grant, Instance, Study
 
 OWNER_PASSWORD = 'synthetic-p03r01c-owner-password'
-INVITEE_PASSWORD = 'synthetic-p03r01c-invitee-password'
+# This is a *newly set* researcher password, so it follows the U07 rule
+# (>=6 chars with an ASCII upper, lower, digit and visible punctuation); the
+# weak legacy values that still log in unchanged are separate fixtures.
+INVITEE_PASSWORD = 'Synthetic-p03r01c-invitee-2026!'
 LINK_RE = re.compile(r'data-invitation-link="([^"]+)"')
 RELATIVE_LINK_RE = re.compile(r'<code>/activate-account\?token=')
 PREVIEW_RE = re.compile(r'(?:name="preview_id" value="|data-preview-id=")([0-9a-fA-F-]{36})')
@@ -267,7 +270,8 @@ def test_actual_tokens_never_reach_new_evidence_or_captured_output(world, eviden
 @pytest.mark.skipif(os.environ.get('GEP_T17_BROWSER') != '1',
                     reason='Set GEP_T17_BROWSER=1 to run the isolated Chrome check')
 def test_actual_chrome_single_link_and_redacted_output(live_server, world, evidence, run_chrome_tokens):
-    env = dict(os.environ, GEP_TEST_BASE=live_server.url, GEP_OWNER_PASSWORD=OWNER_PASSWORD)
+    env = dict(os.environ, GEP_TEST_BASE=live_server.url, GEP_OWNER_PASSWORD=OWNER_PASSWORD,
+               GEP_INVITEE_PASSWORD=INVITEE_PASSWORD)
     result, reported = run_chrome_tokens(SCRIPT, env, timeout=120)
     assert result.returncode == 0, redact_text(result.stdout + result.stderr)
     observations = json.loads(re.search(r'P03R01C_OBSERVATIONS (\{.*\})', result.stdout).group(1))
@@ -303,6 +307,7 @@ import {chromium,expect} from '@playwright/test';
 import {writeSync} from 'node:fs';
 const browser=await chromium.launch({channel:'chrome',headless:true});
 const base=process.env.GEP_TEST_BASE, ownerPassword=process.env.GEP_OWNER_PASSWORD;
+const inviteePassword=process.env.GEP_INVITEE_PASSWORD;
 const tokenFd=Number(process.env.GEP_TOKEN_FD);
 const observations={};
 const errors=[];
@@ -346,8 +351,8 @@ try {
   expect(openResponse.status()).toBe(200);
   observations.activation_status=openResponse.status();
   await expect(setPage.getByRole('heading',{name:'接受账号邀请'})).toBeVisible();
-  await setPage.locator('[name=password]').fill('synthetic-p03r01c-invitee-password');
-  await setPage.locator('[name=confirm]').fill('synthetic-p03r01c-invitee-password');
+  await setPage.locator('[name=password]').fill(inviteePassword);
+  await setPage.locator('[name=confirm]').fill(inviteePassword);
   await setPage.getByRole('button',{name:'激活账号'}).click();
   await expect(setPage.getByText('账号已激活')).toBeVisible();
   observations.activated=true;

@@ -40,7 +40,10 @@ from core.models import AccountInvitation, Audit, Build, Grant, Instance, Releas
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OWNER_PASSWORD = 'synthetic-p03r01-owner-password'
-INVITEE_PASSWORD = 'synthetic-p03r01-invitee-password'
+# This is a *newly set* researcher password, so it follows the U07 rule
+# (>=6 chars with an ASCII upper, lower, digit and visible punctuation); the
+# weak legacy values that still log in unchanged are separate fixtures.
+INVITEE_PASSWORD = 'Synthetic-p03r01-invitee-2026!'
 LINK_RE = re.compile(r'data-invitation-link="([^"]+)"')
 RELATIVE_LINK_RE = re.compile(r'<code>/activate-account\?token=')
 TOKEN_PARAM_RE = re.compile(r'token=[A-Za-z0-9_\-]+')
@@ -306,7 +309,8 @@ def test_actual_chrome_upload_approve_and_invitation_journey(live_server, world,
     broken = evidence('p03r01-broken.zip', b'this is not a zip archive at all')
     tampered = evidence('p03r01-tampered.zip', tampered_package('p03r01-tampered'))
     env = dict(os.environ, GEP_TEST_BASE=live_server.url, GEP_STUDY_ID=str(study.id),
-               GEP_OWNER_PASSWORD=OWNER_PASSWORD, GEP_WEB_PACKAGE=str(valid),
+               GEP_OWNER_PASSWORD=OWNER_PASSWORD, GEP_INVITEE_PASSWORD=INVITEE_PASSWORD,
+               GEP_WEB_PACKAGE=str(valid),
                GEP_WEB_VERSION='p03r01-web', GEP_BROKEN_PACKAGE=str(broken),
                GEP_TAMPERED_PACKAGE=str(tampered), GEP_OLD_RELEASE=str(old.id))
     result, reported = run_chrome_tokens(SCRIPT, env, timeout=240)
@@ -364,6 +368,7 @@ import {writeSync} from 'node:fs';
 const browser=await chromium.launch({channel:'chrome',headless:true});
 const base=process.env.GEP_TEST_BASE, studyId=process.env.GEP_STUDY_ID;
 const ownerPassword=process.env.GEP_OWNER_PASSWORD;
+const inviteePassword=process.env.GEP_INVITEE_PASSWORD;
 const tokenFd=Number(process.env.GEP_TOKEN_FD);
 const observations={};
 const errors=[];
@@ -414,8 +419,8 @@ try {
   observations.activation_status=openResponse.status();
   await expect(setPage.getByRole('heading',{name:'接受账号邀请'})).toBeVisible();
   await expect(setPage.getByText('临时密码账号不使用此页面')).toBeVisible();
-  await setPage.locator('[name=password]').fill('synthetic-p03r01-invitee-password');
-  await setPage.locator('[name=confirm]').fill('synthetic-p03r01-invitee-password');
+  await setPage.locator('[name=password]').fill(inviteePassword);
+  await setPage.locator('[name=confirm]').fill(inviteePassword);
   await setPage.getByRole('button',{name:'激活账号'}).click();
   await expect(setPage.getByText('账号已激活')).toBeVisible();
   observations.activated=true;
