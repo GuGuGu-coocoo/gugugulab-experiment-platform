@@ -40,7 +40,10 @@ MESSAGES = {
     'no_conflicts': '当前没有需要收敛的授权矛盾。',
     'choice': '请选择处理方式。',
     'current_password_wrong': '当前密码不正确。',
-    'password_too_short': '密码至少 16 个字符。',
+    # One text for the unified four-class researcher rule (U07); the account
+    # entries never raise the legacy length-only code any more, so no page shows
+    # the old 16-character threshold.
+    'password_weak': '密码至少 6 位，且至少各含一个 ASCII 大写字母、小写字母、数字与可见标点符号；空格不算符号，首尾空白不会被去掉。',
     'password_mismatch': '两次输入的密码不一致。',
     'invitation_inactive': '邀请已使用、已撤销或已失效。',
     'activation_failed': '激活失败：邀请无效、已使用、已撤销或已过期。',

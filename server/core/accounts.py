@@ -13,7 +13,7 @@ from django.contrib.auth.hashers import check_password
 from django.db import transaction
 from django.utils import timezone
 
-from . import access
+from . import access, researcher_passwords
 from .access import (ROLES, allowed_platform, effective_role, ensure_principal,
                      is_instance_owner)
 from .models import AccountInvitation, AccountProfile, Audit, Grant, Instance
@@ -21,7 +21,6 @@ from .protocol import Rejected, require
 from .services import digest
 
 INVITATION_TTL = timedelta(hours=24)
-MINIMUM_PASSWORD = 16
 
 # The finite v2 platform action(s) every lifecycle operation requires. Ordinary
 # accounts are managed with ``accounts.manage_user``; an Admin target needs
@@ -80,6 +79,7 @@ def audit(actor, action, target, before=None, after=None, study=None):
 
 
 def _rand_password():
+    """One-time URL-safe secret; invitation tokens minted by the importers use it."""
     return secrets.token_urlsafe(18)
 
 
@@ -193,7 +193,7 @@ def create_temporary_account(actor, password, expected_revision, username):
         instance, actor, _ = _reauth(actor, password, expected_revision)
         _require_lifecycle_platform(instance, actor, 'create_user')
         require(not get_user_model().objects.filter(username=username).exists(), 'account_exists', 409)
-        temporary = _rand_password()
+        temporary = researcher_passwords.generate_temporary_password()
         user = get_user_model().objects.create_user(username, password=temporary)
         AccountProfile.objects.create(user=user, role='user', must_change_password=True, auth_version=1, revision=0)
         ensure_principal(user)
@@ -213,7 +213,7 @@ def reset_temporary_password(actor, password, expected_revision, target_id):
                 'higher_privilege_target', 403)
         before = _account_state(target, profile)
         before['policy'] = _v2_policy_snapshot(target, instance=instance)
-        temporary = _rand_password()
+        temporary = researcher_passwords.generate_temporary_password()
         target.set_password(temporary)
         target.save(update_fields=['password'])
         profile.must_change_password = True
@@ -297,7 +297,7 @@ def set_account_role(actor, password, expected_revision, target_id, role):
 
 def change_own_password(user, current, new, confirm):
     require(getattr(user, 'is_authenticated', False) and getattr(user, 'pk', None), 'auth_required', 403)
-    require(bool(new) and len(new) >= MINIMUM_PASSWORD, 'password_too_short')
+    researcher_passwords.require_acceptable(new)
     require(new == confirm, 'password_mismatch')
     with transaction.atomic():
         locked = get_user_model().objects.select_for_update().get(pk=user.pk)
@@ -328,7 +328,7 @@ def activate_account(token, password, confirm):
     activate an Admin invitation it could no longer create.
     """
     require(bool(token), 'activation_failed', 403)
-    require(bool(password) and len(password) >= MINIMUM_PASSWORD, 'password_too_short')
+    researcher_passwords.require_acceptable(password)
     require(password == confirm, 'password_mismatch')
     with transaction.atomic():
         instance = _locked_instance()

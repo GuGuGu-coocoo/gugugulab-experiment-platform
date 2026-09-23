@@ -5,7 +5,7 @@
 <p class="muted">{{ui.account_activate_hint}}</p>
 <form method="post">{% csrf_token %}
 <label>{{ui.activate_token}} <input name="token" value="{{token}}" type="password" autocomplete="one-time-code" required></label>
-<label>{{ui.password_new}} <input type="password" name="password" minlength="16" autocomplete="new-password" required></label>
-<label>{{ui.password_confirm}} <input type="password" name="confirm" minlength="16" autocomplete="new-password" required></label>
+<label>{{ui.password_new}} <input type="password" name="password" minlength="6" autocomplete="new-password" required></label>
+<label>{{ui.password_confirm}} <input type="password" name="confirm" minlength="6" autocomplete="new-password" required></label>
 <button>{{ui.activate_submit}}</button></form>
 <p><a href="/login">{{ui.account_activate_link}}</a></p>{% endif %}</section>{% endblock %}

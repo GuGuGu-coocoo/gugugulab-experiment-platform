@@ -582,9 +582,12 @@ def test_unknown_version_is_refused_across_real_http_entries(db):
         response = client.post(f'/studies/{study.pk}', payload)
         assert response.status_code in (403, 409), (payload, response.status_code)
     assert client.post('/activate', {'token': 'p03r02cr-unknown-token'}).status_code == 409
+    # Documented fixture change for U07 (2026-09-23): the request password must
+    # satisfy the unified four-class rule so the unknown stored version is what
+    # refuses the activation; the version-refusal assertion is unchanged.
     assert client.post('/activate-account', {'token': 'p03r02cr-unknown-token',
-                                             'password': 'synthetic-unknown-password',
-                                             'confirm': 'synthetic-unknown-password'}
+                                             'password': 'Synthetic-unknown-password-2026',
+                                             'confirm': 'Synthetic-unknown-password-2026'}
                        ).status_code in (403, 409)
     assert client.post('/v1/admin/exports', {'study_id': str(study.pk)},
                        content_type='application/json').status_code == 403

@@ -17,9 +17,12 @@ from core.models import AccountInvitation, AccountProfile, Audit, Grant, Instanc
 from core.protocol import Rejected
 from core.services import digest
 
-OWNER_PASSWORD = 'synthetic-test-password'  # from tests/conftest.py setup fixture
-NEW_PASSWORD = 'synthetic-new-password-2026'
-THIRD_PASSWORD = 'synthetic-third-password-2026'
+OWNER_PASSWORD = 'synthetic-test-password'  # from tests/conftest.py setup fixture; a pre-existing hash that is never re-set, so it keeps logging in unchanged
+# Documented fixture change for U07 (2026-09-23): these two values are *set*
+# through /account/password and the activation page, so they must satisfy the
+# unified four-class rule; every negative authorization assertion is unchanged.
+NEW_PASSWORD = 'Synthetic-new-password-2026'
+THIRD_PASSWORD = 'Synthetic-third-password-2026'
 SECRET_RE = re.compile(r'data-one-time-secret="1".*?<code>(.*?)</code>', re.S)
 INVITE_RE = re.compile(r'data-one-time-invitation="1".*?data-invitation-link="[^"]*/activate-account\?token=([^"&]+)"', re.S)
 ACTIVATION_FAILED = '激活失败：邀请无效、已使用、已撤销或已过期。'

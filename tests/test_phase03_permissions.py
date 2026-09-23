@@ -19,7 +19,11 @@ from core.models import AccountProfile, Audit, Grant, Instance, Invitation, Perm
 from core.protocol import Rejected
 
 OWNER_PASSWORD = 'synthetic-test-password'
-NEW_PASSWORD = 'synthetic-new-password-2026'
+# Documented fixture change for U07 (2026-09-23): this value is *set* through
+# /account/password in make_admin(), so it must satisfy the unified four-class
+# rule; THIRD_PASSWORD is only used as a wrong re-authentication value and is
+# not re-set anywhere, so it stays unchanged.
+NEW_PASSWORD = 'Synthetic-new-password-2026'
 THIRD_PASSWORD = 'synthetic-third-password-2026'
 SECRET_RE = re.compile(r'data-one-time-secret="1".*?<code>(.*?)</code>', re.S)
 PREVIEW_RE = re.compile(r'(?:name="preview_id" value="|data-preview-id=")([0-9a-fA-F-]{36})')

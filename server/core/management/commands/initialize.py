@@ -6,6 +6,7 @@ from django.core.management import BaseCommand, CommandError, call_command
 from django.conf import settings
 from django.db import transaction
 from django.contrib.auth import get_user_model
+from core import researcher_passwords
 from core.models import AccountProfile, Instance, Principal
 
 class Command(BaseCommand):
@@ -17,9 +18,9 @@ class Command(BaseCommand):
         root.mkdir(parents=True,exist_ok=True,mode=0o700)
         if any(root.iterdir()):
             raise CommandError('Data directory must be empty; existing volume is never reinitialized.')
-        password=getpass.getpass('New synthetic Owner password: ')
-        if len(password)<16:
-            raise CommandError('Use at least 16 characters.')
+        password=getpass.getpass('New synthetic Owner password (at least 6 characters, with uppercase, lowercase, digit and symbol): ')
+        if researcher_passwords.password_problem(password) is not None:
+            raise CommandError('Use at least 6 characters with an uppercase letter, a lowercase letter, a digit and a visible symbol (space does not count).')
         secret=secrets.token_urlsafe(48)
         instance_id=uuid.uuid4()
         call_command('migrate',verbosity=0)

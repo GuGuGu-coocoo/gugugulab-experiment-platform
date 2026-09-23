@@ -27,9 +27,10 @@ def main():
     django.setup()
     from django.core.management import call_command
     from django.contrib.auth import get_user_model
+    from core import researcher_passwords
     from core.models import AccountProfile, Instance, Principal
     call_command('migrate', verbosity=0)
-    password = secrets.token_urlsafe(24)
+    password = researcher_passwords.generate_temporary_password()
     owner = get_user_model().objects.create_user(args.owner, password=password)
     # A new isolated volume is explicitly v2 and creates the stable principal of
     # its Owner; existing volumes are never reinitialized.

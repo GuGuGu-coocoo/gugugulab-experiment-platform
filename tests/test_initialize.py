@@ -14,6 +14,15 @@ def test_initialize_empty_volume_and_refuse_overwrite(tmp_path):
     assert first.returncode == 0, first.stderr
     credentials = json.loads((root / 'dev_credentials.json').read_text())
     assert credentials['password'] not in first.stdout + first.stderr
+    # The container/Compose initializer generates its Owner password through the
+    # one researcher-password module: at least 24 characters with all four
+    # classes present (U07), never a bare token_urlsafe() sample.
+    from core import researcher_passwords
+    generated = credentials['password']
+    assert len(generated) >= researcher_passwords.TEMPORARY_LENGTH
+    assert researcher_passwords.password_problem(generated) is None
+    for characters in researcher_passwords.CLASSES:
+        assert any(character in characters for character in generated)
     assert (root / 'secret').stat().st_mode & 0o777 == 0o600
     assert not (root / 'initializing').exists()
     before = {p.name: p.read_bytes() for p in root.iterdir()}

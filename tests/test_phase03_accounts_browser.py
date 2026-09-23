@@ -150,10 +150,16 @@ def browser_static_urls(django_test_environment):
 
 
 def test_actual_chrome_instance_account_governance(live_server, setup):
+    # U07 fixture change (2026-09-23): the three *new* passwords below are set
+    # through /account/password and the invitation activation page, so each must
+    # satisfy the unified four-class rule (>= 6 characters, one ASCII uppercase,
+    # lowercase, digit and visible symbol each). The Owner value stays the
+    # pre-existing weak hash from the setup fixture, which keeps logging in
+    # unchanged. No scenario, assertion or wait is relaxed.
     env = dict(os.environ, GEP_TEST_BASE=live_server.url,
                GEP_OWNER_PASSWORD='synthetic-test-password',
-               GEP_ADMIN_PASSWORD='synthetic-browser-admin-password',
-               GEP_USER_PASSWORD='synthetic-browser-user-password',
-               GEP_INVITEE_PASSWORD='synthetic-browser-invitee-password')
+               GEP_ADMIN_PASSWORD='Synthetic-browser-admin-2026!',
+               GEP_USER_PASSWORD='Synthetic-browser-user-2026!',
+               GEP_INVITEE_PASSWORD='Synthetic-browser-invitee-2026!')
     result = subprocess.run(['node', '--input-type=module', '-e', SCRIPT], cwd=Path(__file__).resolve().parents[1], env=env, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, redact(result.stdout + result.stderr)

@@ -40,6 +40,11 @@ from core.protocol import Rejected
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OWNER_PASSWORD = 'synthetic-p03r02c-owner-password'
+# Documented fixture change for U07 (2026-09-23): this value is *set* through
+# activation, so it must satisfy the unified four-class researcher-password rule
+# before the activation-specific refusal is reached; every negative assertion
+# (the narrowed issuer bound refuses the activation) is unchanged.
+ACTIVATION_PASSWORD = 'Synthetic-new-admin-password-2026'
 VIEW = 'study.view'
 CONFIGURE = 'study.configure'
 STUDY_V2 = (
@@ -655,7 +660,7 @@ def test_activation_revalidates_the_bound_and_the_issuer(v2_world):
     peer_profile.study_overrides = {str(v2_world['study_a'].pk): [VIEW, CONFIGURE, 'build.upload']}
     peer_profile.save(update_fields=['study_overrides'])
     with pytest.raises(Rejected) as info:
-        accounts.activate_account(invitation['token'], 'synthetic-new-admin-password', 'synthetic-new-admin-password')
+        accounts.activate_account(invitation['token'], ACTIVATION_PASSWORD, ACTIVATION_PASSWORD)
     assert info.value.code == 'activation_failed'
     assert not get_user_model().objects.filter(username='p03r02c_restricted_admin').exists()
 
@@ -665,8 +670,8 @@ def test_activation_revalidates_the_bound_and_the_issuer(v2_world):
     peer_profile.study_overrides = {str(v2_world['study_a'].pk): sorted(STUDY_V2),
                                     str(v2_world['study_b'].pk): [VIEW, CONFIGURE, 'build.upload']}
     peer_profile.save(update_fields=['study_overrides'])
-    user = accounts.activate_account(invitation['token'], 'synthetic-new-admin-password',
-                                     'synthetic-new-admin-password')
+    user = accounts.activate_account(invitation['token'], ACTIVATION_PASSWORD,
+                                     ACTIVATION_PASSWORD)
     activated = AccountProfile.objects.get(user=user)
     assert activated.role == 'admin'
     assert set(activated.study_overrides[str(v2_world['study_a'].pk)]) == set(STUDY_V2)

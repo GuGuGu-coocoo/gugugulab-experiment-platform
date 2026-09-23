@@ -24,7 +24,7 @@ from .protocol import require, parse, Rejected
 from .views import endpoint
 from .services import digest, completion_status, issue_recovery_code, SHELL_CAPABILITY
 from .packages import validate_package, descriptor_valid, native_program_valid, MAX_ARCHIVE, MAX_NATIVE_ARCHIVE, NATIVE_PLATFORMS
-from . import publication, artifacts, ui, workbench
+from . import publication, artifacts, ui, workbench, researcher_passwords
 
 
 def _revision_ok(raw, current):
@@ -196,6 +196,9 @@ STUDY_MESSAGES = {
     'duplicate_or_invalid_code':'名单存在重复、已有或无效 ID；本次未导入任何行。',
     'roster_columns':'名单列数不正确；密码模式请填写 ID 与密码两列。本次未导入任何行。',
     'password_too_short':'密码长度不足，请检查后重新提交。',
+    # Same unified researcher-password text as the account pages: a post here
+    # never falls back to the generic message or the old 16-character threshold.
+    'password_weak':'密码至少 6 位，且至少各含一个 ASCII 大写字母、小写字母、数字与可见标点符号；空格不算符号，首尾空白不会被去掉。',
     'forbidden':'当前账号没有此操作权限，未执行更改。',
     'revision_conflict':'研究发布版本已变化，请刷新页面后重试；未执行任何更改。',
     'no_change':'目标状态没有变化，未写入任何更改。',
@@ -633,7 +636,7 @@ def activate(request):
             if user:
                 require(request.user.is_authenticated and request.user.pk==user.pk and user.is_active,'existing_account_login_required',403)
             else:
-                password=request.POST.get('password','');require(len(password)>=16,'password_too_short')
+                password=request.POST.get('password','');researcher_passwords.require_acceptable(password)
                 user=get_user_model().objects.create_user(invite.username,password=password)
             for action in invite.actions:
                 Grant.objects.get_or_create(study=invite.study,user=user,action=action)
