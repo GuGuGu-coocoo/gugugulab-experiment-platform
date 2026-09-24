@@ -18,6 +18,8 @@ export function isolated() {
       db: env.GEP_ISO_DB || null,
       descriptor: env.GEP_ISO_DESCRIPTOR || 'build/native/descriptor.json',
       web_zip: env.GEP_ISO_WEB_ZIP || 'build/synthetic_web.zip',
+      native_app: env.GEP_ISO_NATIVE_APP || null,
+      scratch: env.GEP_ISO_SCRATCH || null,
       run_url_file: env.GEP_ISO_RUN_URL_FILE || 'build/web/run_url.txt',
       study_url_file: env.GEP_ISO_STUDY_URL_FILE || 'build/web/study_url.txt',
     };

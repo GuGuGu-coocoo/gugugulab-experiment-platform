@@ -86,9 +86,18 @@ async function createStudy(page, spec) {
   await page.locator('[name=max_sessions]').fill(String(spec.max_sessions));
   await page.getByRole('button', {name: '保存政策'}).click();
   if (spec.roster) {
-    await page.locator('[name=roster]').fill(spec.roster);
-    await page.getByRole('button', {name: '导入名单'}).click();
-    await page.locator('.notice').waitFor({timeout: 15000});
+    // The current participation page previews a CSV roster first and only
+    // commits after the researcher confirms with their own password; the old
+    // single-click import form no longer exists.
+    const import_form = page.locator('form[data-roster-csv-form="1"]');
+    await import_form.locator('[name=roster]').fill(spec.roster);
+    await import_form.getByRole('button').click();
+    await page.waitForLoadState('load');
+    const confirm = page.locator('form[data-roster-confirm="1"]');
+    await confirm.locator('[name=password]').fill(job.credentials.password);
+    await confirm.getByRole('button').click();
+    await page.waitForLoadState('load');
+    await page.locator('[data-participation-roster]').waitFor({timeout: 15000});
   }
   await page.goto(study_url + '/builds');
   if (spec.upload_web) {
@@ -657,12 +666,18 @@ async function main() {
     }
   } catch (error) {
     results.error = String(error && error.stack || error);
-    try { results.evidence.page_html = (await page.content()).slice(0, 30000); } catch {}
-    try { results.evidence.canvas_label = await page.locator('#canvas').getAttribute('aria-label'); } catch {}
-    try { results.evidence.bridge_status = await page.evaluate(() => globalThis.GECBridge.status()); } catch {}
-    try { results.evidence.store = await store(page); } catch {}
-    try { results.evidence.confirm_dump = await page.evaluate(() => { const el = document.getElementById('gec-shell-confirm'); return el ? {style: el.getAttribute('style'), display: getComputedStyle(el).display, rect: el.getBoundingClientRect().toJSON(), status: document.getElementById('gec-shell-status')?.textContent, reason: document.getElementById('gec-shell-status')?.dataset.reason} : null; }); } catch {}
-    try { await page.screenshot({path: path.join(job.run_dir, 'error.png')}); } catch {}
+    // Keep the original failure visible on stderr even if a diagnostic probe
+    // below blocks, so a stall never hides the error that caused it.
+    console.error('[phase03-shell-verify] ' + results.error);
+    // Diagnostics are bounded so a stuck page reports the real error instead
+    // of hanging the driver until the verifier's own timeout fires.
+    const bounded = (promise, ms = 5000) => Promise.race([promise, sleep(ms).then(() => null)]);
+    try { const html = await bounded(page.content()); if (html) results.evidence.page_html = html.slice(0, 30000); } catch {}
+    try { results.evidence.canvas_label = await bounded(page.locator('#canvas').getAttribute('aria-label'), 3000); } catch {}
+    try { results.evidence.bridge_status = await bounded(page.evaluate(() => globalThis.GECBridge.status()), 3000); } catch {}
+    try { results.evidence.store = await bounded(store(page), 5000); } catch {}
+    try { results.evidence.confirm_dump = await bounded(page.evaluate(() => { const el = document.getElementById('gec-shell-confirm'); return el ? {style: el.getAttribute('style'), display: getComputedStyle(el).display, rect: el.getBoundingClientRect().toJSON(), status: document.getElementById('gec-shell-status')?.textContent, reason: document.getElementById('gec-shell-status')?.dataset.reason} : null; }), 3000); } catch {}
+    try { await bounded(page.screenshot({path: path.join(job.run_dir, 'error.png')}), 8000); } catch {}
   } finally {
     await context.close();
     await browser.close();

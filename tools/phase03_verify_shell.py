@@ -14,10 +14,20 @@ admin GUI. Local stores, the server database and the authorized JSONL export are
 compared by original event identity and value. Evidence stays under
 ``local_data/phase03_20260920/shell_verify/<stamp>/`` and nothing outside it is
 read or written. Missing tooling fails loudly instead of skipping.
+
+A bound invocation (``--binding`` plus the four explicit artifacts) verifies
+brand-new bytes exported and packaged by this remediation round: the binding
+must come from a unique root under ``build/phase03_remediation_20260923/`` and
+carry the current program-source digest, a missing, stale or mismatched binding
+is refused before the instance is created, and the whole unpacked macOS runtime
+tree is checked member by member against the bound program archive. Without
+those options the tool keeps its explicit legacy invocation against
+``build/native``.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -37,19 +47,136 @@ from urllib import error as urlerror
 from urllib import request as urlrequest
 
 ROOT = Path(__file__).resolve().parents[1]
+TOOLS = ROOT / "tools"
+if str(TOOLS) not in sys.path:
+    sys.path.insert(0, str(TOOLS))
 PHASE_ROOT = ROOT / "local_data" / "phase03_20260920"
 VENV_PYTHON = ROOT / ".venv" / "bin" / "python"
 GODOT = shutil.which("godot")
 BINARY = ROOT / "build" / "native" / "GEP Synthetic Experiment.app" / "Contents" / "MacOS" / "GEP Synthetic Experiment"
 WEB_ZIP = ROOT / "build" / "synthetic_web.zip"
+NATIVE_ZIP = ROOT / "build" / "native" / "synthetic.zip"
 NATIVE_DESCRIPTOR = ROOT / "build" / "native" / "descriptor.json"
 DRIVER = ROOT / "tests" / "browser" / "phase03_shell_verify.mjs"
 ROSTER_ID = "001"
 ROSTER_PASSWORD = "synthetic-password"
+# Explicit artifact binding for this remediation round: the orchestrator
+# exports and packages brand-new Web/macOS bytes under one unique build root
+# and records the program, descriptor and current program-source digests in an
+# artifact_binding.json. A bound invocation refuses a missing binding, a stale
+# source digest or bytes that do not match before it starts anything, and it
+# checks the whole unpacked macOS runtime tree against the bound program
+# archive; the historical build/native defaults stay the explicit legacy
+# invocation only.
+BUILD_BASE = ROOT / "build" / "phase03_remediation_20260923"
+ARTIFACT_BINDING_FORMAT = "gep-remediation-artifact-binding/v1"
+BINDING_ARTIFACTS = ("web_zip", "native_zip", "native_descriptor", "native_binary")
+BINDING_CHECK = "本轮构建绑定：Web 与 macOS 产物绑定本轮源码摘要"
 
 
 class VerificationError(Exception):
     pass
+
+
+class RefusalError(Exception):
+    """A pre-run refusal: no instance, server or program has been started."""
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        while chunk := stream.read(1 << 20):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def guard_build_root(raw):
+    """This round's brand-new unique build root, never build/ or build/native."""
+    if not raw:
+        raise RefusalError("the artifact binding declares no build root")
+    import remediation_windows
+    root = Path(os.path.abspath(Path(str(raw)).expanduser()))
+    # Every component from the project root downwards is checked with lstat:
+    # a link that redirects a parent directory is refused too, not only a
+    # symlinked leaf (resolve() would hide the link and is not used).
+    link = remediation_windows.symlinked_component(root, ROOT)
+    if link is not None:
+        raise RefusalError(f"the artifact binding build root path contains a symbolic link: {link}")
+    if root.is_symlink():
+        raise RefusalError(f"the artifact binding build root is a symbolic link: {root}")
+    try:
+        relative = root.relative_to(Path(os.path.abspath(BUILD_BASE)))
+    except ValueError:
+        raise RefusalError(f"the artifact binding build root is outside the remediation build base: {root}") from None
+    if not relative.parts:
+        raise RefusalError(f"the artifact binding build root must be a unique subdirectory: {root}")
+    if not root.is_dir():
+        raise RefusalError(f"the artifact binding build root is missing: {root}")
+    return root
+
+
+def bound_artifact(root, entry, key):
+    import remediation_windows
+    if not isinstance(entry, dict) or not entry.get("path"):
+        raise RefusalError(f"the artifact binding has no {key} entry")
+    path = Path(str(entry["path"])).expanduser()
+    if not path.is_absolute():
+        raise RefusalError(f"the bound {key} path is not absolute: {path}")
+    path = Path(os.path.abspath(path))
+    try:
+        path.relative_to(root)
+    except ValueError:
+        raise RefusalError(f"the bound {key} is outside this round's build root: {path}") from None
+    link = remediation_windows.symlinked_component(path, ROOT)
+    if link is not None:
+        raise RefusalError(f"the bound {key} path contains a symbolic link: {link}")
+    if path.is_symlink():
+        raise RefusalError(f"the bound {key} is a symbolic link: {path}")
+    if not path.is_file():
+        raise RefusalError(f"the bound {key} is missing: {path}")
+    if sha256_file(path) != entry.get("sha256") or path.stat().st_size != entry.get("size"):
+        raise RefusalError(f"the bound {key} bytes do not match the binding: {path}")
+    return path
+
+
+def resolve_artifacts(args):
+    """Explicit this-round artifacts, or the legacy unbound defaults.
+
+    A bound invocation must name --binding, --web-zip, --native-descriptor and
+    --native-binary together; the binding must be ok, come from this round's
+    unique build root, carry the current program-source digest and match the
+    actual bytes and sizes. Every refusal happens before anything is started.
+    """
+    explicit = (args.binding, args.web_zip, args.native_zip, args.native_descriptor, args.native_binary)
+    if all(value is None for value in explicit):
+        return {"mode": "legacy-defaults", "binding": None, "web_zip": WEB_ZIP,
+                "native_zip": NATIVE_ZIP,
+                "native_descriptor": NATIVE_DESCRIPTOR, "native_binary": BINARY}
+    if not all(value is not None for value in explicit):
+        raise RefusalError("explicit artifacts require --binding, --web-zip, --native-zip, "
+                           "--native-descriptor and --native-binary together")
+    try:
+        document = json.loads(Path(args.binding).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise RefusalError(f"the artifact binding is unreadable: {type(error).__name__}") from None
+    if not isinstance(document, dict) or document.get("format") != ARTIFACT_BINDING_FORMAT \
+            or document.get("verdict") != "ok":
+        raise RefusalError("the artifact binding is missing or not ok")
+    root = guard_build_root(document.get("build_root"))
+    import remediation_windows
+    if document.get("program_source_digest") != remediation_windows.program_source_digest():
+        raise RefusalError("the artifact binding was produced from different program sources")
+    entries = document.get("artifacts") or {}
+    resolved = {}
+    for key, value in zip(BINDING_ARTIFACTS, explicit[1:]):
+        bound = bound_artifact(root, entries.get(key), key)
+        requested = Path(os.path.abspath(Path(str(value)).expanduser()))
+        if requested != bound:
+            raise RefusalError(f"the requested {key} is not the artifact recorded in the binding: {requested}")
+        resolved[key] = bound
+    resolved.update({"mode": "bound", "binding": str(Path(args.binding).expanduser()),
+                     "binding_document": document, "build_root": str(root)})
+    return resolved
 
 
 class LineReader:
@@ -78,7 +205,7 @@ class LineReader:
 
 
 class Verify:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, artifacts=None):
         # Absolute paths only: the exported program is launched with a config
         # path, and a relative evidence root would make it unreadable to the
         # child process (which resolves its own working directory).
@@ -87,6 +214,16 @@ class Verify:
         self.evidence = self.root / "evidence"
         self.native_root = self.root / "native"
         self.db_path = self.data / "gep.sqlite3"
+        # The artifacts this run verifies: the explicit this-round binding when
+        # the orchestrator passes one, otherwise the legacy build/native
+        # defaults for a deliberate standalone invocation.
+        artifacts = artifacts or {}
+        self.binding = artifacts.get("binding_document")
+        self.binding_mode = artifacts.get("mode", "legacy-defaults")
+        self.web_zip = Path(artifacts.get("web_zip", WEB_ZIP))
+        self.native_zip = Path(artifacts.get("native_zip", NATIVE_ZIP))
+        self.native_descriptor = Path(artifacts.get("native_descriptor", NATIVE_DESCRIPTOR))
+        self.binary = Path(artifacts.get("native_binary", BINARY))
         self.owner_password = secrets.token_urlsafe(24)
         self.instance_id = str(uuid.uuid4())
         self.secret_key = secrets.token_urlsafe(48)
@@ -122,12 +259,14 @@ class Verify:
             missing.append(f"project virtualenv missing: {VENV_PYTHON}")
         if not DRIVER.exists():
             missing.append(f"browser driver missing: {DRIVER}")
-        if not BINARY.exists():
-            missing.append(f"exported macOS build missing: {BINARY} (run tools/build.py first)")
-        if not WEB_ZIP.exists():
-            missing.append(f"exported Web archive missing: {WEB_ZIP} (run tools/build.py first)")
-        if not NATIVE_DESCRIPTOR.exists():
-            missing.append(f"native descriptor missing: {NATIVE_DESCRIPTOR} (run tools/build.py first)")
+        if not self.binary.exists():
+            missing.append(f"exported macOS build missing: {self.binary} (run tools/build.py first)")
+        if not self.web_zip.exists():
+            missing.append(f"exported Web archive missing: {self.web_zip} (run tools/build.py first)")
+        if not self.native_zip.exists():
+            missing.append(f"exported macOS program archive missing: {self.native_zip} (run tools/build.py first)")
+        if not self.native_descriptor.exists():
+            missing.append(f"native descriptor missing: {self.native_descriptor} (run tools/build.py first)")
         if shutil.which("node") is None:
             missing.append("node executable not on PATH (Playwright driver required)")
         if missing:
@@ -135,12 +274,14 @@ class Verify:
 
     def free_port(self):
         for candidate in range(8040, 8100):
-            with socket.socket() as probe:
-                try:
-                    probe.bind(("127.0.0.1", candidate))
-                except OSError:
-                    continue
-            return candidate
+            for family, host in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")):
+                with socket.socket(family) as probe:
+                    try:
+                        probe.bind((host, candidate))
+                    except OSError:
+                        break
+            else:
+                return candidate
         raise VerificationError("no free port >= 8040")
 
     def server_env(self):
@@ -187,10 +328,15 @@ class Verify:
     def start_server(self, port=None):
         # An explicit port lets a prepared environment keep its frozen loopback
         # endpoint (designer readiness); the default still picks a fresh >= 8040.
+        # The frozen public endpoint is ``http://experiment.localhost:<port>``
+        # and macOS resolves that name to ::1 before 127.0.0.1, so the real
+        # native client only reaches the instance when both loopback families
+        # are served; the name is never rewritten for the clients.
         self.port = int(port) if port else self.free_port()
         log = open(self.root / "gunicorn.log", "w")
         self.server = subprocess.Popen(
-            [str(ROOT / ".venv" / "bin" / "gunicorn"), "gep.wsgi:application", "--bind", f"127.0.0.1:{self.port}",
+            [str(ROOT / ".venv" / "bin" / "gunicorn"), "gep.wsgi:application",
+             "--bind", f"127.0.0.1:{self.port}", "--bind", f"[::1]:{self.port}",
              "--workers", "1", "--threads", "4", "--access-logfile", "-"],
             cwd=ROOT, env=self.server_env(), stdout=log, stderr=subprocess.STDOUT,
         )
@@ -237,14 +383,14 @@ class Verify:
             "roster_password": ROSTER_PASSWORD,
             "study_specs": [
                 {"key": "anonymous", "title": "Shell anonymous", "mode": "anonymous", "max_sessions": 4,
-                 "upload_web": str(WEB_ZIP), "native_descriptor": str(NATIVE_DESCRIPTOR),
+                 "upload_web": str(self.web_zip), "native_descriptor": str(self.native_descriptor),
                  "approve": ["godot_web", "macos_arm64"], "current": "web"},
                 {"key": "id", "title": "Shell id", "mode": "id", "max_sessions": 5, "roster": ROSTER_ID,
-                 "upload_web": str(WEB_ZIP), "native_descriptor": str(NATIVE_DESCRIPTOR),
+                 "upload_web": str(self.web_zip), "native_descriptor": str(self.native_descriptor),
                  "approve": ["godot_web", "macos_arm64"], "current": "web"},
                 {"key": "password", "title": "Shell password", "mode": "password", "max_sessions": 16,
                  "roster": f"{ROSTER_ID},{ROSTER_PASSWORD}",
-                 "upload_web": str(WEB_ZIP), "native_descriptor": str(NATIVE_DESCRIPTOR),
+                 "upload_web": str(self.web_zip), "native_descriptor": str(self.native_descriptor),
                  "approve": ["godot_web", "macos_arm64"], "current": "web"},
             ],
         }
@@ -255,7 +401,7 @@ class Verify:
         env = {**os.environ, "GEP_SYNTHETIC_STORAGE": str(storage)}
         if env_extra:
             env.update(env_extra)
-        proc = subprocess.Popen([str(BINARY), "--headless", "--", f"--config={config}", *args],
+        proc = subprocess.Popen([str(self.binary), "--headless", "--", f"--config={config}", *args],
                                 cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
         reader = LineReader(proc.stdout)
         return proc, reader
@@ -401,9 +547,27 @@ class Verify:
         return records
 
     # --------------------------------------------------------------------- main
+    def binding_summary(self):
+        if self.binding is None:
+            return {"mode": "legacy-defaults", "source_digest": None}
+        return {"mode": "bound", "build_root": self.binding.get("build_root"),
+                "program_source_digest": self.binding.get("program_source_digest"),
+                "artifacts": {key: (self.binding.get("artifacts") or {}).get(key, {}).get("sha256")
+                              for key in BINDING_ARTIFACTS}}
+
     def verify(self):
         self.preconditions()
         self.record(True, "pinned toolchain present", {"godot": GODOT})
+        self.record(True, BINDING_CHECK, self.binding_summary())
+        if self.binding_mode == "bound":
+            # The whole unpacked runtime tree, not only the executable, must
+            # match this round's bound program archive before anything runs.
+            import remediation_windows
+            problems = remediation_windows.verify_extracted_archive(
+                self.native_zip, self.native_zip.parent, label="bound macOS runtime")
+            self.require(not problems, "本轮构建绑定：解包 macOS 运行资源与绑定归档逐成员一致",
+                         {"problems": problems[:3]} if problems else
+                         {"archive": self.native_zip.name, "root": str(self.native_zip.parent)})
         self.evidence.mkdir(parents=True, exist_ok=True)
         self.native_root.mkdir(parents=True, exist_ok=True)
         self.init_instance()
@@ -418,7 +582,9 @@ class Verify:
                 proxy.stop()
             self.stop_server()
         failures = [check for check in self.checks if not check["ok"]]
-        (self.root / "evidence.json").write_text(json.dumps({"checks": self.checks, "artifacts": self.artifacts}, indent=2, default=str))
+        (self.root / "evidence.json").write_text(json.dumps(
+            {"checks": self.checks, "artifacts": self.artifacts, "binding": self.binding_summary()},
+            indent=2, default=str))
         (self.root / "summary.txt").write_text("\n".join(self.summary_lines) + "\n")
         return not failures
 
@@ -439,6 +605,53 @@ class Verify:
             if record.get("kind") == "session":
                 return record
         return None
+
+    def native_wait_live_completion(self, storage, proc, reader, timeout=150):
+        """Wait for the declared completion while keeping the real process alive.
+
+        The dropped completion ACK leaves the persisted retry deadline in the
+        future, so the same process can perform the real retransmission once
+        the recorded fixture deadline is advanced. This waits for the store to
+        show the first failed completion attempt without stopping the program.
+        """
+        deadline = time.time() + timeout
+        last_error = None
+        while time.time() < deadline:
+            try:
+                record = self.live_session(storage)
+            except VerificationError as error:
+                last_error, record = error, None
+            if record and record.get("completion") and len(record.get("records", [])) == 4 \
+                    and not record.get("pending") and int(record.get("attempts", 0)) >= 1:
+                return record
+            if proc.poll() is not None:
+                raise VerificationError(f"native program exited before the completion boundary: {reader.text()[-2000:]}")
+            time.sleep(0.4)
+        raise VerificationError(f"native completion not observed within {timeout}s ({last_error}): "
+                                f"{reader.text()[-2000:]}")
+
+    def advance_native_retry(self, storage, timeout=30):
+        """Advance only the recorded fixture retry deadline; the production
+        backoff, attempts and every other delivery field stay unchanged."""
+        path = storage / "queue.sqlite"
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                connection = sqlite3.connect(str(path), timeout=20)
+                try:
+                    rows = connection.execute("select id,value from sessions").fetchall()
+                    for session_id, value in rows:
+                        record = json.loads(value)
+                        if record.get("kind") == "session" and "retry_at" in record:
+                            record["retry_at"] = 0
+                            connection.execute("update sessions set value=? where id=?", [json.dumps(record), session_id])
+                    connection.commit()
+                    return
+                finally:
+                    connection.close()
+            except sqlite3.Error:
+                time.sleep(0.5)
+        raise VerificationError(f"could not advance the recorded retry deadline: {path}")
 
     def native_await_completion(self, storage, config, args, timeout=150, require_pending=False):
         """Run the exported program until it declared a local completion while a
@@ -493,18 +706,51 @@ class Verify:
         credentials = ["--participant-code=" + ROSTER_ID, "--password=" + ROSTER_PASSWORD]
 
         # Anonymous: the dropped completion ACK keeps the real local store
-        # inspectable; a later run retransmits and cleans it up without duplicates.
+        # inspectable. The confirmed delivery contract persists the retry
+        # deadline, so the not-due retry sends nothing; only the recorded
+        # fixture deadline is advanced, and the same still-running process then
+        # performs the real retransmission and cleans up without duplicates.
         proxy = self.new_proxy()
         config = self.proxied_config("anonymous", studies["anonymous"], proxy)
         storage = self.native_root / "anonymous"
-        snapshot, _output = self.native_await_completion(storage, config, ["--synthetic-auto"])
-        self.require(len(snapshot["records"]) == 4, "native local store kept four records across the dropped ACK", len(snapshot["records"]))
-        self.require(len(snapshot["pending"]) == 0, "native dropped ACK left no unacknowledged batch", len(snapshot["pending"]))
-        proxy.drop_markers = ()
-        code, output = self.native_run(storage, config, ["--synthetic-auto"])
-        self.require(code == 0 and "SYNTHETIC_DONE" in output, "native retransmission after ACK loss completes", {"exit": code})
-        self.require(any(s.get("kind") == "cleaned" and s.get("id") == snapshot["id"] for s in self.native_store(storage)),
-                     "native cleaned tombstone after confirmed upload")
+        proc, reader = self.native_launch(storage, config, ["--synthetic-auto"])
+        try:
+            snapshot = self.native_wait_live_completion(storage, proc, reader)
+            self.require(len(snapshot["records"]) == 4, "native local store kept four records across the dropped ACK", len(snapshot["records"]))
+            self.require(len(snapshot["pending"]) == 0, "native dropped ACK left no unacknowledged batch", len(snapshot["pending"]))
+            self.require(snapshot.get("complete_ack") is None, "native declared completion is not an acknowledgement")
+            self.require(int(snapshot.get("retry_at", 0)) > int(time.time()),
+                         "native retry deadline is persisted and not due", snapshot.get("retry_at"))
+            # Zero-send assertion at the client/proxy boundary: while the
+            # persisted deadline is not due, no retry is attempted at all.
+            dropped = proxy.dropped
+            time.sleep(1.5)
+            self.require(proxy.dropped == dropped, "native not-due completion retry sends nothing",
+                         {"dropped": dropped, "attempts": snapshot.get("attempts")})
+            proxy.drop_markers = ()
+            self.advance_native_retry(storage)
+            deadline = time.time() + 120
+            tombstone = None
+            while time.time() < deadline:
+                tombstone = next((s for s in self.native_store(storage)
+                                  if s.get("kind") == "cleaned" and s.get("id") == snapshot["id"]), None)
+                if tombstone or proc.poll() is not None:
+                    break
+                time.sleep(0.4)
+            self.require(bool(tombstone), "native cleaned tombstone after confirmed upload")
+            try:
+                code = proc.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                raise VerificationError("the native program did not exit after the confirmed upload")
+            self.require(code == 0 and "SYNTHETIC_DONE" in reader.text(),
+                         "native retransmission after ACK loss completes", {"exit": code})
+        finally:
+            proc.send_signal(signal.SIGTERM)
+            try:
+                proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                proc.kill()
         self.require(len(self.db_events(snapshot["id"])) == 4, "native ACK-loss retransmission stored no duplicates")
         self.artifacts["native_anonymous"] = {"session_id": snapshot["id"], "records": snapshot["records"], "segments": snapshot["segments"]}
 
@@ -781,25 +1027,41 @@ def main():
     parser = argparse.ArgumentParser(description="Phase 03 GEC shell verification")
     parser.add_argument("--verify", action="store_true", help="run the full verification and exit non-zero on failure")
     parser.add_argument("--root", default=None, help="evidence root (defaults to a new stamp under local_data/phase03_20260920/shell_verify)")
+    parser.add_argument("--binding", default=None,
+                        help="this round's artifact_binding.json; requires the explicit artifacts below")
+    parser.add_argument("--web-zip", default=None, help="Web archive recorded in the binding")
+    parser.add_argument("--native-zip", default=None, help="macOS program archive recorded in the binding")
+    parser.add_argument("--native-descriptor", default=None, help="native descriptor recorded in the binding")
+    parser.add_argument("--native-binary", default=None, help="exported macOS program recorded in the binding")
     args = parser.parse_args()
     if not args.verify:
         parser.error("only --verify is supported")
+    try:
+        artifacts = resolve_artifacts(args)
+    except RefusalError as error:
+        print(f"PHASE03_SHELL_VERIFY_REFUSED {error}", flush=True)
+        print(json.dumps({"verdict": "refused", "error": str(error)}, ensure_ascii=False))
+        return 2
     PHASE_ROOT.mkdir(parents=True, exist_ok=True)
     root = Path(args.root) if args.root else PHASE_ROOT / "shell_verify" / time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     root.mkdir(parents=True, exist_ok=True)
-    verify = Verify(root)
+    verify = Verify(root, artifacts)
     try:
         ok = verify.verify()
     except VerificationError as error:
         verify.log(f"verification aborted: {error}")
         (root / "summary.txt").write_text("\n".join(verify.summary_lines) + "\n")
-        (root / "evidence.json").write_text(json.dumps({"checks": verify.checks, "artifacts": verify.artifacts, "error": str(error)}, indent=2, default=str))
+        (root / "evidence.json").write_text(json.dumps(
+            {"checks": verify.checks, "artifacts": verify.artifacts, "binding": verify.binding_summary(),
+             "error": str(error)}, indent=2, default=str))
         print(f"PHASE03_SHELL_VERIFY_FAILED {root}")
         return 1
     except Exception as error:  # unexpected: keep the evidence and fail loudly
         verify.log(f"unexpected failure: {error!r}")
         (root / "summary.txt").write_text("\n".join(verify.summary_lines) + "\n")
-        (root / "evidence.json").write_text(json.dumps({"checks": verify.checks, "artifacts": verify.artifacts, "error": repr(error)}, indent=2, default=str))
+        (root / "evidence.json").write_text(json.dumps(
+            {"checks": verify.checks, "artifacts": verify.artifacts, "binding": verify.binding_summary(),
+             "error": repr(error)}, indent=2, default=str))
         print(f"PHASE03_SHELL_VERIFY_ERROR {root} :: {error!r}")
         return 1
     finally:

@@ -11,6 +11,9 @@ async function setup(page){
  await page.evaluate(async config=>{const {GEC}=await import('/sdk.js');window.client=new GEC(config);await client.prepare();clearInterval(client.timer);await client.begin();},config);
 }
 const payload={trial_id:'t1',choice:'left',rt_ms:321.5,response_status:'responded'};
+// Recorded fixture step: advance the persisted retry deadline so the next real
+// attempt is due. The production backoff itself is never changed.
+const clearRetry=page=>page.evaluate(async()=>{await client.mutate(store=>{const r=store.getAll();r.onsuccess=()=>{for(const s of r.result)if(s.retryAt){s.retryAt=0;store.put(s)}}})});
 test('IndexedDB atomic abort, offline reload, lost ACK, active retention and cleanup',async({page,context})=>{
  await setup(page);
  const id=await page.evaluate(async payload=>{const e=client.record('exp.rt',payload,{id:'rt',version:'1'});await client.commit({version:1,strategy:'trial_boundary_v1',dependencies:[e.event_id],next_trial:1});return e.event_id;},payload);
@@ -18,10 +21,21 @@ test('IndexedDB atomic abort, offline reload, lost ACK, active retention and cle
  await expect(page.evaluate(()=>client.flush())).rejects.toThrow();
  expect(await page.evaluate(async()=>{const s=await client.get(client.id);return s.pending.length})).toBe(1);
  await context.setOffline(false);
- let dropped=false;
- await page.route('**/event-batches',async route=>{if(!dropped){dropped=true;await route.fetch();await route.abort();}else await route.continue();});
- await expect(page.evaluate(()=>client.flush())).rejects.toThrow();
+ let dropped=false;const sends=[];
+ await page.route('**/event-batches',async route=>{sends.push(Date.now());if(!dropped){dropped=true;await route.fetch();await route.abort();}else await route.continue();});
+ // Confirmed backoff contract: the persisted deadline is respected, so a flush
+ // that is not due sends nothing and keeps the durable queue unchanged.
+ expect(await page.evaluate(async()=>(await client.get(client.id)).retryAt>Date.now())).toBe(true);
+ await page.evaluate(()=>client.flush());
+ expect(sends).toHaveLength(0);
  expect(await page.evaluate(async()=>{const s=await client.get(client.id);return s.pending.length})).toBe(1);
+ // Recorded fixture step: advance the persisted deadline only; the production
+ // backoff itself is never changed.
+ await clearRetry(page);
+ await expect(page.evaluate(()=>client.flush())).rejects.toThrow();
+ expect(sends).toHaveLength(1);
+ expect(await page.evaluate(async()=>{const s=await client.get(client.id);return s.pending.length})).toBe(1);
+ await clearRetry(page);
  await page.evaluate(()=>client.flush());
  expect(await page.evaluate(async()=>{const s=await client.get(client.id);return [s.pending.length,s.records.length,!!s.checkpoint]})).toEqual([0,1,true]);
  // Force a real aborted IndexedDB transaction; no memory-only substitute.
@@ -55,11 +69,16 @@ test('ACK persistence failure retains raw and interrupted cleanup resumes',async
  await expect(page.evaluate(()=>client.flush())).rejects.toThrow();
  expect(await page.evaluate(async()=>{const s=await client.get(client.id);return [s.records.length,s.pending.length]})).toEqual([1,1]);
  await page.evaluate(async()=>{client.mutate=client.originalMutate;await client.flush();await client.finish();client.cleanup=async()=>{throw new Error('injected_cleanup_interruption')};});
+ // The interrupted round left a durable deadline: advance the recorded fixture
+ // deadline so the next real flush is due (the production backoff is unchanged).
+ await clearRetry(page);
  await expect(page.evaluate(()=>client.flush())).rejects.toThrow();
  const id=await page.evaluate(()=>client.id);
  expect(await page.evaluate(async()=>{const s=await client.get(client.id);return [!!s.complete_ack,s.records.length,s.pending.length]})).toEqual([true,1,0]);
  await page.evaluate(()=>client.close());await page.reload();
- await page.evaluate(async config=>{const {GEC}=await import('/sdk.js');window.client=new GEC(config);await client.prepare();clearInterval(client.timer);await client.flush()},config);
+ await page.evaluate(async config=>{const {GEC}=await import('/sdk.js');window.client=new GEC(config);await client.prepare();clearInterval(client.timer)},config);
+ await clearRetry(page);
+ await page.evaluate(()=>client.flush());
  expect(await page.evaluate(id=>client.get(id),id)).toEqual({id,kind:'cleaned',state:'remote_acknowledged',instance_id:config.instance_id,study_id:config.study_id});
  await page.evaluate(()=>client.close());
 });
@@ -88,7 +107,16 @@ test('successful completion clears the earlier offline error after durable clean
  expect(await page.evaluate(()=>client.status().error)).toBeTruthy();
  expect(await page.evaluate(async()=>(await client.get(client.id)).pending.length)).toBe(1);
  await context.setOffline(false);
+ let sends=0;const count=route=>{sends++;route.continue();};
+ await page.route('**/event-batches',count);await page.route('**/completion',count);
+ // Confirmed backoff contract: nothing is sent before the persisted deadline is
+ // due; only the advanced recorded fixture deadline makes the real retry happen.
  await page.evaluate(()=>client.flush());
+ expect(sends).toBe(0);
+ expect(await page.evaluate(async()=>(await client.get(client.id)).pending.length)).toBe(1);
+ await clearRetry(page);
+ await page.evaluate(()=>client.flush());
+ expect(sends).toBe(2);
  expect(await page.evaluate(()=>client.status())).toEqual({state:'remote_acknowledged',error:null,buffered:0});
  expect(await page.evaluate(async()=>(await client.get(client.id)).kind)).toBe('cleaned');
  await page.evaluate(()=>client.close());

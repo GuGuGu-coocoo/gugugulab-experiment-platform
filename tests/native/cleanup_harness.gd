@@ -53,7 +53,25 @@ func run() -> void:
 	elif backend.fault == "cleanup_abort":
 		assert(saved.pending.is_empty() and saved.checkpoint == null and saved.complete_ack.state == "complete")
 	else: assert(false,"Kill-at-boundary test was not interrupted")
-	backend.fault = ""
-	await backend.flush()
-	assert(backend.read_session(backend.session_id).kind == "cleaned")
-	print("NATIVE_CLEANUP_FAILURE_PRESERVED_DATA"); quit()
+	if backend.fault == "cleanup_abort":
+		# The completion receipt is durable and only the tombstone save was
+		# interrupted, so the preserved boundary is the receipt itself.
+		backend.fault = ""
+		print("NATIVE_CLEANUP_FAILURE_PRESERVED_DATA")
+		backend.pause_at_boundary()
+		quit()
+	else:
+		# The confirmed backoff contract: while the persisted deadline is not due
+		# a manual flush sends nothing and changes nothing. The spec's reopen
+		# performs the real retry after it advances the recorded fixture deadline;
+		# the production backoff itself is never changed.
+		backend.fault = ""
+		await backend.flush()
+		var unchanged = backend.read_session(backend.session_id)
+		assert(unchanged.pending == saved.pending and unchanged.records == saved.records
+			and unchanged.complete_ack == saved.complete_ack
+			and int(unchanged.get("attempts",0)) == int(saved.get("attempts",0)))
+		print("NATIVE_CLEANUP_RETRY_NOT_DUE")
+		print("NATIVE_CLEANUP_FAILURE_PRESERVED_DATA")
+		backend.pause_at_boundary()
+		quit()

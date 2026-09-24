@@ -31,6 +31,13 @@ macOS arm64 program through the complete distribution artifact:
 
 Evidence stays under ``local_data/phase03_20260920/package_verify/<stamp>/``.
 Missing tooling fails loudly instead of skipping.
+
+A bound invocation (``--binding`` plus the three explicit artifacts) verifies
+brand-new bytes exported and packaged by this remediation round: the binding
+must come from a unique root under ``build/phase03_remediation_20260923/`` and
+carry the current program-source digest, and a missing, stale or mismatched
+binding is refused before the instance is created. Without those options the
+tool keeps its explicit legacy invocation against ``build/native``.
 """
 from __future__ import annotations
 
@@ -55,6 +62,9 @@ from urllib import error as urlerror
 from urllib import request as urlrequest
 
 ROOT = Path(__file__).resolve().parents[1]
+TOOLS = ROOT / "tools"
+if str(TOOLS) not in sys.path:
+    sys.path.insert(0, str(TOOLS))
 PHASE_ROOT = ROOT / "local_data" / "phase03_20260920"
 VENV_PYTHON = ROOT / ".venv" / "bin" / "python"
 GUNICORN = ROOT / ".venv" / "bin" / "gunicorn"
@@ -68,6 +78,16 @@ ENGINE_NOTICES = ROOT / "server" / "core" / "data" / "godot_engine_notices.json"
 ENGINE_NOTICES_SCRIPT = ROOT / "tests" / "native" / "engine_notices_export.gd"
 NOTICES_MEMBER = "THIRD_PARTY_NOTICES.txt"
 MEMBER_USERNAME = "synthetic_package_reader"
+# Explicit artifact binding for this remediation round: the orchestrator
+# exports and packages brand-new macOS bytes under one unique build root and
+# records the program, descriptor and current program-source digests in an
+# artifact_binding.json. A bound invocation refuses a missing binding, a stale
+# source digest or bytes that do not match before it starts anything; the
+# historical build/native defaults stay the explicit legacy invocation only.
+BUILD_BASE = ROOT / "build" / "phase03_remediation_20260923"
+ARTIFACT_BINDING_FORMAT = "gep-remediation-artifact-binding/v1"
+BINDING_ARTIFACTS = ("native_zip", "native_descriptor", "native_binary")
+BINDING_CHECK = "本轮构建绑定：完整包程序绑定本轮唯一构建与源码摘要"
 # Fixed synthetic value for the invitation activation page (U07): it must carry
 # one ASCII uppercase letter, lowercase letter, digit and visible symbol each.
 # It is not a real credential and never leaves this synthetic run.
@@ -76,6 +96,103 @@ MEMBER_PASSWORD = "Synthetic-package-reader-2026!"
 
 class VerificationError(Exception):
     pass
+
+
+class RefusalError(Exception):
+    """A pre-run refusal: no instance, server or program has been started."""
+
+
+def guard_build_root(raw):
+    """This round's brand-new unique build root, never build/ or build/native."""
+    if not raw:
+        raise RefusalError("the artifact binding declares no build root")
+    import remediation_windows
+    root = Path(os.path.abspath(Path(str(raw)).expanduser()))
+    # Every component from the project root downwards is checked with lstat:
+    # a link that redirects a parent directory is refused too, not only a
+    # symlinked leaf (resolve() would hide the link and is not used).
+    link = remediation_windows.symlinked_component(root, ROOT)
+    if link is not None:
+        raise RefusalError(f"the artifact binding build root path contains a symbolic link: {link}")
+    if root.is_symlink():
+        raise RefusalError(f"the artifact binding build root is a symbolic link: {root}")
+    try:
+        relative = root.relative_to(Path(os.path.abspath(BUILD_BASE)))
+    except ValueError:
+        raise RefusalError(f"the artifact binding build root is outside the remediation build base: {root}") from None
+    if not relative.parts:
+        raise RefusalError(f"the artifact binding build root must be a unique subdirectory: {root}")
+    if not root.is_dir():
+        raise RefusalError(f"the artifact binding build root is missing: {root}")
+    return root
+
+
+def bound_artifact(root, entry, key):
+    import remediation_windows
+    if not isinstance(entry, dict) or not entry.get("path"):
+        raise RefusalError(f"the artifact binding has no {key} entry")
+    path = Path(str(entry["path"])).expanduser()
+    if not path.is_absolute():
+        raise RefusalError(f"the bound {key} path is not absolute: {path}")
+    path = Path(os.path.abspath(path))
+    try:
+        path.relative_to(root)
+    except ValueError:
+        raise RefusalError(f"the bound {key} is outside this round's build root: {path}") from None
+    link = remediation_windows.symlinked_component(path, ROOT)
+    if link is not None:
+        raise RefusalError(f"the bound {key} path contains a symbolic link: {link}")
+    if path.is_symlink():
+        raise RefusalError(f"the bound {key} is a symbolic link: {path}")
+    if not path.is_file():
+        raise RefusalError(f"the bound {key} is missing: {path}")
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        while chunk := stream.read(1 << 20):
+            digest.update(chunk)
+    if digest.hexdigest() != entry.get("sha256") or path.stat().st_size != entry.get("size"):
+        raise RefusalError(f"the bound {key} bytes do not match the binding: {path}")
+    return path
+
+
+def resolve_artifacts(args):
+    """Explicit this-round artifacts, or the legacy unbound defaults.
+
+    A bound invocation must name --binding, --native-zip, --native-descriptor
+    and --native-binary together; the binding must be ok, come from this
+    round's unique build root, carry the current program-source digest and
+    match the actual bytes and sizes. Every refusal happens before anything is
+    started.
+    """
+    explicit = (args.binding, args.native_zip, args.native_descriptor, args.native_binary)
+    if all(value is None for value in explicit):
+        return {"mode": "legacy-defaults", "binding": None, "native_zip": NATIVE_ZIP,
+                "native_descriptor": NATIVE_DESCRIPTOR, "native_binary": NATIVE_BINARY}
+    if not all(value is not None for value in explicit):
+        raise RefusalError("explicit artifacts require --binding, --native-zip, --native-descriptor and "
+                           "--native-binary together")
+    try:
+        document = json.loads(Path(args.binding).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise RefusalError(f"the artifact binding is unreadable: {type(error).__name__}") from None
+    if not isinstance(document, dict) or document.get("format") != ARTIFACT_BINDING_FORMAT \
+            or document.get("verdict") != "ok":
+        raise RefusalError("the artifact binding is missing or not ok")
+    root = guard_build_root(document.get("build_root"))
+    import remediation_windows
+    if document.get("program_source_digest") != remediation_windows.program_source_digest():
+        raise RefusalError("the artifact binding was produced from different program sources")
+    entries = document.get("artifacts") or {}
+    resolved = {}
+    for key, value in zip(BINDING_ARTIFACTS, explicit[1:]):
+        bound = bound_artifact(root, entries.get(key), key)
+        requested = Path(os.path.abspath(Path(str(value)).expanduser()))
+        if requested != bound:
+            raise RefusalError(f"the requested {key} is not the artifact recorded in the binding: {requested}")
+        resolved[key] = bound
+    resolved.update({"mode": "bound", "binding": str(Path(args.binding).expanduser()),
+                     "binding_document": document, "build_root": str(root)})
+    return resolved
 
 
 class FaultProxy:
@@ -142,11 +259,23 @@ class FaultProxy:
 
 
 class Verify:
-    def __init__(self, root: Path):
-        self.root = root
-        self.data = root / "data"
-        self.evidence = root / "evidence"
+    def __init__(self, root: Path, artifacts=None):
+        # Absolute paths only: the downloaded program is launched with a cwd of
+        # the unpack directory, so a relative evidence root would be resolved
+        # again against that cwd and the executable would not be found.
+        self.root = Path(root).resolve()
+        self.data = self.root / "data"
+        self.evidence = self.root / "evidence"
         self.db_path = self.data / "gep.sqlite3"
+        # The artifacts this run verifies: the explicit this-round binding when
+        # the orchestrator passes one, otherwise the legacy build/native
+        # defaults for a deliberate standalone invocation.
+        artifacts = artifacts or {}
+        self.binding = artifacts.get("binding_document")
+        self.binding_mode = artifacts.get("mode", "legacy-defaults")
+        self.native_zip = Path(artifacts.get("native_zip", NATIVE_ZIP))
+        self.native_descriptor = Path(artifacts.get("native_descriptor", NATIVE_DESCRIPTOR))
+        self.native_binary = Path(artifacts.get("native_binary", NATIVE_BINARY))
         self.owner_password = secrets.token_urlsafe(24)
         self.instance_id = str(uuid.uuid4())
         self.secret_key = secrets.token_urlsafe(48)
@@ -201,9 +330,9 @@ class Verify:
     def preconditions(self):
         missing = []
         for label, path in (("project virtualenv", VENV_PYTHON), ("gunicorn", GUNICORN),
-                            ("exported macOS program archive", NATIVE_ZIP),
-                            ("native descriptor", NATIVE_DESCRIPTOR),
-                            ("extracted macOS program", NATIVE_BINARY),
+                            ("exported macOS program archive", self.native_zip),
+                            ("native descriptor", self.native_descriptor),
+                            ("extracted macOS program", self.native_binary),
                             ("license", LICENSE), ("godot-sqlite license", GODOT_SQLITE_LICENSE),
                             ("frozen engine notices", ENGINE_NOTICES),
                             ("engine notices export script", ENGINE_NOTICES_SCRIPT),
@@ -389,7 +518,7 @@ class Verify:
                 "credentials": {"username": "synthetic_owner", "password": self.owner_password},
                 "member": {"username": MEMBER_USERNAME, "password": MEMBER_PASSWORD},
                 "run_dir": str(self.evidence), "title": "Complete package verification", "max_sessions": 2,
-                "descriptor": str(NATIVE_DESCRIPTOR), "program": str(NATIVE_ZIP)}
+                "descriptor": str(self.native_descriptor), "program": str(self.native_zip)}
 
     # --------------------------------------------------------- artifact checks
     def verify_downloaded_package(self, package: Path, release_id, sidecars):
@@ -400,9 +529,9 @@ class Verify:
         second = package.parent / "complete_package_second.zip"
         self.require(self.sha256_file(second) == digest, "重复授权下载逐字节一致")
 
-        descriptor = json.loads(NATIVE_DESCRIPTOR.read_text())
+        descriptor = json.loads(self.native_descriptor.read_text())
         expected_schemas = descriptor["schemas"]
-        with zipfile.ZipFile(package) as archive, zipfile.ZipFile(NATIVE_ZIP) as program:
+        with zipfile.ZipFile(package) as archive, zipfile.ZipFile(self.native_zip) as program:
             names = {item.filename for item in archive.infolist() if not item.filename.endswith("/")}
             manifest = json.loads(archive.read("artifact_manifest.json"))
             self.require(manifest["artifact_format_version"] == "gep-artifact/v1", "完整包清单格式版本固定", manifest["artifact_format_version"])
@@ -457,7 +586,7 @@ class Verify:
                                          "notices_sha256": hashlib.sha256(notices_bytes).hexdigest(),
                                          "manifest": manifest}
         # The advertised program digest still describes the extracted local program.
-        for name in (NATIVE_BINARY,):
+        for name in (self.native_binary,):
             self.require(name.exists(), "本机构建仍可用于对照", str(name))
 
     def unpack_and_run(self, package: Path):
@@ -470,7 +599,15 @@ class Verify:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_bytes(archive.read(item))
                 destination.chmod((item.external_attr >> 16) & 0o7777 or 0o644)
-        binary = target / NATIVE_BINARY.relative_to(ROOT / "build" / "native")
+        binary = target / self.native_binary.relative_to(self.native_zip.parent)
+        # The whole unpacked runtime tree, not only the executable, must still
+        # match the bound program archive: the .pck, dynamic libraries and
+        # helper files are what the real program loads.
+        import remediation_windows
+        problems = remediation_windows.verify_extracted_archive(
+            self.native_zip, target, label="unpacked downloaded package")
+        self.require(not problems, "解包下载包的程序成员与绑定归档逐成员一致（含 .pck/动态库）",
+                     {"problems": problems[:3]} if problems else {"archive": self.native_zip.name})
         self.require(binary.is_file() and os.access(binary, os.X_OK), "解包后程序存在且可执行", str(binary.relative_to(target)))
         self.require((target / "connection.json").is_file(), "外置冻结配置与 .app 同级（无需研究者替换）")
         storage = self.root / "native_store"
@@ -608,9 +745,18 @@ class Verify:
                      {"status": entry["status"], "sha256": entry["sha256"]})
 
     # -------------------------------------------------------------------- main
+    def binding_summary(self):
+        if self.binding is None:
+            return {"mode": "legacy-defaults", "source_digest": None}
+        return {"mode": "bound", "build_root": self.binding.get("build_root"),
+                "program_source_digest": self.binding.get("program_source_digest"),
+                "artifacts": {key: (self.binding.get("artifacts") or {}).get(key, {}).get("sha256")
+                              for key in BINDING_ARTIFACTS}}
+
     def verify(self):
         self.preconditions()
-        self.record(True, "固定工具链存在", {"program": str(NATIVE_ZIP), "descriptor": str(NATIVE_DESCRIPTOR)})
+        self.record(True, "固定工具链存在", {"program": str(self.native_zip), "descriptor": str(self.native_descriptor)})
+        self.record(True, BINDING_CHECK, self.binding_summary())
         self.evidence.mkdir(parents=True, exist_ok=True)
         self.verify_notice_provenance()
         self.init_instance()
@@ -642,7 +788,9 @@ class Verify:
                 self.proxy.stop()
             self.stop_server()
         failures = [check for check in self.checks if not check["ok"]]
-        (self.root / "evidence.json").write_text(json.dumps({"checks": self.checks, "artifacts": self.artifacts}, indent=2, default=str))
+        (self.root / "evidence.json").write_text(json.dumps(
+            {"checks": self.checks, "artifacts": self.artifacts, "binding": self.binding_summary()},
+            indent=2, default=str))
         (self.root / "summary.txt").write_text("\n".join(self.summary_lines) + "\n")
         return not failures
 
@@ -651,25 +799,40 @@ def main():
     parser = argparse.ArgumentParser(description="Phase 03 complete native package verification")
     parser.add_argument("--verify", action="store_true", help="run the full verification and exit non-zero on failure")
     parser.add_argument("--root", default=None, help="evidence root (defaults to a new stamp under local_data/phase03_20260920/package_verify)")
+    parser.add_argument("--binding", default=None,
+                        help="this round's artifact_binding.json; requires the explicit artifacts below")
+    parser.add_argument("--native-zip", default=None, help="macOS program archive recorded in the binding")
+    parser.add_argument("--native-descriptor", default=None, help="native descriptor recorded in the binding")
+    parser.add_argument("--native-binary", default=None, help="exported macOS program recorded in the binding")
     args = parser.parse_args()
     if not args.verify:
         parser.error("only --verify is supported")
+    try:
+        artifacts = resolve_artifacts(args)
+    except RefusalError as error:
+        print(f"PHASE03_PACKAGE_VERIFY_REFUSED {error}", flush=True)
+        print(json.dumps({"verdict": "refused", "error": str(error)}, ensure_ascii=False))
+        return 2
     PHASE_ROOT.mkdir(parents=True, exist_ok=True)
     root = Path(args.root) if args.root else PHASE_ROOT / "package_verify" / time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     root.mkdir(parents=True, exist_ok=True)
-    verify = Verify(root)
+    verify = Verify(root, artifacts)
     try:
         ok = verify.verify()
     except VerificationError as error:
         verify.log(f"verification aborted: {error}")
         (root / "summary.txt").write_text("\n".join(verify.summary_lines) + "\n")
-        (root / "evidence.json").write_text(json.dumps({"checks": verify.checks, "artifacts": verify.artifacts, "error": str(error)}, indent=2, default=str))
+        (root / "evidence.json").write_text(json.dumps(
+            {"checks": verify.checks, "artifacts": verify.artifacts, "binding": verify.binding_summary(),
+             "error": str(error)}, indent=2, default=str))
         print(f"PHASE03_PACKAGE_VERIFY_FAILED {root}")
         return 1
     except Exception as error:  # unexpected: keep the evidence and fail loudly
         verify.log(f"unexpected failure: {error!r}")
         (root / "summary.txt").write_text("\n".join(verify.summary_lines) + "\n")
-        (root / "evidence.json").write_text(json.dumps({"checks": verify.checks, "artifacts": verify.artifacts, "error": repr(error)}, indent=2, default=str))
+        (root / "evidence.json").write_text(json.dumps(
+            {"checks": verify.checks, "artifacts": verify.artifacts, "binding": verify.binding_summary(),
+             "error": repr(error)}, indent=2, default=str))
         print(f"PHASE03_PACKAGE_VERIFY_ERROR {root} :: {error!r}")
         return 1
     finally:
