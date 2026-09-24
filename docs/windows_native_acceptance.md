@@ -2,6 +2,30 @@
 
 状态：2026-09-20用户确认纳入Phase03D/03F必需范围。当前状态（2026-09-21 P0308）：真实 Windows x64（Windows 11 Pro 26200，AMD64，交互控制台会话）上一次完整实机工程运行 **WN01–WN06 共 236 项检查 0 失败**、`runtime_acceptance=PASS`；严格门槛 `tools/phase03_acceptance.py --verify --windows-run <运行目录> --windows-prep <准备目录>` 的全部步骤与子项明确 PASS（`windows_runtime=RUNTIME_PASS`，退出 0）；同批本机受影响套件 423 项通过（其中 Windows 接受测试 `tests/test_phase03_windows_acceptance.py` 119 项），准备门槛 `--verify-preparation --probe-device` 229 项检查 0 失败。工具链与平台契约测试现包含在上面的 423 项作用域内。但**人工验收仍未运行：原设计者自主体验与独立 T17 均为 `NOT_RUN`**；实机工程证据不替代人的体验结论。本文是验收要求与工程记录，不是人工验收通过报告；macOS 原生成果和 Windows 浏览器结果分别保留。
 
+## 2026-09-24 R11A 新一轮工程准备（准备 ≠ 运行 ≠ 人工测试）
+
+R11A 按当前源码冻结了新一轮 Windows x64 合成程序字节，并用真实平台生命周期（登记 / 上传 / 批准 / 授权下载）产出工程 kit 与人工测试包：
+
+```text
+.venv/bin/python tools/remediation_windows.py --prepare                  # 准备：新冻结字节 + 工程 kit + 人工测试包（本机）
+.venv/bin/python tools/phase03_remediation_acceptance.py --verify-local  # 本机集成 gate（服务端 + 真实 Chrome/macOS + 0011 迁移演练）
+```
+
+- 真实 Windows x64 运行由 R11W 在设备上执行 `tools/remediation_windows.py --verify`（WN01–WN06 以 harness 运行文档逐条判定）；本机准备输出 `prepare_report.json` 且 `windows_verified: false`，**不产生任何运行结论**。
+- 本机 `--verify-local` 的 Web/macOS 壳、完整包与浏览器证据绑定本轮 `build/phase03_remediation_20260923/<unique>/` 唯一构建根与当前源码摘要；缺绑定、源码摘要不符或字节/路径不符在启动任何实例或程序前拒绝，旧默认产物不会被悄悄选来给新源码 PASS。
+- 工程 kit 与人工测试包只含公开字节与说明；账号、口令、令牌与连接材料单独保存在 `private/`（0600），绝不分发。kit 的 `integrity.json` 只是传输完整性哈希清单，不是签名，也不代表代码签名。
+- 新字节替换旧字节后，旧版实机通过不适用于新版本；新一轮必须重新取得真实 Windows 证据。
+- 本轮人工测试记录口径（T17 保留编号）：帮助 / 失败 / 未运行分别如实记录，不合并为“通过”；需要说明或帮助的步骤不能算独立通过；工具与机器证据都不能产生人的 PASS。
+- 人工测试材料由维护者按工程就绪情况安排；Phase 04（含 LAN 真实部署）未授权，真实数据与真实被试不在此范围。
+
+### 2026-09-24 R11AR 证据链修正与本机复验
+
+P03R11AR 在 R11A 之上修复复核发现的证据链缺陷；新冻结字节与 kit 以**新的程序源码绑定**（含四个 `packages/gec_web/*.js` 与 Godot 项目/打包器源码）为准：
+
+- `--verify` 现在要求并重新核对完整证据：报告格式、当前源码摘要与输入集合、冻结程序/kit/运行标识、原始 harness 运行文档、设备 OS/架构/版本与交互会话、WN02/WN03/WN04 逐事件对账导出；仅含六个 PASS 的汇总报告被拒绝，旧 kit 因源码摘要不符被拒绝（实测退出 1，不启动程序），合成夹具不冒充实体运行。
+- 本轮新 kit：最新证据根 `local_data/phase03_remediation_20260923/p03r11a_windows/20260924T052550Z-20e9e908`，`program_sha256=dd0355f4…`、源码摘要 `9362b2a0…`、输入 33 项、`windows_verified: false`（同源码的首次准备 `.../20260924T051226Z-25030b78` 保留不覆盖）。**R11W 必须使用本轮新 kit 与新运行结果，不能继承旧 kit/旧运行。**
+- 本机 `--verify-local` 退出 0（shell 133、package 112、browser 20 用例、remediation 262、legacy 438，零失败零跳过）；T20/T29 的 WN01–WN06 仍为 `NOT_RUN`；人工测试未运行。本机 gate 在最终文档定稿后复跑一次，仍退出 0（证据根 `local_data/phase03_remediation_20260923/p03r11a/20260924T052713Z-048627e1`），产物摘要每轮重导出、以该轮 `artifact_binding.json` 为准。
+
 ## 2026-09-21 P0308 真实 Windows x64 实机运行（当前状态）
 
 2026-09-21：在真实 Windows x64 桌面上，用与准备 kit 严格绑定的**同一不可变 Windows x64 构建**（三个冻结研究/发行共用该构建；程序摘要以 `releases.json`/`artifact_manifest.json` 记录为准）完成一次完整实机工程运行。准备主机与 Windows 之间是**作用域反向 SSH 隧道**（仅公钥、严格主机密钥；不改 DNS、防火墙或证书信任），主机名、地址与端口隧道细节只保留在本机忽略目录的交接证据中，不写入公开文档。

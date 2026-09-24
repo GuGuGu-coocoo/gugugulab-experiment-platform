@@ -5,6 +5,12 @@
 
 顺序 / Order：不再要求“先原设计者自主体验、再独立 T17”的固定顺序；人工测试由维护者按修复与工程回归就绪情况安排。本文清单可由原设计者或维护者按需使用，需要帮助的步骤照实记录，不能算通过；历史记录保持原样，不追溯改写。
 
+## 2026-09-24 R11A 新一轮材料（Windows）
+
+新一轮 Windows 工程 kit 与人工测试包改由 `tools/remediation_windows.py --prepare` 从当前源码真实冻结并下载（私有账号与连接材料单独保存，不随包分发）；本机集成 gate 为 `tools/phase03_remediation_acceptance.py --verify-local`。`--prepare` 不是运行结果：`prepare_report.json` 明确 `windows_verified: false`，真实 Windows x64 运行（WN01–WN06）由 R11W 在设备上执行。本轮人工测试（T17 保留编号）帮助/失败/未运行分别如实记录，工具不能产生人的 PASS；Phase 04 未授权。
+
+R11AR 修正（2026-09-24）：新 kit 的源码绑定现含四个 `packages/gec_web/*.js` 与 Godot 项目/打包器源码（构建前后输入一致才接受），本机 `--verify-local` 复验通过（shell 133、package 112、browser 20 用例、remediation 262、legacy 438，零失败零跳过）；最新 kit `program_sha256=dd0355f4…`、源码摘要 `9362b2a0…`、`windows_verified: false`。`--verify` 现在要求完整运行证据（原始 harness 文档、设备 OS/架构/版本、逐事件对账导出，冻结 kit 重新核验），仅有汇总 PASS 的报告被拒绝；真实 Windows 与人工测试仍未运行。
+
 ## 维护者准备（一次即可）/ Maintainer preparation
 
 ```text

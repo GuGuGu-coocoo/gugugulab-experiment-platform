@@ -244,3 +244,29 @@ R09CR 修复复核确认的三处缺陷并按持久计数精确化壳文案，�
 覆盖内容：原生失败数据导出改为同目录临时文件完整写入、flush、回读核对后一次原子替换，GUI 保存对话框与自动化入口共用同一方法并显示真实结果（已导出路径/明确错误/取消）；RLIMIT_FSIZE 真实受限写下返回错误、原目标字节保持、无临时残留、本地队列行 sha256 不变，之后无限制导出成功且文档与对照一致、不含凭据。补传文案始终等于持久 `retry_failures`（初次失败无计数、1/2/3 精确、有进展的一轮不计数、进度重置后从 1 开始）；失败面显式排除已存 `complete_ack` receipt、`cleaned`/`remote_acknowledged` 与 `front_locked`（陈旧计数不再触发导出入口）。`--verify-windows` 以传入包为只读源：全部文件 sha256 记录后复制到唯一运行副本，程序由 `--program` 或包清单唯一确定（歧义/越界/非 exe 明确失败，不再猜首个 exe），只在副本内替换合成 `connection.json`，运行后再次核对源摘要不变，并明确分开“源冻结包完整性”与“兼容配置副本运行”两类证据。故障服务器启动改为线程读取 ready 行的有界握手（超时/无效行/早退都 kill+wait 回收 owned 子进程），公开脚本不再用 `select` 等待进程管道，也不再保留个人 Windows 工作目录常量。
 
 边界：受限写为父进程 `RLIMIT_FSIZE` 的真实 POSIX 限写，不声称物理磁盘耗尽；GUI 在 headless 真实 Godot 中经真实 `FileDialog` 信号驱动（窗口本身未显示）。原冻结完整包的端到端运行、Windows 上替换已有目标文件的真实行为、R11 的 WN01–WN06 与新旧 Windows 联测仍待进行；`--verify-windows` 的兼容配置副本运行不等于原冻结连接包端到端通过。本页不关闭 Phase03；以上为合成工程证据。
+
+## R11A 本机集成与新一轮 Windows 工程准备（2026-09-24）
+
+R11A 完成受影响本机集成 gate 与新一轮 Windows 工程准备；未运行真实 Windows，未进行人工测试。准备、实机与人工测试三类证据分开记录：
+
+- **本轮绑定构建与显式产物绑定**：`--verify-local` 先在 `build/phase03_remediation_20260923/<unique>/` 用固定 Godot 4.7.2 从当前源码真实导出并打包 Web 与 macOS 字节，写出 `artifact_binding.json`（程序/描述/当前源码摘要）；shell、package 与浏览器步骤只使用该绑定产物，缺绑定、源码摘要不符或字节/路径不符时在启动任何实例或程序前拒绝，旧默认 `build/native` 与 `build/synthetic_web.zip` 不会被悄悄选来给新源码 PASS。**此前使用旧默认产物、未绑定构建根与源码摘要的 shell/package/browser 通过记录单列保留（既有通过事实不删除），不用于宣称当前包通过；当前包结论只以绑定运行的本轮证据为准，证据链修正见下节 R11AR。**
+- **绑定运行实测（当前包结论）**：新唯一构建根 `build/phase03_remediation_20260923/20260924T043000Z-7972de52`（源码摘要 `544aa48a…`；Web 包 `6574a8ac…` 10,293,843 字节；macOS 程序归档 `1628751f…` 62,018,115 字节；描述 `ca098b07…`；解包程序 `4f4094de…`）。`--verify-local` 退出 0、`verdict=PASS`：artifacts、boundary、shell（**132 项检查 0 失败**）、package（**111 项检查 0 失败**）、browser（6 规格 **20 用例 0 失败**，含 native_cleanup 缺配置负向）、`tests/remediation`（**253 通过 / 0 失败 / 0 跳过**）、受影响旧套件（**438 通过 / 0 失败 / 0 跳过**）、公开文档口径与新一轮 Windows 准备全部 PASS；仅 T20/T29 的外部 WN01–WN06 保持 `NOT_RUN`，交 R11W。同一轮发现历史 `build/native` 程序字节为 2026-09-20 旧构建、与当前源码不同：未绑定旧产物的通过记录不能用于当前包，绑定运行才是当前源码的真实结论。证据根 `local_data/phase03_remediation_20260923/p03r11a/20260924T043000Z-fdac88f3`（本地）。
+- `.venv/bin/python tools/phase03_remediation_acceptance.py --verify-local`：真实执行 `tests/remediation` 的全部本机服务端用例与真实 Chrome/Godot 运行、受影响旧套件（T25–T30 与受影响 T03/04/06/07/08/11/13/15/16/18–24 逐条款绑定命名选择器）、0011→最新 schema 迁移演练、公开文档口径检查与新一轮 Windows 准备记录。机器覆盖矩阵中任何本地缺项、失败或跳过使退出码非 0；真实 Windows 运行（WN01–WN06）保持显式 `NOT_RUN`，由 R11W 在设备上执行。
+- 受影响旧 `native_cleanup` 原生清理规格：连接、服务器数据库与测试临时存储必须由编排器通过 `GEP_ISO_CONNECTION`/`GEP_ISO_DB`/`GEP_ISO_SCRATCH` 显式提供；缺失、相对路径、dev 默认或受保护旧目录在启动 Godot 或打开数据库前拒绝，缺配置负向用例证明不产生任何副作用（不连接旧库）。
+- `.venv/bin/python tools/remediation_windows.py --prepare`：按当前源码与固定官方 Windows 模板冻结新的 Windows x64 程序字节，经真实登记/上传/批准/授权下载生命周期产出工程 kit 与人工测试包；kit/人工包不含账号、口令、令牌，私有账号与连接材料单独 0600 保存，`prepare_report.json` 记录 `windows_verified: false`。旧 `build/windows` 字节与旧实例不被改写。
+- `.venv/bin/python tools/remediation_migration.py --verify-boundary`：显式 0011 合成源经 SQLite 备份副本升级到当前 schema（0015）；源字节不变，旧邀请 `identity_version=1`/`principal=NULL` 原语义保留，v2 绑定、重放拒绝与真实永久删除撤销均为真实入口证据，纳入 verify-local 强制门槛。
+- 集成验证工具拒绝既有/外指/符号链接证据根与危险符号链接、重解析点输入；源与外部 canary 字节在负向输入下不变；失败写可读报告并以非 0 退出（R09CR 回归在 R11W 之前通过）。
+
+边界：本页记录为合成工程证据；新冻结字节需要新的真实 Windows x64 运行与人的复测，旧版实机通过不适用于新版本；人工测试帮助/失败/未运行分别记录，工具不产生人的 PASS；Phase 03 未完成，Phase 04（含 LAN 真实部署）未授权。
+
+## R11AR 证据链修正与本机复验（2026-09-24）
+
+R11AR 修复关键复核发现的证据链缺陷并复验；未运行真实 Windows，未进行人工测试。准备、实机与人工测试三类证据继续分开记录。
+
+- **Windows 运行证据必须完整**：`tools/phase03_remediation_acceptance.py --verify --windows-run` 与 `tools/remediation_windows.py --verify` 现在要求并重新读取：报告格式、当前程序源码摘要与输入集合、冻结程序/kit/运行唯一标识、原始 harness 运行文档（报告记录相对本证据根，禁止外指）、设备 OS/架构/版本与交互会话，以及 WN02/WN03/WN04 的逐事件对账导出（记录路径必须位于运行根内且摘要与文件一致）；缺字段、缺文件、旧源码、错程序、错 kit、错 run、被改报告/产物、用例失败或跳过都是非 0。仅含 `verdict=ok`、`windows_verified=true` 与六个 PASS 的汇总 JSON（复核探针 `local_data/phase03_remediation_20260923/r11a-review-ohf9q6np/`）被明确拒绝；旧 kit 因源码摘要不符被拒绝（实测退出 1、不启动任何程序），R11W 不能继承旧数据。合成夹具只验证拒绝路径，不冒充实体运行。
+- **源码绑定覆盖真实打包输入**：`program_source_digest` 现包含四个 `packages/gec_web/*.js`（Web 构建实际随包发布）与 Godot 项目/打包器源码；构建前后输入集合与摘要记录在本机 `artifact_binding.json` 与 Windows kit 的 `releases.json`/`integrity.json`，构建中源变化被拒绝。隔离源副本负向测试证明 Web SDK 或打包器改动使旧摘要失效（不修改正式源码制造测试）。
+- **解包运行资源逐成员校验**：本机 macOS 绑定构建、真实 GEC 壳与完整包在运行前把解包程序的全部成员（可执行文件、`.pck`、动态库）与绑定归档逐成员比对；不完整或被替换的运行时在启动前拒绝（shell 的“解包 macOS 运行资源与绑定归档逐成员一致”与 package 的“解包下载包的程序成员与绑定归档逐成员一致”命名检查）。
+- **绑定入口拒绝祖先链接**：三个绑定入口（acceptance gate、shell、package）与 Windows kit manifest 对根、祖先与每个成员用 `lstat` 逐组件检查（不只查叶子、不先 `resolve`）：祖先外指、内向链接、根链接与成员链接均在启动或读取外部前拒绝；负向测试证明外部 canary 与旧产物字节不变、未创建实例/服务器/程序。真正 Windows junction 仍由 R11W 在设备上实测。
+- **真实命令与结果**：`GEP_T17_BROWSER=1 .venv/bin/pytest -q tests/remediation/test_p03r11a.py tests/remediation/test_p03r11ar.py` → 退出 0、**30 passed**（新增 9 项负向）；`.venv/bin/python tools/phase03_remediation_acceptance.py --verify-local` → 退出 0、`verdict=PASS`（源码摘要 `9362b2a0…` 前后一致、输入 33 项；Web/macOS 产物每轮重新导出，摘要见该轮 `artifact_binding.json`：boundary、shell **133 项检查 0 失败**、package **112 项检查 0 失败**、browser 6 规格 **20 用例 0 失败**、`tests/remediation` **262 通过 / 0 失败 / 0 跳过**、受影响旧套件 **438 通过 / 0 失败 / 0 跳过**、docs 与 Windows 准备全部 PASS；仅 T20/T29 外部 WN01–WN06 为 `NOT_RUN`。本轮 gate 复跑均退出 0，本文结论对每次复跑一致；示例证据根 `local_data/phase03_remediation_20260923/p03r11a/20260924T051324Z-633f99d8`（构建根 `build/phase03_remediation_20260923/20260924T051324Z-e8f91a82`），各次运行的证据根、构建根与产物摘要见其目录与内部报告，先前证据保留不覆盖）；`.venv/bin/python tools/remediation_windows.py --prepare` → 退出 0、`windows_verified: false`（最新证据根 `local_data/phase03_remediation_20260923/p03r11a_windows/20260924T052550Z-20e9e908`、构建根 `build/phase03_remediation_20260923/20260924T052550Z-c73f653d`、`program_sha256=dd0355f4…`、源码摘要 `9362b2a0…`、输入 33 项；同源码的首次准备 `.../20260924T051226Z-25030b78`（`d4656626…`）保留不覆盖）。
+
+边界：以上为本机合成工程证据；真实 Windows x64（WN01–WN06）、新旧 Windows 包联测与人工测试仍未运行，工具不产生人的 PASS；Phase 03 未完成；旧失败现场与本轮前证据保留不清理。

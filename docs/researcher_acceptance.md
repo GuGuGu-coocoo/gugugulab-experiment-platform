@@ -33,3 +33,11 @@
 T17 完成后再判断 Phase 03 是否通过；它不批准正式研究、生产部署、科学计时、伦理或数据治理。
 
 当前界面操作补充见[研究者说明](researcher.md)。重构完成后应冻结并更新上述完整流程再交独立人员；不能以当前局部修复声称T17已通过。
+
+## 2026-09-24 R11A 新一轮人工测试材料
+
+R11A 已完成本机集成 gate 与新一轮 Windows 工程准备：`tools/phase03_remediation_acceptance.py --verify-local` 在本机执行服务端、真实 Chrome/macOS 与 0011 迁移演练；`tools/remediation_windows.py --prepare` 按当前源码冻结新的 Windows x64 字节，并经真实登记/上传/批准/下载生命周期产出工程 kit 与人工测试包（私有账号与连接材料单独保存，不随包分发）。本机 gate 的 shell/package/browser 证据只取自本轮 `build/phase03_remediation_20260923/<unique>/` 唯一构建根绑定的 Web/macOS 产物（程序/描述/当前源码摘要与字节绑定，缺绑定或不符在启动前拒绝）；未绑定构建根的旧默认产物通过记录单列，不用于宣称当前包通过。
+
+本轮人工测试尚未运行：帮助 / 失败 / 未运行分别如实记录，不合并为“通过”；需要说明或帮助的步骤不能算独立通过。工具与机器证据（含本机 prepare）都不能产生人的 PASS；新冻结字节需要新的真实运行与人的复测，旧轮次证据不追溯改写。Phase 03 未完成，Phase 04（含 LAN 真实部署）未授权。
+
+R11AR 修正（2026-09-24）：本机 `--verify-local` 已用新程序源码绑定（含四个 `packages/gec_web/*.js` 与实际打包输入）复验通过（remediation 262、受影响旧套件 438、shell 133、package 112、browser 20 用例，零失败零跳过）；`--prepare` 生成的新 kit（最新 `program_sha256=dd0355f4…`、源码摘要 `9362b2a0…`、输入 33 项）沿用该绑定，`windows_verified: false`。Windows 运行证据现在必须完整（原始 harness 文档、设备 OS/架构/版本、逐事件对账导出），汇总 PASS 不通过；真实 Windows 与人工测试仍未运行。
