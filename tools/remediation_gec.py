@@ -45,6 +45,7 @@ import secrets
 import shutil
 import socket
 import sqlite3
+import stat
 import subprocess
 import sys
 import threading
@@ -185,6 +186,50 @@ def unique_dir(base: Path) -> Path:
     return target
 
 
+def evidence_base(explicit: str | None = None) -> Path:
+    """The evidence base for one run, optionally redirected by the caller.
+
+    An explicit value must be a brand-new path inside the project; every
+    component from the project root down is checked for links before anything
+    is created, and an existing path is refused (a failed attempt keeps its
+    exact files and a retry uses a new root). Without an explicit value the
+    task's own dedicated base is used.
+    """
+    if not explicit:
+        return EVIDENCE_BASE
+    root = Path(explicit).expanduser()
+    if not root.is_absolute():
+        root = ROOT / root
+    root = Path(os.path.abspath(root))
+    project = Path(os.path.abspath(ROOT))
+    try:
+        relative = root.relative_to(project)
+    except ValueError:
+        raise VerificationError(f'refusing an evidence root outside the project: {root}') from None
+    current = project
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise VerificationError(f'refusing a symlinked evidence path component: {current}')
+    if root.exists():
+        raise VerificationError(f'refusing an existing evidence root; each run needs a new unique root: {root}')
+    return root
+
+
+def run_root(base: Path) -> Path:
+    """One fresh unique run root under an existing evidence base.
+
+    An explicit (already unique) base is validated and used directly; the
+    default base receives a new ``<UTC stamp>-<random>`` leaf per run.
+    """
+    if base == EVIDENCE_BASE:
+        return unique_dir(base)
+    if base.is_symlink():
+        raise VerificationError(f'refusing a symlinked evidence root: {base}')
+    base.mkdir(parents=True, exist_ok=False, mode=0o700)
+    return base
+
+
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open('rb') as stream:
@@ -304,15 +349,106 @@ def package_digests(root: Path) -> dict:
     return digests
 
 
+def unsafe_node_reason(path: Path) -> str | None:
+    """One human reason when a node is a link, reparse point or special file.
+
+    ``lstat`` is used deliberately: a symbolic link must be detected as the link
+    itself, never followed. On Windows the same check also covers directory
+    junctions and mount points through ``FILE_ATTRIBUTE_REPARSE_POINT``, so a
+    reparse point cannot smuggle a different volume or a parent directory into a
+    package tree.
+    """
+    try:
+        status = path.lstat()
+    except OSError as error:
+        return f'unreadable node: {error}'
+    if stat.S_ISLNK(status.st_mode):
+        return 'symbolic link'
+    attributes = getattr(status, 'st_file_attributes', 0)
+    reparse_flag = getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400)
+    if attributes & reparse_flag:
+        return 'reparse point'
+    if not (stat.S_ISREG(status.st_mode) or stat.S_ISDIR(status.st_mode)):
+        return 'special file'
+    return None
+
+
+def reject_unsafe_tree(root: Path, label: str = 'package tree') -> None:
+    """Refuse a whole tree that contains any link, reparse point or special node.
+
+    The check inspects every node with ``lstat`` (including the root itself), so
+    an absolute or outward-pointing symlink is refused before any copy happens.
+    """
+    root = Path(root)
+    reason = unsafe_node_reason(root)
+    if reason:
+        raise VerificationError(f'the {label} root is unsafe ({reason}): {root}')
+    for path in sorted(root.rglob('*')):
+        reason = unsafe_node_reason(path)
+        if reason:
+            raise VerificationError(f'the {label} contains an unsafe node ({reason}): {path}')
+
+
+def _reject_unsafe_chain(root: Path, candidate: Path) -> None:
+    """Refuse links/reparse points on every existing component from root to a file.
+
+    A genuinely missing component is not a link: it is left to the caller's own
+    "does not exist" check, so a missing program still reports the precise
+    reason. A symbolic link is detected even when its target is missing.
+    """
+    root, candidate = Path(root).resolve(), Path(candidate).resolve()
+    try:
+        relative = candidate.relative_to(root)
+    except ValueError:
+        raise VerificationError(f'the selected path is outside the package root: {candidate}') from None
+    current = root
+    for part in relative.parts:
+        current = current / part
+        if not current.exists() and not current.is_symlink():
+            continue
+        reason = unsafe_node_reason(current)
+        if reason:
+            raise VerificationError(f'the selected path uses an unsafe component ({reason}): {current}')
+
+
 def copy_package_for_run(source: Path, run_root: Path, name: str = 'package_copy') -> Path:
     """One unique byte copy of the read-only source package for a single run.
 
-    ``source`` is input only. The copy is where a synthetic target
-    configuration may be replaced for the compatibility run; the source tree is
-    never written and its digests are re-checked after the run.
+    ``source`` is input only. The copy is materialised explicitly - every
+    directory and regular file is created, and no link flag is ever passed to a
+    copy call - so a symbolic link, Windows directory junction/reparse point or
+    special file in the source can never redirect a later write back into the
+    source or into a path outside the run copy. The source tree, the copied tree
+    and the file digests are all verified; any difference refuses the run.
     """
-    destination = run_root / name
-    shutil.copytree(source, destination, symlinks=True)
+    source = Path(source)
+    destination = Path(run_root) / name
+    if destination.exists():
+        raise VerificationError(f'the run copy destination already exists: {destination}')
+    reject_unsafe_tree(source, 'source package')
+    destination.mkdir(parents=True, exist_ok=False, mode=0o700)
+    files = 0
+    for path in sorted(source.rglob('*')):
+        relative = path.relative_to(source)
+        target = destination / relative
+        mode = path.lstat().st_mode
+        if stat.S_ISDIR(mode):
+            target.mkdir(parents=True, exist_ok=True, mode=0o700)
+        elif stat.S_ISREG(mode):
+            target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            shutil.copyfile(path, target, follow_symlinks=False)
+            shutil.copystat(path, target, follow_symlinks=False)
+            files += 1
+        else:
+            raise VerificationError(f'the source package contains an unsupported node: {path}')
+    reject_unsafe_tree(destination, 'run copy')
+    source_digests, copy_digests = package_digests(source), package_digests(destination)
+    if source_digests != copy_digests:
+        changed = sorted(name for name in set(source_digests) | set(copy_digests)
+                         if source_digests.get(name) != copy_digests.get(name))
+        raise VerificationError(f'the unique run copy is not byte-identical to the source: {changed}')
+    if files != len(source_digests):
+        raise VerificationError('the source package contains entries that were not copied as regular files')
     return destination
 
 
@@ -325,6 +461,9 @@ def resolve_windows_program(root: Path, explicit: str | None,
     of silently picking a console or helper executable.
     """
     root = root.resolve()
+    reason = unsafe_node_reason(root)
+    if reason:
+        raise VerificationError(f'the package root is unsafe ({reason}): {root}')
     if explicit:
         candidate = Path(explicit)
         candidate = (root / candidate).resolve() if not candidate.is_absolute() else candidate.resolve()
@@ -350,6 +489,7 @@ def resolve_windows_program(root: Path, explicit: str | None,
         candidate.relative_to(root)
     except ValueError:
         raise VerificationError(f'the named program is outside the package root: {candidate}') from None
+    _reject_unsafe_chain(root, candidate)
     if not candidate.is_file():
         raise VerificationError(f'the named program does not exist: {candidate}')
     if candidate.suffix.lower() != '.exe':
@@ -538,8 +678,27 @@ def old_native_check(run: Run, server: FaultServer, old_zip: Path):
                  'pending': len(row.get('pending', [])), 'records': len(row.get('records', []))})
 
 
-def verify_local() -> int:
-    run = Run(unique_dir(EVIDENCE_BASE))
+def _write_summary(run: Run, document: dict) -> bool:
+    """Write the machine-readable summary; a file failure is reported, not fatal.
+
+    The exit code is always derived from the document itself, so an unwritable
+    summary can never turn a real failure into an unobservable crash that looks
+    like an interrupted run.
+    """
+    try:
+        run.write('summary.json', document)
+        return True
+    except OSError as error:
+        print(f'summary.json could not be written: {error!r}', flush=True)
+        return False
+
+
+def verify_local(evidence_root: str | None = None) -> int:
+    try:
+        run = Run(run_root(evidence_base(evidence_root)))
+    except VerificationError as error:
+        print(f'local verification: REFUSED :: {error}', flush=True)
+        return 2
     print(f'evidence root: {run.root}', flush=True)
     try:
         godot = godot_binary()
@@ -570,23 +729,28 @@ def verify_local() -> int:
         run.write('windows_not_run.json', windows)
         document = {'verify': 'local', 'ok': not run.failures, 'checks': run.checks, 'failures': run.failures,
                     'artifacts': run.artifacts, 'windows': windows}
-        run.write('summary.json', document)
+        _write_summary(run, document)
         print(f"local verification: {'PASS' if not run.failures else 'FAIL'} ({len(run.checks)} checks, {len(run.failures)} failed)", flush=True)
         print('Windows: NOT RUN locally; R11 must execute --verify-windows on the real host', flush=True)
         return 0 if not run.failures else 1
-    except VerificationError as error:
+    except (VerificationError, OSError) as error:
         document = {'verify': 'local', 'ok': False, 'checks': run.checks, 'failures': run.failures,
-                    'artifacts': run.artifacts, 'error': str(error)}
-        run.write('summary.json', document)
+                    'artifacts': run.artifacts, 'error': f'{type(error).__name__}: {error}'}
+        _write_summary(run, document)
         print(f'local verification: FAIL :: {error}', flush=True)
         return 1
 
 
-def verify_windows(package: str | None, web_package: str | None, program: str | None) -> int:
+def verify_windows(package: str | None, web_package: str | None, program: str | None,
+                   evidence_root: str | None = None) -> int:
     if not sys.platform.startswith('win'):
         print('--verify-windows must run on Windows: a cross-compile or a local command is not a Windows pass', flush=True)
         return 2
-    run = Run(unique_dir(EVIDENCE_BASE))
+    try:
+        run = Run(run_root(evidence_base(evidence_root)))
+    except VerificationError as error:
+        print(f'Windows verification: REFUSED :: {error}', flush=True)
+        return 2
     print(f'evidence root: {run.root}', flush=True)
     root = None
     source_digests = {}
@@ -666,26 +830,26 @@ def verify_windows(package: str | None, web_package: str | None, program: str | 
             run.record(True, 'the Windows Web package was provided; R11 WN01-WN06 still owns the real Web run')
         else:
             run.record(False, 'the new Windows Web package was not provided; R11 WN01-WN06 must still run it')
-    except VerificationError as failure:
-        error = str(failure)
+    except (VerificationError, OSError) as failure:
+        error = f'{type(failure).__name__}: {failure}'
     finally:
-        if root is not None:
+        if root is not None and source_digests:
             try:
                 unchanged = package_digests(root) == source_digests
                 run.record(unchanged, 'the read-only source package stayed byte-identical', {'files': len(source_digests)})
             except OSError as digest_failure:
                 run.record(False, 'the read-only source package digest check could not confirm safety', str(digest_failure))
-    document = {'verify': 'windows', 'ok': not run.failures, 'checks': run.checks, 'failures': run.failures,
+    document = {'verify': 'windows', 'ok': False, 'checks': run.checks, 'failures': run.failures,
                 'package': str(root) if root is not None else None, 'error': error,
                 'source_package_read_only': True,
                 'evidence_note': 'the source-package integrity check and the compatible-config run copy are separate '
                                  'evidence classes; this summary never claims an end-to-end run of the original frozen package'}
-    run.write('summary.json', document)
-    if error is not None and not run.failures:
-        print(f'Windows verification: FAIL :: {error}', flush=True)
-        return 1
-    print(f"Windows verification: {'PASS' if not run.failures else 'FAIL'}", flush=True)
-    return 0 if not run.failures else 1
+    # A raised error always means ok=false, whatever the recorded checks say.
+    document['ok'] = (not run.failures) and error is None
+    _write_summary(run, document)
+    print(f"Windows verification: {'PASS' if document['ok'] else 'FAIL'}"
+          + (f' :: {error}' if error else ''), flush=True)
+    return 0 if document['ok'] else 1
 
 
 def main() -> int:
@@ -696,10 +860,12 @@ def main() -> int:
     parser.add_argument('--package', help='the new complete Windows package directory (--verify-windows)')
     parser.add_argument('--program', help='the expected experiment program inside the package, relative to its root (--verify-windows; without it the package manifest must name it)')
     parser.add_argument('--web-package', help='the new Windows Web package archive, when available (--verify-windows)')
+    parser.add_argument('--evidence-root', default=None,
+                        help='brand-new unique evidence root inside the project; defaults to the dedicated base')
     args = parser.parse_args()
     if args.verify_windows:
-        return verify_windows(args.package, args.web_package, args.program)
-    return verify_local()
+        return verify_windows(args.package, args.web_package, args.program, args.evidence_root)
+    return verify_local(args.evidence_root)
 
 
 if __name__ == '__main__':
