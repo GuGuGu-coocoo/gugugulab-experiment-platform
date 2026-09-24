@@ -32,6 +32,18 @@
    real acceptance Owner is never confirmed or migrated, and the source file
    digest must be byte-identical afterwards.
 
+``--verify-boundary`` runs only the R11 boundary rehearsal: an explicit 0011
+source shape (consumed/unconsumed invitations for an existing account and a new
+application, audits, study/session/event references) is copied with the SQLite
+online backup API and the copy is upgraded to the latest committed schema. The
+checks prove the source stayed byte-identical, every old row kept
+``identity_version=1``/``principal=NULL`` and its stored semantics, the current
+issuance path really binds an existing account's stable Principal and gives a
+free username its own application identity, a replayed token is refused, and a
+real permanent account deletion revokes the bound and username-bound pending
+credentials while the consumed row, the audit and the references survive. The
+original acceptance volume is never migrated by either mode.
+
 Every run creates a new ``<UTC stamp>-<random>`` root under
 ``local_data/phase03_remediation_20260923/p03r02br`` and never overwrites or
 cleans an existing root. All Django work happens in a generated step runner so
@@ -54,9 +66,16 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SERVER_DIR = PROJECT_ROOT / 'server'
 EVIDENCE_BASE = PROJECT_ROOT / 'local_data' / 'phase03_remediation_20260923' / 'p03r02br'
+BOUNDARY_EVIDENCE_BASE = PROJECT_ROOT / 'local_data' / 'phase03_remediation_20260923' / 'p03r11a_migration'
 ACCEPTANCE_SOURCE = PROJECT_ROOT / 'local_data' / 'independent_acceptance_20260912'
 REQUIRED_MIGRATION = ['core', '0010_policy_principal']
 OLD_SCHEMA_TARGET = ['core', '0009_release_artifact']
+# The R11 boundary rehearsal starts from the explicit 0011 source shape (the
+# invitation-bound schema every real database has already reached before 0012
+# adds the identity columns) and upgrades a SQLite-backup copy to the latest
+# committed schema (0015). The original acceptance volume is never migrated.
+BOUNDARY_SOURCE_TARGET = ['core', '0011_invitation_bound']
+BOUNDARY_LATEST_TARGET = ['core', '0015_audit_study_uuid']
 SQLITE_SIDECAR_PREFIX = 'gep.sqlite3-'
 WAL_MARKER_KEY = 'r02br_wal_marker'
 WAL_CONTENTION_KEY = 'r02br_wal_contention'
@@ -72,6 +91,25 @@ REFERENCE_TABLES = {
                      'token_hash', 'expires_at', 'revoked', 'completion', 'created_at'],
     'core_event': ['id', 'session_id', 'event_id', 'segment_id', 'sequence', 'envelope', 'received_at'],
     'core_export': ['id', 'study_id', 'snapshot', 'created_at'],
+    # Boundary-rehearsal tables (present in a real post-0011 database, and in the
+    # 0009 source they are reported as missing instead of being guessed):
+    'core_invitation': ['id', 'study_id', 'issuer_id', 'token_hash', 'username', 'actions',
+                        'expires_at', 'consumed', 'revoked'],
+    'core_accountinvitation': ['id', 'issuer_id', 'token_hash', 'username', 'role', 'expires_at',
+                               'consumed', 'revoked'],
+    'core_permissionpreview': ['id', 'actor_id', 'kind', 'scope', 'summary', 'errors', 'binding',
+                               'base_revision', 'staged', 'expires_at', 'consumed', 'result', 'created_at'],
+    'core_principal': ['id', 'user_id', 'deleted_at'],
+    'core_recoverypermit': ['id', 'session_id', 'issuer_id', 'token_hash', 'expires_at', 'consumed'],
+    'core_recoverycode': ['id', 'session_id', 'study_id', 'release_id', 'issuer_id', 'code_hash',
+                          'expires_at', 'consumed', 'superseded', 'attempts'],
+}
+# Columns added by 0011/0012 that a *later* copy carries: they are compared when
+# present (the boundary copy) and simply reported as absent on older sources, so
+# the same table list never invents a column that the schema does not have.
+OPTIONAL_REFERENCE_COLUMNS = {
+    'core_invitation': ['identity_version', 'principal_id'],
+    'core_accountinvitation': ['bound_policy'],
 }
 PRIVATE_FILES = {
     'packages/build_a.bin': b'gep-r02b-synthetic-build:' + b'a' * 96,
@@ -211,35 +249,63 @@ def inspect_database(path):
                 count = connection.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
                 reference[table] = {'count': count, 'missing_columns': missing}
                 continue
+            optional = [column for column in OPTIONAL_REFERENCE_COLUMNS.get(table, [])
+                        if column in available]
+            selected = list(columns) + optional
             rows = [list(row) for row in connection.execute(
-                f'SELECT {", ".join(columns)} FROM {table} ORDER BY 1')]
+                f'SELECT {", ".join(selected)} FROM {table} ORDER BY 1')]
+            # Per-column digests let the boundary rehearsal compare a 0011 source
+            # with a copy that later migrations extended: only columns present in
+            # both schemas are compared, and an added column never looks like a
+            # changed value.
+            column_digests = {column: sha256_text(json.dumps(
+                [row[index] for row in rows], default=str, separators=(',', ':')))
+                for index, column in enumerate(selected)}
             reference[table] = {
                 'count': len(rows),
+                'columns': selected,
+                'column_digests': column_digests,
                 'identity_sha256': sha256_text(json.dumps([str(row[0]) for row in rows])),
                 'content_sha256': sha256_text(json.dumps(rows, default=str, separators=(',', ':'))),
             }
         users = [list(row) for row in connection.execute(
             'SELECT id, username, is_active, is_staff, is_superuser FROM auth_user ORDER BY id')]
-        instance_columns = [column for column in ('id', 'instance_id', 'owner_id', 'governance_revision')
+        passwords = [list(row) for row in connection.execute(
+            'SELECT id, password FROM auth_user ORDER BY id')]
+        instance_columns = [column for column in ('id', 'instance_id', 'owner_id', 'governance_revision',
+                                                  'authorization_version')
                             if column in column_names(connection, 'core_instance')]
         instance_row = connection.execute(
             f'SELECT {", ".join(instance_columns)} FROM core_instance').fetchone() if instance_columns else None
         instance = dict(zip(instance_columns, instance_row)) if instance_row else None
         grants = [list(row) for row in connection.execute(
             'SELECT user_id, study_id, action, delegable FROM core_grant ORDER BY 1, 2, 3')]
+        audit_columns = ['id', 'study_id', 'actor_id', 'action', 'target']
+        if 'actor_principal_id' in column_names(connection, 'core_audit'):
+            audit_columns.append('actor_principal_id')
+        if 'study_uuid' in column_names(connection, 'core_audit'):
+            audit_columns.append('study_uuid')
         audits = [list(row) for row in connection.execute(
-            'SELECT id, study_id, actor_id, action, target FROM core_audit ORDER BY id')]
+            f'SELECT {", ".join(audit_columns)} FROM core_audit ORDER BY id')]
+        audit_column_digests = {column: sha256_text(json.dumps(
+            [row[index] for row in audits], default=str, separators=(',', ':')))
+            for index, column in enumerate(audit_columns)}
         migrations = [list(row) for row in connection.execute('SELECT app, name FROM django_migrations ORDER BY id')]
         data = {
             'integrity_check': connection.execute('PRAGMA integrity_check').fetchone()[0],
             'foreign_key_violations': [list(row) for row in connection.execute('PRAGMA foreign_key_check')],
             'reference': reference,
             'users': users,
+            'passwords_sha256': sha256_text(json.dumps(passwords)),
             'instance': {'id': instance['id'], 'instance_id': str(instance['instance_id']),
                          'owner_id': instance['owner_id'],
                          'governance_revision': instance.get('governance_revision')} if instance else None,
+            'authorization_version': instance.get('authorization_version') if instance else None,
             'grants_sha256': sha256_text(json.dumps(grants)),
             'grants_count': len(grants),
+            'audit_columns': audit_columns,
+            'audit_column_digests': audit_column_digests,
+            'audits_count': len(audits),
             'audits_sha256': sha256_text(json.dumps(audits)),
             'migrations': migrations,
             'columns': {table: sorted(column_names(connection, table)) for table in
@@ -257,6 +323,7 @@ STEP_HARNESS = '''\
 """Generated R02B rehearsal step runner; all Django work uses GEP_DATA_DIR."""
 import json
 import os
+import re
 import sqlite3
 import sys
 import uuid
@@ -532,8 +599,263 @@ def acceptance_diff():
     print(json.dumps(report, sort_keys=True))
 
 
+def seed_boundary_source():
+    """The explicit 0011 source shape: users, instance, references, audits and
+    invitation rows in both consumption states for existing and new accounts.
+
+    The rows are written as raw SQL on the real 0011 schema, so the rehearsal
+    starts from exactly the structure a real database had before 0012 added the
+    identity columns -- nothing here uses a current model default.
+    """
+    ctx = context()
+    setup()
+    from django.contrib.auth.hashers import make_password
+    volume = Path(os.environ['GEP_DATA_DIR'])
+    now = datetime.now(timezone.utc)
+    connection = sqlite3.connect(volume / 'gep.sqlite3')
+    try:
+        for user in ctx['users']:
+            connection.execute(
+                'INSERT INTO auth_user (id, password, last_login, is_superuser, username, first_name, last_name,'
+                ' email, is_staff, is_active, date_joined) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+                (user['id'], make_password(user['password']), _stamp(now, -600), 0,
+                 user['username'], '', '', '', 0, user['is_active'], _stamp(now, -600)))
+            connection.execute(
+                'INSERT INTO core_accountprofile (id, user_id, role, must_change_password, auth_version, revision,'
+                ' platform_overrides, study_overrides, policy_version, future_study_actions)'
+                ' VALUES (?,?,?,?,?,?,?,?,?,NULL)',
+                (user['id'], user['id'], user['role'], 0, 1, 0, '{}', '{}', 2))
+            # 0010 already gave every existing account a stable Principal.
+            connection.execute('INSERT INTO core_principal (id, deleted_at, user_id) VALUES (?,NULL,?)',
+                               (uuid.uuid4().hex, user['id']))
+        connection.execute(
+            'INSERT INTO core_instance (id, instance_id, owner_id, governance_revision, authorization_version)'
+            ' VALUES (1,?,?,0,1)', (ctx['instance_id'], ctx['users'][0]['id']))
+        for key in ('a', 'b'):
+            connection.execute(
+                'INSERT INTO core_study (id, title, mode, recruitment, max_sessions, public, public_summary,'
+                ' public_duration, public_device_requirements, show_closed_summary, current_release_id, revision)'
+                ' VALUES (?,?,?,?,?,?,?,?,?,?,NULL,0)',
+                (ctx['studies'][key], f'Boundary synthetic study {key.upper()}',
+                 'anonymous' if key == 'a' else 'id', 'paused', 1, 0, '', '', '', 0))
+        connection.execute(
+            'INSERT INTO core_build (id, study_id, descriptor, digest, package_path) VALUES (?,?,?,?,?)',
+            (ctx['build_id'], ctx['studies']['a'], json.dumps({'version': '1.0.0', 'synthetic': True}),
+             ctx['build_digest'], 'packages/build_a.bin'))
+        connection.execute(
+            'INSERT INTO core_release (id, study_id, build_id, config, approved, artifact_path, artifact_digest,'
+            ' artifact_size) VALUES (?,?,?,?,1,?,?,?)',
+            (ctx['release_id'], ctx['studies']['a'], ctx['build_id'], json.dumps({'public': False}),
+             'artifacts/release_a.bin', ctx['artifact_digest'], ctx['artifact_size']))
+        connection.execute('UPDATE core_study SET current_release_id=? WHERE id=?',
+                           (ctx['release_id'], ctx['studies']['a']))
+        connection.execute(
+            'INSERT INTO core_participant (id, study_id, code, password_hash, active, expires_at)'
+            ' VALUES (?,?,?,?,1,NULL)', (ctx['participant_id'], ctx['studies']['a'], '001', ''))
+        connection.execute(
+            'INSERT INTO core_session (id, participant_id, release_id, operation, proof_hash, request,'
+            ' token_hash, expires_at, revoked, completion, created_at) VALUES (?,?,?,?,?,?,?,?,0,?,?)',
+            (ctx['session_id'], ctx['participant_id'], ctx['release_id'], ctx['operation'],
+             'd' * 64, json.dumps({'mode': 'id', 'code': '001'}), 'e' * 64,
+             _stamp(now, 60), json.dumps({'complete': True, 'event_count': 2}), _stamp(now, -30)))
+        for index, event_id in enumerate(ctx['event_ids']):
+            connection.execute(
+                'INSERT INTO core_event (id, session_id, event_id, segment_id, sequence, envelope, received_at)'
+                ' VALUES (?,?,?,?,?,?,?)',
+                (index + 1, ctx['session_id'], event_id, ctx['segment_id'], index,
+                 json.dumps({'event_type': 'synthetic', 'sequence': index}), _stamp(now, -20)))
+        connection.execute(
+            'INSERT INTO core_export (id, study_id, snapshot, created_at) VALUES (?,?,?,?)',
+            (ctx['export_id'], ctx['studies']['a'], json.dumps({'synthetic': True, 'count': 2}), _stamp(now, -10)))
+        for grant in ctx['grants']:
+            connection.execute(
+                'INSERT INTO core_grant (id, user_id, study_id, action, delegable) VALUES (?,?,?,?,?)',
+                (grant['id'], grant['user_id'], grant['study'], grant['action'], grant['delegable']))
+        for audit in ctx['audits']:
+            connection.execute(
+                'INSERT INTO core_audit (id, study_id, actor_id, action, target, before, after, created_at)'
+                ' VALUES (?,?,?,?,?,?,?,?)',
+                (audit['id'], audit.get('study'), audit.get('actor'), audit['action'], audit['target'],
+                 json.dumps(audit.get('before')) if audit.get('before') is not None else None,
+                 json.dumps(audit.get('after')) if audit.get('after') is not None else None, _stamp(now, -5)))
+        for invitation in ctx['invitations']:
+            connection.execute(
+                'INSERT INTO core_invitation (id, study_id, issuer_id, token_hash, username, actions,'
+                ' expires_at, consumed, revoked) VALUES (?,?,?,?,?,?,?,?,?)',
+                (invitation['id'], invitation['study'], invitation['issuer'], invitation['token_hash'],
+                 invitation['username'], json.dumps(invitation['actions']),
+                 _stamp(now, invitation['expires_minutes']), invitation['consumed'], invitation['revoked']))
+        connection.execute(
+            'INSERT INTO core_accountinvitation (id, issuer_id, token_hash, username, role, expires_at,'
+            ' consumed, revoked, bound_policy) VALUES (?,?,?,?,?,?,0,0,NULL)',
+            (ctx['account_invitation_id'], ctx['users'][0]['id'], ctx['account_invitation_hash'],
+             'synthetic_boundary_application', 'user', _stamp(now, 60)))
+        connection.commit()
+    finally:
+        connection.close()
+    print(json.dumps({'seeded': True, 'invitations': len(ctx['invitations']), 'studies': 2}))
+
+
+def signin(username, password):
+    """One real ``/login`` session through the production sign-in view.
+
+    ``force_login`` writes the auth user directly and never runs ``signin``, so
+    the account-gate middleware then refuses every protected request with a
+    redirect to ``/login`` (the session carries no ``gep_auth_version``). Only
+    the real POST stores the profile's auth version and reaches the admin home.
+    """
+    from django.test import Client
+    client = Client()
+    response = client.post('/login', {'username': username, 'password': password})
+    if response.status_code != 302 or response.headers.get('Location') != '/':
+        raise RuntimeError(f'real signin for {username!r} did not reach the admin home: '
+                           f'{response.status_code} {response.headers.get("Location")}')
+    return client
+
+
+def verify_boundary():
+    """Read back the migrated 0011 copy and exercise the identity contract only
+    through real entry functions: the Django test client drives the real study
+    invitation/activation views, and ``core.accounts.delete_account`` performs
+    the real permanent deletion. Expected values come from the fixed synthetic
+    context, never from the implementation under test."""
+    setup()
+    ctx = context()
+    from django.contrib.auth import get_user_model
+    from django.test import Client
+    from core import access, accounts
+    from core.models import (AccountInvitation, Audit, Event, Export, Grant, Instance,
+                             Invitation, Principal, Session, Study)
+    user_model = get_user_model()
+    instance = Instance.objects.get(pk=1)
+    owner = instance.owner
+    member = user_model.objects.get(username='synthetic_member')
+    member_principal = Principal.objects.get(user=member)
+    report = {'authorization_version': access.authorization_version(instance)}
+    # Real sign-in sessions: the account gate is never bypassed.
+    owner_client = signin('synthetic_owner', ctx['owner_password'])
+    member_client = signin('synthetic_member', ctx['member_password'])
+    report['owner_signin'] = bool(owner_client.cookies)
+    report['member_signin'] = bool(member_client.cookies)
+
+    # 1) the exact pre-0012 rows are preserved: no backfill, no invented binding
+    rows = [{'id': str(row.id), 'token_hash': row.token_hash, 'username': row.username,
+             'actions': row.actions, 'consumed': row.consumed, 'revoked': row.revoked,
+             'identity_version': row.identity_version, 'principal_id': row.principal_id}
+            for row in Invitation.objects.order_by('id')]
+    expected = {str(uuid.UUID(item['id'])): item for item in ctx['invitations']}
+    report['old_row_count'] = len(rows)
+    report['old_rows_preserved'] = len(rows) == len(expected) and all(
+        row['identity_version'] == 1 and row['principal_id'] is None
+        and row['token_hash'] == expected[row['id']]['token_hash']
+        and row['username'] == expected[row['id']]['username']
+        and row['actions'] == expected[row['id']]['actions']
+        and row['consumed'] == bool(expected[row['id']]['consumed'])
+        and row['revoked'] == bool(expected[row['id']]['revoked'])
+        for row in rows)
+    platform_row = AccountInvitation.objects.get()
+    report['old_account_invitation_preserved'] = (platform_row.consumed is False
+                                                  and platform_row.revoked is False
+                                                  and platform_row.bound_policy is None
+                                                  and platform_row.token_hash == ctx['account_invitation_hash'])
+    report['old_grants_unchanged'] = sorted(
+        Grant.objects.values_list('user_id', 'study_id', 'action')) == sorted(
+        (grant['user_id'], uuid.UUID(grant['study']), grant['action']) for grant in ctx['grants'])
+    report['legacy_owner_view_decision'] = access.allowed(owner, Study.objects.get(pk=ctx['studies']['a']),
+                                                          'study.view') is True
+    member_audit = Audit.objects.get(pk=ctx['audits'][2]['id'])
+    report['member_audit_before'] = (member_audit.actor_id == member.pk
+                                     and member_audit.actor_principal_id is None)
+
+    # 2) version-1 rows keep their original username-only semantics
+    response = member_client.post('/activate', {'token': ctx['tokens']['inv_existing_pending']})
+    activated = Invitation.objects.get(pk=ctx['invitation_ids']['inv_existing_pending'])
+    report['legacy_existing_activated'] = response.status_code == 302 and activated.consumed is True
+    report['legacy_existing_replay_refused'] = member_client.post(
+        '/activate', {'token': ctx['tokens']['inv_existing_pending']}).status_code == 403
+    newcomer_client = Client()
+    response = newcomer_client.post('/activate', {'token': ctx['tokens']['inv_new_pending'],
+                                                  'password': ctx['newcomer_password']})
+    newcomer = user_model.objects.filter(username='synthetic_legacy_newcomer').first()
+    report['legacy_new_application_activated'] = response.status_code == 302 and newcomer is not None
+    report['legacy_new_application_principal'] = bool(
+        newcomer) and Principal.objects.filter(user=newcomer, deleted_at__isnull=True).exists()
+    report['legacy_new_application_grant'] = bool(Grant.objects.filter(
+        user=newcomer, study_id=ctx['studies']['a'], action='study.view'))
+    report['legacy_new_application_replay_refused'] = newcomer_client.post(
+        '/activate', {'token': ctx['tokens']['inv_new_pending'], 'password': ctx['newcomer_password']}).status_code == 403
+
+    # 3) the current issuance path binds the stable subject through the real view
+    before_ids = set(str(value) for value in Invitation.objects.values_list('id', flat=True))
+
+    def issue(username):
+        nonlocal before_ids
+        study = Study.objects.get(pk=ctx['studies']['a'])
+        instance.refresh_from_db()
+        response = owner_client.post(f'/studies/{study.id}',
+                                     {'op': 'invite', 'username': username, 'actions': ['study.view'],
+                                      'revision': str(instance.governance_revision)})
+        if response.status_code != 200:
+            raise RuntimeError(f'invitation issue for {username!r} returned {response.status_code}')
+        row = Invitation.objects.exclude(id__in=before_ids).order_by('id').first()
+        match = re.search(r'邀请密钥（请通过可信渠道交付）：([A-Za-z0-9_-]+)',
+                          response.content.decode('utf-8'))
+        if row is None or match is None:
+            raise RuntimeError(f'invitation issue for {username!r} produced no readable row or token')
+        before_ids.add(str(row.pk))
+        return row, match.group(1)
+
+    bound_row, bound_token = issue('synthetic_member')
+    report['v2_existing_bound'] = (bound_row.identity_version == 2
+                                   and bound_row.principal_id == member_principal.pk
+                                   and bound_row.consumed is False and bound_row.revoked is False)
+    newcomer_v2_row, newcomer_v2_token = issue('synthetic_v2_newcomer')
+    report['v2_new_application_unbound'] = (newcomer_v2_row.identity_version == 2
+                                            and newcomer_v2_row.principal_id is None)
+    response = member_client.post('/activate', {'token': bound_token})
+    report['v2_activation'] = response.status_code == 302 \
+        and Invitation.objects.get(pk=bound_row.pk).consumed is True
+    report['v2_activation_replay_refused'] = member_client.post(
+        '/activate', {'token': bound_token}).status_code == 403
+    fresh_client = Client()
+    response = fresh_client.post('/activate', {'token': newcomer_v2_token,
+                                               'password': ctx['newcomer_password']})
+    created = user_model.objects.filter(username='synthetic_v2_newcomer').first()
+    report['v2_new_application_activated'] = response.status_code == 302 and created is not None
+    report['v2_new_application_principal'] = bool(
+        created) and Principal.objects.filter(user=created, deleted_at__isnull=True).exists()
+    report['v2_new_application_replay_refused'] = fresh_client.post(
+        '/activate', {'token': newcomer_v2_token, 'password': ctx['newcomer_password']}).status_code == 403
+
+    # 4) permanent deletion really revokes every credential of the subject
+    instance.refresh_from_db()
+    pending_bound, _ = issue('synthetic_member')
+    instance.refresh_from_db()
+    accounts.delete_account(owner, ctx['owner_password'], instance.governance_revision, member.pk,
+                            confirm_username='synthetic_member')
+    report['deletion_completed'] = not user_model.objects.filter(pk=member.pk).exists()
+    deleted_principal = Principal.objects.get(pk=member_principal.pk)
+    report['deleted_principal_marked'] = deleted_principal.deleted_at is not None \
+        and deleted_principal.user_id is None
+    report['bound_invitation_revoked'] = Invitation.objects.get(pk=pending_bound.pk).revoked is True
+    report['username_invitation_revoked'] = Invitation.objects.get(
+        pk=ctx['invitation_ids']['inv_existing_kept']).revoked is True
+    consumed_row = Invitation.objects.get(pk=ctx['invitation_ids']['inv_existing_consumed'])
+    report['consumed_row_untouched'] = consumed_row.consumed is True and consumed_row.revoked is False
+    revoked_replay = Client()
+    report['revoked_invitation_activation_refused'] = revoked_replay.post(
+        '/activate', {'token': ctx['tokens']['inv_existing_kept']}).status_code == 403
+    rebound_audit = Audit.objects.get(pk=ctx['audits'][2]['id'])
+    report['audit_kept_and_rebound'] = rebound_audit.actor_id is None \
+        and rebound_audit.actor_principal_id == member_principal.pk
+    report['references_kept'] = (Study.objects.count() == 2 and Session.objects.count() == 1
+                                 and Event.objects.count() == 2 and Export.objects.count() == 1)
+    print(json.dumps(report, sort_keys=True))
+
+
 COMMANDS = {'seed-old-source': seed_old_source, 'verify-extension': verify_extension,
-            'enable': enable, 'acceptance-diff': acceptance_diff}
+            'enable': enable, 'acceptance-diff': acceptance_diff,
+            'seed-boundary-source': seed_boundary_source, 'verify-boundary': verify_boundary}
 
 
 def main():
@@ -895,11 +1217,17 @@ def verify_workflow(root, harness):
     else:
         raise RehearsalError(f'protected acceptance volume missing: {ACCEPTANCE_SOURCE}')
 
+    boundary, boundary_facts, boundary_copy = boundary_workflow(root, harness)
+    checks.update(boundary)
+
     report = {
         'task': 'p03r02br', 'evidence_root': str(root), 'source': str(source),
         'acceptance_source': str(ACCEPTANCE_SOURCE),
         'omitted_acceptance_payload': list(OMITTED_ACCEPTANCE_PAYLOAD),
         'checks': checks, 'extension': extension, 'enablement': enablement,
+        'boundary': boundary_facts,
+        'boundary_copy': {'sidecars_skipped': boundary_copy['sidecars_skipped'],
+                          'data_version': boundary_copy['data_version']},
         'synthetic_counts': {table: value.get('count', 0) for table, value in source_inspect_before['reference'].items()},
         'copy': {'sidecars_skipped': copy_report['sidecars_skipped'],
                  'data_version': copy_report['data_version']},
@@ -910,25 +1238,254 @@ def verify_workflow(root, harness):
     return report
 
 
+def build_boundary_source(root, harness):
+    """The explicit 0011 synthetic source: real 0011 schema, raw rows, and the
+    fixed expected context used by the check step (never read back from the
+    implementation under test)."""
+    source = resolve_within(root, 'boundary_source')
+    source.mkdir(mode=0o700)
+    secret = secrets.token_urlsafe(48)
+    write_private('secret', secret.encode('utf-8'), source)
+    digests = {}
+    for name in sorted(PRIVATE_FILES):
+        write_private(name, PRIVATE_FILES[name], source)
+        digests[name] = hashlib.sha256(PRIVATE_FILES[name]).hexdigest()
+    run_manage(source, secret, 'migrate', 'core', BOUNDARY_SOURCE_TARGET[1], '--noinput', '--verbosity', '0')
+
+    def token_row(study_key, username, actions, consumed, revoked, minutes, issuer=1):
+        token = secrets.token_urlsafe(24)
+        return token, {
+            'id': uuid.uuid4().hex, 'study': study_key, 'issuer': issuer,
+            'token_hash': sha256_text(token), 'username': username, 'actions': actions,
+            'consumed': consumed, 'revoked': revoked, 'expires_minutes': minutes,
+        }
+
+    studies = {'a': uuid.uuid4().hex, 'b': uuid.uuid4().hex}
+    owner_password = secrets.token_urlsafe(24)
+    member_password = secrets.token_urlsafe(24)
+    tokens, invitations, invitation_ids = {}, [], {}
+    for key, (study_key, username, actions, consumed, revoked) in {
+            'inv_existing_consumed': ('a', 'synthetic_member', ['study.view'], 1, 0),
+            'inv_existing_pending': ('a', 'synthetic_member', ['study.view'], 0, 0),
+            'inv_existing_kept': ('a', 'synthetic_member', ['study.view', 'build.preview'], 0, 0),
+            'inv_new_pending': ('a', 'synthetic_legacy_newcomer', ['study.view'], 0, 0),
+    }.items():
+        token, row = token_row(studies[study_key], username, actions, consumed, revoked, 60)
+        row['study'] = studies[study_key]
+        tokens[key], invitation_ids[key] = token, row['id']
+        invitations.append(row)
+    account_token = secrets.token_urlsafe(24)
+    context = {
+        'owner_password': owner_password,
+        'member_password': member_password,
+        'newcomer_password': 'Aa1!boundary9',
+        'instance_id': uuid.uuid4().hex,
+        'users': [
+            {'id': 1, 'username': 'synthetic_owner', 'role': 'user', 'is_active': 1,
+             'password': owner_password},
+            {'id': 2, 'username': 'synthetic_member', 'role': 'user', 'is_active': 1,
+             'password': member_password},
+        ],
+        'studies': studies,
+        'build_id': uuid.uuid4().hex, 'release_id': uuid.uuid4().hex,
+        'participant_id': uuid.uuid4().hex, 'session_id': uuid.uuid4().hex,
+        'segment_id': uuid.uuid4().hex, 'operation': uuid.uuid4().hex,
+        'event_ids': [uuid.uuid4().hex, uuid.uuid4().hex], 'export_id': uuid.uuid4().hex,
+        'build_digest': sha256_text('boundary synthetic build digest'),
+        'artifact_digest': digests['artifacts/release_a.bin'],
+        'artifact_size': len(PRIVATE_FILES['artifacts/release_a.bin']),
+        'grants': [
+            {'id': 1, 'user_id': 1, 'study': studies['a'], 'action': 'study.view', 'delegable': 1},
+            {'id': 2, 'user_id': 1, 'study': studies['a'], 'action': 'member.manage', 'delegable': 1},
+            {'id': 3, 'user_id': 1, 'study': studies['a'], 'action': 'permission.delegate', 'delegable': 1},
+            {'id': 4, 'user_id': 1, 'study': studies['a'], 'action': 'build.preview', 'delegable': 1},
+            {'id': 5, 'user_id': 2, 'study': studies['a'], 'action': 'study.view', 'delegable': 0},
+            {'id': 6, 'user_id': 2, 'study': studies['a'], 'action': 'build.preview', 'delegable': 0},
+            {'id': 7, 'user_id': 2, 'study': studies['b'], 'action': 'study.view', 'delegable': 0},
+        ],
+        'audits': [
+            {'id': 1, 'study': studies['a'], 'actor': 1, 'action': 'release.published', 'target': 'SYNTHETIC'},
+            {'id': 2, 'study': None, 'actor': None, 'action': 'recovery.named_redeemed', 'target': 'device'},
+            {'id': 3, 'study': studies['a'], 'actor': 2, 'action': 'invite.accepted', 'target': '2'},
+        ],
+        'invitations': invitations, 'tokens': tokens, 'invitation_ids': invitation_ids,
+        'account_invitation_id': uuid.uuid4().hex, 'account_invitation_hash': sha256_text(account_token),
+    }
+    context_path = write_json(resolve_within(root, 'workflow/boundary_context.json'), context)
+    seeded = run_step('seed-boundary-source', source, secret, context_path, harness)
+    write_json(resolve_within(root, 'workflow/boundary_seed.json'), seeded)
+    return source, secret, context
+
+
+def state_differences(before, after):
+    """Compact names of the logical parts that differ between two states.
+
+    The boundary copy is a later schema than its 0011 source, so columns added
+    by later migrations (``identity_version``, ``study_uuid``, ...) are not
+    differences: only row counts and the values of columns both schemas carry
+    are compared. The returned names are safe to persist (no values, no
+    secrets).
+    """
+    differences = []
+    for key in ('users', 'instance', 'grants_sha256', 'grants_count', 'passwords_sha256',
+                'authorization_version', 'integrity_check'):
+        if before.get(key) != after.get(key):
+            differences.append(key)
+    for table, left in before.get('reference', {}).items():
+        right = after.get('reference', {}).get(table)
+        if right is None:
+            differences.append(f'reference.{table}:missing')
+            continue
+        if left.get('count') != right.get('count'):
+            differences.append(f'reference.{table}:count')
+            continue
+        for column in sorted(set(left.get('column_digests') or {}) & set(right.get('column_digests') or {})):
+            if left['column_digests'][column] != right['column_digests'][column]:
+                differences.append(f'reference.{table}:{column}')
+    if before.get('audits_count') != after.get('audits_count'):
+        differences.append('audits:count')
+    else:
+        left_audits = before.get('audit_column_digests') or {}
+        right_audits = after.get('audit_column_digests') or {}
+        for column in sorted(set(left_audits) & set(right_audits)):
+            if left_audits[column] != right_audits[column]:
+                differences.append(f'audits:{column}')
+    return differences
+
+
+def boundary_workflow(root, harness):
+    """R11 boundary rehearsal: 0011 source -> SQLite-backup copy -> latest schema.
+
+    The source volume is never migrated; only the copy is. Old invitation rows
+    keep their exact version-1/username-only semantics, the current issuance
+    path writes real version-2 bindings (existing account -> Principal, free
+    username -> own application identity), and a real permanent account deletion
+    revokes every pending credential while the references and audit survive.
+    """
+    checks = {}
+    source, secret, context = build_boundary_source(root, harness)
+    source_before = inspect_database(source / 'gep.sqlite3')
+    source_files_before = file_manifest(source)
+    checks['boundary_source_is_0011'] = (BOUNDARY_SOURCE_TARGET in source_before['migrations']
+                                         and BOUNDARY_LATEST_TARGET not in source_before['migrations'])
+    copy = resolve_within(root, 'boundary_copy')
+    copy_report = copy_consistent(source, copy)
+    source_after = inspect_database(source / 'gep.sqlite3')
+    source_files_after = file_manifest(source)
+    checks['boundary_source_unchanged'] = (source_before == source_after
+                                           and source_files_before == source_files_after)
+    run_manage(copy, secret, 'migrate', '--noinput', '--verbosity', '0')
+    copy_before = inspect_database(copy / 'gep.sqlite3')
+    copy_state_diff = state_differences(source_before, copy_before)
+    if copy_state_diff:
+        write_json(resolve_within(root, 'workflow/copy_state_diff.json'), {'differences': copy_state_diff})
+    checks['boundary_latest_schema_applied'] = BOUNDARY_LATEST_TARGET in copy_before['migrations']
+    checks['boundary_copy_equal_before_use'] = not copy_state_diff
+    checks['boundary_copy_files_equal'] = all(
+        copy_report['copied'][name] == source_files_after[name]['sha256']
+        for name in copy_report['copied'] if name != 'gep.sqlite3')
+    facts = run_step('verify-boundary', copy, secret,
+                     resolve_within(root, 'workflow/boundary_context.json'), harness)
+    write_json(resolve_within(root, 'boundary_report.json'), facts)
+    checks['boundary_old_rows_preserved'] = all((
+        facts['old_rows_preserved'], facts['old_account_invitation_preserved'],
+        facts['old_grants_unchanged'], facts['member_audit_before'],
+        facts['authorization_version'] == 1))
+    checks['boundary_legacy_semantics_kept'] = all((
+        facts['legacy_existing_activated'], facts['legacy_existing_replay_refused'],
+        facts['legacy_new_application_activated'], facts['legacy_new_application_principal'],
+        facts['legacy_new_application_grant'], facts['legacy_new_application_replay_refused']))
+    checks['boundary_v2_binding_verified'] = all((
+        facts['v2_existing_bound'], facts['v2_new_application_unbound'], facts['v2_activation'],
+        facts['v2_activation_replay_refused'], facts['v2_new_application_activated'],
+        facts['v2_new_application_principal'], facts['v2_new_application_replay_refused']))
+    checks['boundary_deletion_revocation'] = all((
+        facts['deletion_completed'], facts['deleted_principal_marked'], facts['bound_invitation_revoked'],
+        facts['username_invitation_revoked'], facts['consumed_row_untouched'],
+        facts['revoked_invitation_activation_refused'], facts['audit_kept_and_rebound'],
+        facts['references_kept']))
+    return checks, facts, copy_report
+
+
+def guard_evidence_root(explicit):
+    """A brand-new evidence root inside the project; refusal is a safe stop.
+
+    Every component from the project root down is checked for links before
+    anything is created, and an existing path is refused: a failed attempt keeps
+    its exact files and a retry must use a new root.
+    """
+    root = Path(explicit).expanduser()
+    if not root.is_absolute():
+        root = PROJECT_ROOT / root
+    root = Path(os.path.abspath(root))
+    project = Path(os.path.abspath(PROJECT_ROOT))
+    try:
+        relative = root.relative_to(project)
+    except ValueError:
+        raise RehearsalError(f'refusing an evidence root outside the project: {root}') from None
+    current = project
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise RehearsalError(f'refusing a symlinked evidence path component: {current}')
+    if root.exists():
+        raise RehearsalError(f'refusing an existing evidence root; each run needs a new unique root: {root}')
+    root.mkdir(parents=True, exist_ok=False, mode=0o700)
+    return root
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--verify', action='store_true', help='run the rehearsal (required)')
+    parser.add_argument('--verify-boundary', action='store_true',
+                        help='run only the R11 0011->latest boundary rehearsal')
+    parser.add_argument('--evidence-root', default=None,
+                        help='brand-new unique evidence root inside the project; defaults to the dedicated base')
     args = parser.parse_args(argv)
-    if not args.verify:
-        parser.error('--verify is required; this tool never migrates a source volume in place')
-    root = new_unique_root(EVIDENCE_BASE)
+    if not args.verify and not args.verify_boundary:
+        parser.error('--verify or --verify-boundary is required; this tool never migrates a source volume in place')
+    root = None
     try:
+        if args.evidence_root:
+            root = guard_evidence_root(args.evidence_root)
+        else:
+            root = new_unique_root(BOUNDARY_EVIDENCE_BASE if args.verify_boundary else EVIDENCE_BASE)
         harness = harness_path(root)
-        report = verify_workflow(root, harness)
-    except (RehearsalError, ValueError) as error:
-        print(f'REHEARSAL REFUSED: {error}', file=sys.stderr)
-        print(json.dumps({'evidence_root': str(root), 'verdict': 'refused'}, ensure_ascii=False))
+        if args.verify_boundary:
+            checks, facts, copy_report = boundary_workflow(root, harness)
+            report = {'task': 'p03r11a-boundary', 'evidence_root': str(root),
+                      'checks': checks, 'boundary': facts, 'copy': copy_report,
+                      'run_at': datetime.now(timezone.utc).isoformat()}
+            report['verdict'] = 'ok' if all(checks.values()) else 'failed'
+            write_json(resolve_within(root, 'report.json'), report)
+        else:
+            report = verify_workflow(root, harness)
+    except (RehearsalError, ValueError, OSError, RuntimeError) as error:
+        # A failed attempt keeps its exact files: the readable report names the
+        # real created root (never None) and the error, and the exit stays
+        # non-zero. The exception is never swallowed into a success verdict.
+        failure = {'task': 'p03r11a-boundary' if args.verify_boundary else 'p03r02br',
+                   'verdict': 'failed', 'stage': 'refused-before-creation' if root is None else 'failed',
+                   'error': f'{type(error).__name__}: {error}',
+                   'evidence_root': str(root) if root is not None else None,
+                   'requested_evidence_root': str(args.evidence_root) if args.evidence_root else None,
+                   'run_at': datetime.now(timezone.utc).isoformat()}
+        if root is not None:
+            try:
+                write_json(resolve_within(root, 'report.json'), failure)
+            except (OSError, ValueError) as write_error:
+                print(f'failure report could not be written: {type(write_error).__name__}: {write_error}',
+                      file=sys.stderr)
+        print(f'REHEARSAL FAILED: {failure["error"]}', file=sys.stderr)
+        print(json.dumps(failure, ensure_ascii=False, default=str))
         return 2
     summary = {'verdict': report['verdict'], 'evidence_root': report['evidence_root'],
                'checks_failed': sorted(key for key, value in report['checks'].items() if not value),
-               'checks_total': len(report['checks']),
-               'extension': report['extension'], 'enablement': report['enablement'],
-               'synthetic_counts': report['synthetic_counts']}
+               'checks_total': len(report['checks'])}
+    if args.verify:
+        summary['extension'] = report['extension']
+        summary['enablement'] = report['enablement']
+        summary['synthetic_counts'] = report['synthetic_counts']
     print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
     return 0 if report['verdict'] == 'ok' else 1
 
