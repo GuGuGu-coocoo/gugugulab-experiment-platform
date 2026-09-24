@@ -265,9 +265,9 @@ const runDemo=async({browser})=>{
             'record '+index+' payload value for value after the source mutations: '+JSON.stringify(record.payload));
       if(golden.observed){
         check(record.observed_time?.value===golden.payload.rt_ms&&record.observed_time?.unit==='ms'
-              &&record.observed_time?.clock_id==='host_monotonic'&&record.observed_time?.source==='Godot Time.get_ticks_usec'
+              &&record.observed_time?.clock_id==='host_monotonic'&&record.observed_time?.source==='synthetic fixture'
               &&record.observed_time?.epoch==='p03r10r',
-              'record '+index+' observed time equals the explicit RT: '+JSON.stringify(record.observed_time));
+              'record '+index+' observed time equals the explicit synthetic fixture RT: '+JSON.stringify(record.observed_time));
       }else{
         check(!Object.prototype.hasOwnProperty.call(record,'observed_time'),'record '+index+' has no implicit clock');
       }

@@ -98,8 +98,14 @@ def _free_port():
     return port
 
 
-def _assert_golden_envelope(record, index, where):
-    """One record of the fixed two-structure golden, envelope keys included."""
+def _assert_golden_envelope(record, index, where, source='Godot Time.get_ticks_usec'):
+    """One record of the fixed two-structure golden, envelope keys included.
+
+    The real scientific paths measure the key press and must carry the engine
+    clock source. The engineering harness records the same structures with the
+    fixed synthetic RT fixture, so its records must say ``synthetic fixture``
+    instead of claiming a measurement.
+    """
     event_type, schema, payload, has_observed = GOLDEN[index]
     assert record['event_type'] == event_type, where
     assert record['schema_id'] == schema['id'] and record['schema_version'] == schema['version'], where
@@ -111,7 +117,7 @@ def _assert_golden_envelope(record, index, where):
         observed = record['observed_time']
         assert observed['value'] == payload['rt_ms'], where
         assert observed['unit'] == 'ms' and observed['clock_id'] == 'host_monotonic', where
-        assert observed['source'] == 'Godot Time.get_ticks_usec', where
+        assert observed['source'] == source, where
 
 
 def test_scientific_task_hash_unchanged():
@@ -179,7 +185,7 @@ def test_wrapper_contract_harness(evidence_root, evidence):
     last = records[-1]
     assert last['event_type'] == 'exp.rt' and last['payload'] == RT_ONE, last
     assert last['observed_time'] == {'value': 321.5, 'unit': 'ms', 'clock_id': 'host_monotonic',
-                                     'epoch': 'p03r10', 'source': 'Godot Time.get_ticks_usec'}, last
+                                     'epoch': 'p03r10', 'source': 'synthetic fixture'}, last
     interaction = [record for record in records if record['event_type'] == 'exp.interaction']
     assert interaction and interaction[0]['payload'] == INTERACTION, interaction[:1]
     evidence('unit_facts.json', facts)
@@ -310,7 +316,7 @@ def test_real_gep_connection_matches_golden(evidence_root, evidence):
         assert len(events) == 4, 'the server received exactly four events: %d' % len(events)
         ordered = sorted(events, key=lambda event: event['sequence'])
         for index, event in enumerate(ordered):
-            _assert_golden_envelope(event, index, 'gep server record %d' % index)
+            _assert_golden_envelope(event, index, 'gep server record %d' % index, source='synthetic fixture')
         # The local queue and the server database reconcile by event id/value.
         local = {record['event_id']: record for record in facts['records']}
         remote = {event['event_id']: event for event in events}

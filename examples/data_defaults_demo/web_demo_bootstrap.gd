@@ -57,7 +57,7 @@ func run_demo() -> void:
 					"rt_ms": func(): return trial.rt_ms, "response_status": func(): return "responded"}})
 	check(configured.get("state") == "defaults_configured", "configure fields: " + JSON.stringify(configured))
 	var first: Dictionary = await data.record("", null, {}, {"value": 321.5, "unit": "ms",
-			"clock_id": "host_monotonic", "epoch": "p03r10r", "source": "Godot Time.get_ticks_usec"})
+			"clock_id": "host_monotonic", "epoch": "p03r10r", "source": "synthetic fixture"})
 	check(not first.has("error"), "first short record: " + JSON.stringify(first))
 	# The second structure is the declared snapshot provider.
 	var snapshot := {"action": "revise", "selection": ["shape_a", "shape_c"], "confidence": null,
@@ -76,7 +76,7 @@ func run_demo() -> void:
 	trial.rt_ms = 217.25
 	var third: Dictionary = await data.record("exp.rt", {"trial_id": "t2", "choice": "right", "rt_ms": 217.25,
 			"response_status": "responded"}, {"id": "rt", "version": "1"}, {"value": 217.25, "unit": "ms",
-			"clock_id": "host_monotonic", "epoch": "p03r10r", "source": "Godot Time.get_ticks_usec"})
+			"clock_id": "host_monotonic", "epoch": "p03r10r", "source": "synthetic fixture"})
 	check(not third.has("error"), "explicit override record: " + JSON.stringify(third))
 	var fourth: Dictionary = await data.record()
 	check(not fourth.has("error"), "second provider record: " + JSON.stringify(fourth))

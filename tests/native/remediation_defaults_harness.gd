@@ -69,8 +69,10 @@ func schema(id: String, version: String) -> Dictionary:
 
 
 func rt_clock(value: float) -> Dictionary:
+	# The value is a fixed synthetic fixture, not a measurement: the source must
+	# never claim the engine clock, whatever else the envelope carries.
 	return {"value": value, "unit": "ms", "clock_id": "host_monotonic", "epoch": epoch,
-			"source": "Godot Time.get_ticks_usec"}
+			"source": "synthetic fixture"}
 
 
 func run() -> void:
