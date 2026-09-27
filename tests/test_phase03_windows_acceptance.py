@@ -2292,6 +2292,11 @@ def test_wn01_accepts_a_scheduled_task_without_sessionname(tmp_path, monkeypatch
     monkeypatch.setattr(harness, "stop_owned", lambda record: {"outcome": "stopped", "problems": []})
     monkeypatch.setattr(harness, "close_launch", lambda launch: launch)
     monkeypatch.setattr(native_harness, "active_console_session", lambda: 2)
+    # R11W adds the real Windows junction/reparse device check to WN01; it can
+    # only run on a real Windows host (and fails closed elsewhere), so this
+    # preparation-host simulation stands in for exactly that device check and
+    # leaves every other WN01 check real. The device run itself is unchanged.
+    monkeypatch.setattr(harness, "check_reparse_behavior", lambda case: None)
     assert harness.case_wn01() == native_harness.STATUS_PASS
     assert seen["arguments"] == ["--synthetic-auto", "--stop-after-trial"], \
         "WN01 must keep the program alive until the owned PID is really stopped"

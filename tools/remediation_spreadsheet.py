@@ -20,15 +20,33 @@ exists on this Mac and - only when ``GEP_TEST_SSH_HOST`` is configured - on
 that authorised Windows host (Excel / WPS / LibreOffice versions), and records
 the exact R11 plan for the real on-screen viewing. The Windows connection
 settings (``GEP_TEST_SSH_HOST``, optional ``GEP_TEST_SSH_HOST_KEY_ALIAS`` and
-``GEP_TEST_WINDOWS_ROOT``) come from the runtime environment only, are passed
-to ``ssh`` as argv elements and are never written into this repository. Without
-a configured host no network access is attempted at all: the Windows side is
+``GEP_TEST_WINDOWS_ROOT``) come from the runtime environment only; they may also
+be read from the explicit round selection that ``remediation_windows.py
+--prepare``/``--select`` records in the project-ignored ``local_data`` tree, in
+which case environment values still take precedence. They are passed to ``ssh``
+as argv elements and are never written into this repository. Without a
+configured host no network access is attempted at all: the Windows side is
 recorded as ``NOT_CONFIGURED``/``NOT_RUN`` while the local file preparation
 continues independently. ``openpyxl`` is never treated as an actual spreadsheet
-application: this task's preparation records the facts and the plan, and the
-mandatory real viewing stays an R11 gate. Missing software is reported as
-``BLOCKED`` with guidance; it never blocks the other independent work and is
-never reported as a software pass.
+application.
+
+``--verify-windows`` is the R11W real-viewing gate. It builds the same
+synthetic CSV pair under one brand-new evidence root, transfers the bytes and
+the fixed expected values to one brand-new directory under the authorised
+Windows acceptance base, and drives the really installed spreadsheet
+application (Excel through COM, inside the interactive console session via a
+scoped scheduled task) to *import* both CSVs. The on-device script then reads
+the real cells back: the ``text:001`` and ``text:=1+1`` cells must appear
+literally with no formula, the embedded newline must stay inside its cell, the
+null roster code must be an empty cell, and the near-limit JSON cell must keep
+its exact length and payload. The recovery rules (``text:``/``json:`` prefix
+removal) are applied to what the application actually displays and compared
+with the frozen originals. The script writes one machine-readable result; the
+Mac side re-reads it together with the uploaded bytes and the expected document
+and only then reports ``PASS`` (``FAIL``/``BLOCKED`` are precise non-zero
+results, never a software pass). Missing software is reported as ``BLOCKED``
+with guidance; it never blocks the other independent work and is never reported
+as a software pass.
 
 Every run keeps its synthetic database, CSV files and JSON report, successful
 or failed, and a machine-readable report is always written. The report carries
@@ -51,10 +69,20 @@ from datetime import datetime, timedelta, timezone as dt_timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+TOOLS = REPO_ROOT / 'tools'
+if str(TOOLS) not in sys.path:
+    sys.path.insert(0, str(TOOLS))
 EVIDENCE_BASE = REPO_ROOT / 'local_data' / 'phase03_remediation_20260923'
 SSH_HOST_ENV = 'GEP_TEST_SSH_HOST'
 SSH_HOST_KEY_ALIAS_ENV = 'GEP_TEST_SSH_HOST_KEY_ALIAS'
 WINDOWS_ROOT_ENV = 'GEP_TEST_WINDOWS_ROOT'
+# R11W real viewing: one result format produced on the Windows device, one
+# expected-value document that travels with the CSV bytes, and the dedicated
+# evidence subdirectory this round's gate writes to.
+SPREADSHEET_VIEW_FORMAT = 'gep-windows-spreadsheet-view/v1'
+SPREADSHEET_EXPECT_FORMAT = 'gep-windows-spreadsheet-expect/v1'
+WINDOWS_VERIFY_SUBDIR = 'p03r11w'
+WINDOWS_VIEW_TIMEOUT = 300
 # The host and its optional key alias are supplied at run time only. Strict
 # host-key checking, BatchMode and the bounded connect timeout always apply:
 # nothing here ever edits the global SSH configuration, trust store or
@@ -83,7 +111,7 @@ def utc_stamp():
     return datetime.now(dt_timezone.utc).strftime('%Y%m%dT%H%M%SZ')
 
 
-def evidence_root(explicit):
+def evidence_root(explicit, default_subdir='p03r08p'):
     """A brand-new unique root strictly inside the dedicated evidence base.
 
     Every path component from the base down to the leaf is checked for symlinks
@@ -96,7 +124,7 @@ def evidence_root(explicit):
         if not root.is_absolute():
             root = REPO_ROOT / root
     else:
-        root = base / 'p03r08p' / f'{utc_stamp()}-{secrets.token_hex(4)}'
+        root = base / default_subdir / f'{utc_stamp()}-{secrets.token_hex(4)}'
     try:
         relative = root.relative_to(base)
     except ValueError:
@@ -221,6 +249,29 @@ def validate_pair(participants_bytes, events_bytes, *, participant_ids):
         report.check('large_cell_round_trip', len(record['payload']['blob']) == LARGE_CELL_CHARS)
     report.check('no_scoring_in_status', 'score' not in json.dumps(people))
     return report
+
+
+def prepare_csv_pair(root):
+    """This run's isolated database and the real rendered CSV pair under ``root``."""
+    data_dir = root / 'db'
+    data_dir.mkdir()
+    setup_django(data_dir)
+    import core.models as models
+    from core import exports
+
+    owner, study = build_synthetic_world(models)
+    item = exports.create_v2_export(owner, study.id, view='identified', language='zh')
+    participants_bytes, events_bytes = exports.render_csv_bundle(item.snapshot)
+    csv_dir = root / 'csv'
+    csv_dir.mkdir()
+    (csv_dir / 'participants.csv').write_bytes(participants_bytes)
+    (csv_dir / 'events.csv').write_bytes(events_bytes)
+    participant_ids = {str(person.id) for person in models.Participant.objects.filter(study=study)}
+    null_participant = models.Participant.objects.filter(study=study, code__isnull=True).first()
+    return {'owner': owner, 'study': study, 'csv_dir': csv_dir,
+            'participants_bytes': participants_bytes, 'events_bytes': events_bytes,
+            'participant_ids': participant_ids,
+            'null_participant_uuid': str(null_participant.id) if null_participant else ''}
 
 
 def validate_zip(path, **kwargs):
@@ -411,10 +462,436 @@ def r11_plan(windows_software, windows_root=''):
     }
 
 
+# -------------------------------------------------- R11W Windows real viewing
+
+VIEW_CHECKS = ('header_encoding', 'text_001_literal', 'text_formula_literal', 'study_title_newline',
+               'null_code_empty', 'no_formula_cells', 'record_json_length', 'record_json_prefix',
+               'payload_formula', 'payload_newline', 'payload_blob_chars')
+
+VIEWER_SCRIPT_TEMPLATE = r"""
+$ErrorActionPreference='Stop'
+$ProgressPreference='SilentlyContinue'
+$dir=__DIR__
+$result=[ordered]@{format='__FORMAT__';run_id='';excel_version='';excel_build='';owned_excel_pid=0;
+  stage='init';checks=[ordered]@{};observed=[ordered]@{};files=[ordered]@{};error=''}
+$excel=$null
+$before=@(Get-Process EXCEL -ErrorAction SilentlyContinue | ForEach-Object {$_.Id})
+try{
+  $expect=Get-Content -LiteralPath (Join-Path $dir 'expected.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+  $result.run_id=[string]$expect.run_id
+  $result.stage='expected-read'
+  $result.files.participants_sha256=(Get-FileHash -LiteralPath (Join-Path $dir 'participants.csv') -Algorithm SHA256).Hash.ToLower()
+  $result.files.events_sha256=(Get-FileHash -LiteralPath (Join-Path $dir 'events.csv') -Algorithm SHA256).Hash.ToLower()
+  $excel=New-Object -ComObject Excel.Application
+  $after=@(Get-Process EXCEL -ErrorAction SilentlyContinue | ForEach-Object {$_.Id})
+  $own=@($after | Where-Object {$before -notcontains $_})
+  if($own.Count -ne 1){
+    throw ('the automation did not start exactly one own spreadsheet process (before=' +
+           $before.Count + ', after=' + $after.Count + '); an existing instance is never touched')
+  }
+  $result.owned_excel_pid=[int]$own[0]
+  $result.stage='excel-started'
+  $excel.Visible=$false
+  $excel.DisplayAlerts=$false
+  $result.excel_version=[string]$excel.Version
+  $result.excel_build=[string]$excel.Build
+  $result.stage='participants-open'
+  $wb=$excel.Workbooks.Open((Join-Path $dir 'participants.csv'),0,$true)
+  if($null -eq $wb){throw 'the spreadsheet application returned no workbook for participants.csv'}
+  $result.stage='participants-read'
+  $ws=$wb.Worksheets.Item(1)
+  $rows=[int]$ws.UsedRange.Rows.Count
+  $cols=[int]$ws.UsedRange.Columns.Count
+  $header=[string]$ws.Cells.Item(1,1).Value2
+  $result.checks.header_encoding=($header -eq [string]$expect.participants.header_title_cell)
+  $found001=$false;$foundformula=$false;$foundnewline=$false;$foundnull=$false;$formulas=0
+  for($r=1;$r -le $rows;$r++){
+    for($c=1;$c -le $cols;$c++){
+      $cell=$ws.Cells.Item($r,$c)
+      if([bool]$cell.HasFormula){$formulas=$formulas+1}
+      $value=[string]$cell.Value2
+      if($value -eq [string]$expect.participants.text_001){$found001=$true;$result.observed.recovered_001=$value.Substring(5)}
+      if($value -eq [string]$expect.participants.text_formula){$foundformula=$true;$result.observed.recovered_formula=$value.Substring(5)}
+      # The application may store the in-cell break as CRLF or LF; the contract
+      # is that it stays inside one cell, so both are normalised for the check
+      # and the observed style is recorded.
+      $valueNorm=$value.Replace("`r`n","`n").Replace("`r","`n")
+      $expectedTitle=([string]$expect.participants.study_title_cell).Replace("`r`n","`n").Replace("`r","`n")
+      if($valueNorm -eq $expectedTitle){
+        $foundnewline=$true
+        $recoveredTitle=$valueNorm
+        if($recoveredTitle.StartsWith('text:')){$recoveredTitle=$recoveredTitle.Substring(5)}
+        $result.observed.recovered_title=$recoveredTitle
+        if($value.Contains("`r`n")){$result.observed.title_newline_style='crlf'}elseif($value.Contains("`n")){$result.observed.title_newline_style='lf'}else{$result.observed.title_newline_style='none'}
+      }
+    }
+    if([string]$ws.Cells.Item($r,3).Value2 -eq [string]$expect.participants.null_participant_uuid){
+      $foundnull=([string]$ws.Cells.Item($r,4).Value2 -eq '')
+      $result.observed.null_code_is_empty=$foundnull
+    }
+  }
+  $result.checks.text_001_literal=$found001
+  $result.checks.text_formula_literal=$foundformula
+  $result.checks.study_title_newline=$foundnewline
+  $result.checks.null_code_empty=$foundnull
+  $result.checks.no_formula_cells=($formulas -eq 0)
+  $wb.Close($false)
+  $result.stage='events-open'
+  $wb=$excel.Workbooks.Open((Join-Path $dir 'events.csv'),0,$true)
+  if($null -eq $wb){throw 'the spreadsheet application returned no workbook for events.csv'}
+  $result.stage='events-read'
+  $ws=$wb.Worksheets.Item(1)
+  $rows=[int]$ws.UsedRange.Rows.Count
+  $large=''
+  for($r=2;$r -le $rows;$r++){
+    $value=[string]$ws.Cells.Item($r,15).Value2
+    if($value.Length -gt $large.Length){$large=$value}
+  }
+  $largeRecovered=$large
+  if($large.StartsWith('json:')){$largeRecovered=$large.Substring(5)}
+  $result.observed.record_json_chars=$large.Length
+  $result.checks.record_json_length=($large.Length -eq [int]$expect.events.record_json_chars)
+  $result.checks.record_json_prefix=$large.StartsWith('json:')
+  $payload=$largeRecovered | ConvertFrom-Json
+  $result.checks.payload_formula=([string]$payload.payload.formula -eq [string]$expect.events.formula)
+  $result.checks.payload_newline=([string]$payload.payload.text -eq [string]$expect.events.newline_text)
+  $result.checks.payload_blob_chars=([int]$payload.payload.blob.Length -eq [int]$expect.events.large_chars)
+  $result.observed.payload_blob_chars=[int]$payload.payload.blob.Length
+  $wb.Close($false)
+  $result.stage='done'
+}catch{
+  $result.error=[string]$_.Exception.Message
+}
+finally{
+  # Only the process this run created is ever closed; a foreign instance is
+  # neither used nor quit. A modal stuck instance of our own is stopped by its
+  # exact PID after a bounded wait.
+  if($result.owned_excel_pid -gt 0 -and $excel -ne $null){try{$excel.Quit()}catch{}}
+  if($result.owned_excel_pid -gt 0){
+    $deadline=(Get-Date).AddSeconds(15)
+    while((Get-Date) -lt $deadline -and (Get-Process -Id $result.owned_excel_pid -ErrorAction SilentlyContinue)){Start-Sleep -Milliseconds 500}
+    if(Get-Process -Id $result.owned_excel_pid -ErrorAction SilentlyContinue){
+      try{Stop-Process -Id $result.owned_excel_pid -Force;$result.forced_own_stop=$true}catch{$result.forced_own_stop_error=[string]$_.Exception.Message}
+    }
+  }
+  if($excel -ne $null){try{[void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($excel)}catch{}}
+}
+[System.IO.File]::WriteAllText((Join-Path $dir 'viewing_result.json'),
+  ($result | ConvertTo-Json -Depth 8), (New-Object System.Text.UTF8Encoding($false)))
+"""
+
+
+def windows_import():
+    """The shared Windows-round helpers (selection, strict SSH argv, scp)."""
+    import remediation_windows
+    return remediation_windows
+
+
+def expected_viewing_document(pair, run_id):
+    """The frozen expected values that travel with the CSV bytes.
+
+    Only the fixed synthetic fixtures are recorded: the literal ``text:`` and
+    ``json:`` cells, the embedded newline, the null roster code and the exact
+    near-limit JSON cell length of this run's real rendering.
+    """
+    _, events = csv_rows(pair['events_bytes'])
+    record_json = events[0]['record_json'] if events else ''
+    return {
+        'format': SPREADSHEET_EXPECT_FORMAT,
+        'run_id': run_id,
+        'csv': {'participants': {'sha256': sha256_bytes(pair['participants_bytes']),
+                                 'bytes': len(pair['participants_bytes'])},
+                'events': {'sha256': sha256_bytes(pair['events_bytes']),
+                           'bytes': len(pair['events_bytes'])}},
+        'participants': {'header_title_cell': '研究标题（study_title）',
+                         'study_title': 'Synthetic spreadsheet study\n第二行',
+                         'study_title_cell': 'text:Synthetic spreadsheet study\n第二行',
+                         'text_001': 'text:001',
+                         'text_formula': 'text:' + FORMULA_TEXT,
+                         'null_participant_uuid': pair['null_participant_uuid']},
+        'events': {'record_json_chars': len(record_json),
+                   'formula': FORMULA_TEXT,
+                   'newline_text': 'line1\nline2',
+                   'large_chars': LARGE_CELL_CHARS},
+    }
+
+
+def viewer_script(remote_dir):
+    """The on-device script that imports both CSVs and reads the real cells."""
+    windows = windows_import()
+    return (VIEWER_SCRIPT_TEMPLATE
+            .replace('__DIR__', windows.ps_literal(remote_dir))
+            .replace('__FORMAT__', SPREADSHEET_VIEW_FORMAT))
+
+
+def viewer_command(remote_dir):
+    """The scp-able ``.cmd`` task action wrapping the encoded viewer script.
+
+    A default Windows client refuses ``-File`` under the ``Restricted`` script
+    policy, so the body travels as an encoded command inside a plain command
+    file (never a script file, never an execution-policy override).
+    """
+    encoded = base64.b64encode(viewer_script(remote_dir).encode('utf-16-le')).decode('ascii')
+    line = ('powershell -NoProfile -NonInteractive -EncodedCommand ' + encoded
+            + ' > "' + remote_dir + '\\viewer.log" 2>&1')
+    return '@echo off\r\n' + line + '\r\n'
+
+
+def driver_script(remote_dir, task_name, timeout=WINDOWS_VIEW_TIMEOUT):
+    """The short controller: own scheduled task in, result out, task deleted.
+
+    The spreadsheet application is driven inside the interactive console
+    session (the SSH session is non-interactive); the task name is unique to
+    this run and only this task is ended/deleted.
+    """
+    windows = windows_import()
+    directory = windows.ps_literal(remote_dir)
+    return ("$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';"
+            f"$dir={directory};"
+            "if(Test-Path -LiteralPath (Join-Path $dir 'viewing_result.json'))"
+            "{Remove-Item -LiteralPath (Join-Path $dir 'viewing_result.json')};"
+            f"schtasks /create /tn {windows.ps_literal(task_name)} /tr "
+            f"('cmd /c \"' + (Join-Path $dir 'viewer.cmd') + '\"') /sc once /st 00:00 /it | Out-Null;"
+            "$created=$LASTEXITCODE;"
+            "if($created -ne 0){Write-Output ('TASK_CREATE_FAILED=' + $created); exit 21};"
+            f"schtasks /run /tn {windows.ps_literal(task_name)} | Out-Null;"
+            f"$deadline=(Get-Date).AddSeconds({int(timeout)});"
+            "while((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath "
+            "(Join-Path $dir 'viewing_result.json'))){Start-Sleep -Milliseconds 1000};"
+            "$ready=Test-Path -LiteralPath (Join-Path $dir 'viewing_result.json');"
+            f"schtasks /end /tn {windows.ps_literal(task_name)} 2>$null | Out-Null;"
+            f"schtasks /delete /tn {windows.ps_literal(task_name)} /f 2>$null | Out-Null;"
+            "if($ready){Write-Output 'VIEW_RESULT_READY'; exit 0};"
+            "Write-Output 'VIEW_RESULT_TIMEOUT'; exit 20")
+
+
+def resolve_windows_connection():
+    """Connection values: the explicit round selection first, then environment.
+
+    A missing selection is not an error by itself (environment values may still
+    configure the host); a malformed selection is refused instead of silently
+    falling back.
+    """
+    windows = windows_import()
+    selection, problems = windows.load_round_selection()
+    if selection is None:
+        missing = problems and 'missing:' in problems[0]
+        if problems and not missing:
+            return None, problems
+    return windows.round_connection(selection), []
+
+
+def validate_windows_viewing(root, expected):
+    """Re-read the device result against the frozen bytes and expected values.
+
+    Everything is checked against artifacts that are still on disk: the raw
+    result JSON, the uploaded CSV bytes and the expected document. A summary
+    boolean, a missing file or a mismatched digest is an explicit problem.
+    """
+    problems = []
+    result_path = root / 'viewing_result.json'
+    if not result_path.is_file():
+        return ['the device viewing result was not fetched'], None
+    try:
+        document = json.loads(result_path.read_text(encoding='utf-8-sig'))
+    except (OSError, ValueError):
+        return ['the device viewing result is unreadable'], None
+    if not isinstance(document, dict) or document.get('format') != SPREADSHEET_VIEW_FORMAT:
+        return ['the device viewing result is not this format'], document
+    if document.get('run_id') != expected.get('run_id'):
+        problems.append('the device viewing result does not belong to this run')
+    if not str(document.get('excel_version') or '').strip():
+        problems.append('the device did not record a real spreadsheet version')
+    if str(document.get('stage') or '') != 'done':
+        problems.append(f"the device script did not finish (stage {document.get('stage')!r})")
+    if not isinstance(document.get('owned_excel_pid'), int) or document.get('owned_excel_pid') <= 0:
+        problems.append('the device did not record driving only its own spreadsheet process')
+    files = document.get('files') or {}
+    for key, label in (('participants_sha256', 'participants'), ('events_sha256', 'events')):
+        if files.get(key) != expected['csv'][label]['sha256']:
+            problems.append(f'the device {label}.csv bytes do not match the local upload')
+    checks = document.get('checks') or {}
+    for name in VIEW_CHECKS:
+        if checks.get(name) is not True:
+            problems.append(f'the device check did not pass: {name}')
+    observed = document.get('observed') or {}
+    if observed.get('recovered_001') != '001':
+        problems.append('the text:001 cell did not recover to the original roster code')
+    if observed.get('recovered_formula') != FORMULA_TEXT:
+        problems.append('the text:=1+1 cell did not recover to the original text')
+    if observed.get('recovered_title') != expected['participants']['study_title']:
+        problems.append('the study title cell did not recover its original embedded newline text')
+    if observed.get('title_newline_style') not in ('lf', 'crlf'):
+        problems.append('the embedded newline was not kept inside one cell')
+    if observed.get('record_json_chars') != expected['events']['record_json_chars']:
+        problems.append('the JSON cell length does not match the frozen rendering')
+    if observed.get('payload_blob_chars') != LARGE_CELL_CHARS:
+        problems.append('the JSON cell payload is not the frozen large value')
+    if observed.get('null_code_is_empty') is not True:
+        problems.append('the null roster code was not an empty cell')
+    if str(document.get('error') or '').strip():
+        problems.append('the device script reported an error')
+    return problems, document
+
+
+def validate_spreadsheet_windows_evidence(root):
+    """Re-read one finished ``--verify-windows`` evidence root from its raw files.
+
+    The aggregate gate uses this instead of trusting the tool's exit code or its
+    summary boolean: the local CSV bytes must still match the expected document,
+    the raw device result must pass the same strict validation, and the summary
+    must belong to exactly that result with the human round still NOT_RUN.
+    """
+    root = Path(root)
+    summary_path = root / 'spreadsheet_windows.json'
+    if not summary_path.is_file():
+        return [f'the spreadsheet evidence root has no summary: {summary_path}'], None
+    try:
+        summary = json.loads(summary_path.read_text(encoding='utf-8-sig'))
+    except (OSError, ValueError):
+        return ['the spreadsheet summary is unreadable'], None
+    expected_path = root / 'expected.json'
+    try:
+        expected = json.loads(expected_path.read_text(encoding='utf-8-sig'))
+    except (OSError, ValueError):
+        return ['the spreadsheet expected document is unreadable'], None
+    problems = []
+    for name, entry in (('participants.csv', expected.get('csv', {}).get('participants', {})),
+                        ('events.csv', expected.get('csv', {}).get('events', {}))):
+        path = root / 'csv' / name
+        if not path.is_file():
+            problems.append(f'the local CSV bytes are missing: {path}')
+            continue
+        raw = path.read_bytes()
+        if sha256_bytes(raw) != entry.get('sha256') or len(raw) != entry.get('bytes'):
+            problems.append(f'the local CSV bytes do not match the expected document: {name}')
+    viewing_problems, device = validate_windows_viewing(root, expected)
+    problems.extend(f're-read: {problem}' for problem in viewing_problems)
+    if summary.get('status') != 'PASS':
+        problems.append(f"the summary status is {summary.get('status')!r}, not PASS")
+    if summary.get('run_id') != (device or {}).get('run_id'):
+        problems.append('the summary run id does not match the raw device result')
+    if summary.get('problems'):
+        problems.append('the summary records problems: '
+                        + '; '.join(str(problem) for problem in summary['problems'][:3]))
+    if summary.get('windows_verified') is not True:
+        problems.append('the summary does not record windows_verified=true')
+    if summary.get('human_acceptance') != 'NOT_RUN':
+        problems.append('the summary must keep the human round NOT_RUN')
+    return problems, summary
+
+
+def verify_windows(evidence_dir=None):
+    """One real Windows spreadsheet viewing run; a new unique evidence root."""
+    windows = windows_import()
+    root = evidence_root(evidence_dir, default_subdir=WINDOWS_VERIFY_SUBDIR)
+    report = Report()
+    pair = prepare_csv_pair(root)
+    pair_report = validate_pair(pair['participants_bytes'], pair['events_bytes'],
+                                participant_ids=pair['participant_ids'])
+    report.checks.extend(pair_report.checks)
+    run_id = uuid.uuid4().hex[:12]
+    expected = expected_viewing_document(pair, run_id)
+
+    config, config_problems = resolve_windows_connection()
+    if config_problems:
+        document = {'task': 'p03r11w-windows-spreadsheet', 'tool': 'remediation_spreadsheet.py',
+                    'format': SPREADSHEET_VIEW_FORMAT, 'status': 'REFUSED', 'run_id': run_id,
+                    'problems': config_problems, 'human_acceptance': 'NOT_RUN',
+                    'viewing_status': 'NOT_RUN', 'evidence_root': str(root),
+                    'windows_verified': False}
+        (root / 'spreadsheet_windows.json').write_text(
+            json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+        print(f'WINDOWS VIEWING REFUSED :: {config_problems[0]}', file=sys.stderr, flush=True)
+        return 2, document
+    if not (config.get('host') and config.get('windows_root')):
+        document = {'task': 'p03r11w-windows-spreadsheet', 'tool': 'remediation_spreadsheet.py',
+                    'format': SPREADSHEET_VIEW_FORMAT, 'status': 'BLOCKED', 'run_id': run_id,
+                    'reason': 'windows_host_not_configured: no explicit round selection and no '
+                              'GEP_TEST_SSH_HOST/GEP_TEST_WINDOWS_ROOT in the environment',
+                    'human_acceptance': 'NOT_RUN', 'viewing_status': 'NOT_RUN',
+                    'evidence_root': str(root), 'windows_verified': False}
+        (root / 'spreadsheet_windows.json').write_text(
+            json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+        print('WINDOWS VIEWING BLOCKED :: windows host not configured', file=sys.stderr, flush=True)
+        return 1, document
+
+    (root / 'expected.json').write_text(
+        json.dumps(expected, ensure_ascii=False, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+    stamp = utc_stamp()
+    remote_name = f'{stamp}-{secrets.token_hex(4)}-spreadsheet'
+    remote_dir = f"{config['windows_root'].strip().rstrip(chr(92) + '/').replace('/', chr(92))}\\{remote_name}"
+    task_name = f'GEP-R11-Spreadsheet-{secrets.token_hex(4)}'
+    # Local copies of exactly what travels to the device (evidence of the run).
+    (root / 'viewer.ps1').write_text(viewer_script(remote_dir), encoding='utf-8')
+    (root / 'viewer.cmd').write_text(viewer_command(remote_dir), encoding='utf-8')
+    (root / 'driver.ps1').write_text(driver_script(remote_dir, task_name), encoding='utf-8')
+
+    problems = []
+    status = 'FAIL'
+    device = None
+    try:
+        prepared = windows._ssh_run(config, windows.remote_root_script(remote_dir), 120)
+        if prepared.returncode != 0:
+            raise RuntimeError(f'the remote viewing root could not be created (exit {prepared.returncode}): '
+                               f'{((prepared.stderr or "") + (prepared.stdout or "")).strip()[-300:]}')
+        uploads = (('participants.csv', pair['csv_dir'] / 'participants.csv'),
+                   ('events.csv', pair['csv_dir'] / 'events.csv'),
+                   ('expected.json', root / 'expected.json'),
+                   ('viewer.cmd', root / 'viewer.cmd'))
+        for name, local in uploads:
+            upload = windows._scp_copy(config, local, f'{remote_dir}\\{name}', to_remote=True)
+            if upload.returncode != 0:
+                raise RuntimeError(f'the {name} transfer failed (exit {upload.returncode}): '
+                                   f'{(upload.stderr or "")[-300:].strip()}')
+        run = windows._ssh_run(config, driver_script(remote_dir, task_name), WINDOWS_VIEW_TIMEOUT + 120)
+        (root / 'viewer_controller.log').write_text((run.stdout or '') + '\n' + (run.stderr or ''),
+                                                    encoding='utf-8')
+        if 'VIEW_RESULT_READY' not in (run.stdout or ''):
+            raise RuntimeError(f'the interactive viewing task did not produce a result '
+                               f'(driver exit {run.returncode}, output {(run.stdout or "").strip()[-200:]})')
+        download = windows._scp_copy(config, root / 'viewing_result.json',
+                                     f'{remote_dir}\\viewing_result.json', to_remote=False)
+        if download.returncode != 0 or not (root / 'viewing_result.json').is_file():
+            raise RuntimeError(f'the viewing result could not be fetched (exit {download.returncode}): '
+                               f'{(download.stderr or "")[-300:].strip()}')
+        windows._scp_copy(config, root / 'viewer.log', f'{remote_dir}\\viewer.log', to_remote=False)
+        problems, device = validate_windows_viewing(root, expected)
+        status = 'FAIL' if problems else 'PASS'
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as error:
+        problems = [f'{type(error).__name__}: {error}']
+    failed_local = report.failures()
+    if failed_local and not problems:
+        problems = ['the local CSV round-trip checks failed: ' + ', '.join(failed_local)]
+        status = 'FAIL'
+    summary = {'task': 'p03r11w-windows-spreadsheet', 'tool': 'remediation_spreadsheet.py',
+               'format': SPREADSHEET_VIEW_FORMAT, 'status': status, 'run_id': run_id,
+               'excel_version': (device or {}).get('excel_version'),
+               'excel_build': (device or {}).get('excel_build'),
+               'remote_root': remote_dir, 'remote_name': remote_name,
+               'csv': expected['csv'], 'expected': expected,
+               'problems': problems, 'checks': report.checks,
+               'device_checks': (device or {}).get('checks'),
+               'device_observed': (device or {}).get('observed'),
+               'human_acceptance': 'NOT_RUN',
+               'viewing_status': 'REAL_VIEWING_PASS' if status == 'PASS' else 'FAIL',
+               'windows_verified': status == 'PASS', 'evidence_root': str(root)}
+    (root / 'spreadsheet_windows.json').write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+    print(json.dumps({'task': 'p03r11w-windows-spreadsheet', 'status': status,
+                      'excel_version': summary['excel_version'], 'problems': problems,
+                      'checks_passed': len([row for row in report.checks if row['ok']]),
+                      'checks_failed': len(failed_local), 'evidence_root': str(root),
+                      'windows_verified': status == 'PASS'}, ensure_ascii=False, indent=2))
+    return (0 if status == 'PASS' else 1), summary
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--verify-preparation', action='store_true',
                         help='validate the CSV pair, probe installed software and record the R11 plan')
+    parser.add_argument('--verify-windows', action='store_true',
+                        help='R11W gate: drive the real Windows spreadsheet application on the CSV pair')
     parser.add_argument('--zip', default=None,
                         help='also validate one real browser-downloaded ZIP (exactly the two CSV members)')
     parser.add_argument('--real-import', action='store_true',
@@ -423,32 +900,24 @@ def main(argv=None):
                         help='brand-new evidence root inside local_data/phase03_remediation_20260923 '
                              '(must not exist; symlinked path components are refused)')
     args = parser.parse_args(argv)
-    if not (args.verify_preparation or args.real_import):
-        parser.error('--verify-preparation or --real-import is required')
+    if not (args.verify_preparation or args.real_import or args.verify_windows):
+        parser.error('--verify-preparation, --real-import or --verify-windows is required')
+    if args.verify_windows:
+        code, _ = verify_windows(args.evidence_dir or os.environ.get('GEP_EVIDENCE_DIR') or None)
+        return code
 
     root = evidence_root(args.evidence_dir or os.environ.get('GEP_EVIDENCE_DIR') or None)
-    data_dir = root / 'db'
-    data_dir.mkdir()
-    setup_django(data_dir)
-
-    import core.models as models
-    from core import exports
-
     report = Report()
-    owner, study = build_synthetic_world(models)
-    item = exports.create_v2_export(owner, study.id, view='identified', language='zh')
-    participants_bytes, events_bytes = exports.render_csv_bundle(item.snapshot)
-    csv_dir = root / 'csv'
-    csv_dir.mkdir()
-    (csv_dir / 'participants.csv').write_bytes(participants_bytes)
-    (csv_dir / 'events.csv').write_bytes(events_bytes)
-    participant_ids = {str(person.id) for person in models.Participant.objects.filter(study=study)}
-    pair_report = validate_pair(participants_bytes, events_bytes, participant_ids=participant_ids)
+    pair = prepare_csv_pair(root)
+    participants_bytes = pair['participants_bytes']
+    events_bytes = pair['events_bytes']
+    csv_dir = pair['csv_dir']
+    pair_report = validate_pair(participants_bytes, events_bytes, participant_ids=pair['participant_ids'])
     report.checks.extend(pair_report.checks)
 
     zip_report = None
     if args.zip:
-        zip_report = validate_zip(Path(args.zip), participant_ids=participant_ids)
+        zip_report = validate_zip(Path(args.zip), participant_ids=pair['participant_ids'])
         report.checks.extend({'name': 'zip:' + row['name'], 'ok': row['ok'], 'detail': row['detail']}
                              for row in zip_report.checks)
 

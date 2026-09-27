@@ -54,11 +54,13 @@ import re
 import shutil
 import socket
 import sqlite3
+import stat
 import struct
 import subprocess
 import sys
 import threading
 import time
+import traceback
 import uuid
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -120,6 +122,45 @@ def redact(arguments):
                 text = flag + "***"
         redacted.append(text)
     return redacted
+
+
+def reparse_point(path):
+    """True when the path itself is a Windows reparse point (junction/symlink).
+
+    ``os.lstat`` never follows the link, and CPython exposes the raw reparse tag
+    (``st_reparse_tag``) on Windows, so a directory junction is detected even on
+    versions where ``os.path.islink`` treats it differently. On other platforms
+    the attribute is absent and only a real symbolic link matches.
+    """
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return False
+    if stat.S_ISLNK(info.st_mode):
+        return True
+    return bool(getattr(info, "st_reparse_tag", 0))
+
+
+def refuse_reparse_components(target, boundary):
+    """Raise before anything is written when a path component is a reparse point.
+
+    A junction/symlink inside the run boundary could silently redirect a write
+    to an unrelated directory; every component between the boundary and the
+    target is checked with ``lstat`` and a match is an explicit failure.
+    """
+    target = Path(target)
+    boundary = Path(boundary)
+    try:
+        relative = target.relative_to(boundary)
+    except ValueError:
+        raise HarnessError(f"refusing a path outside its run boundary: {target}") from None
+    if reparse_point(boundary):
+        raise HarnessError(f"refusing a reparse-point run boundary: {boundary}")
+    current = boundary
+    for part in relative.parts:
+        current = current / part
+        if reparse_point(current):
+            raise HarnessError(f"refusing a reparse-point path component: {current}")
 
 
 def pe_summary(raw):
@@ -860,12 +901,62 @@ class Harness:
 
     def extract(self, package, mode):
         target = self.run_root / f"GEP 原生测试 中文 {mode} {self.run_id}"
+        # Check before removing an old target: its parent may have been replaced
+        # by a junction, in which case rmtree would otherwise act outside the
+        # run root before the extraction guard gets a chance to refuse it.
+        refuse_reparse_components(target, self.run_root)
         if target.exists():
             shutil.rmtree(target)
         target.mkdir(parents=True)
+        refuse_reparse_components(target, self.run_root)
         with zipfile.ZipFile(package) as archive:
             archive.extractall(target)
         return target
+
+    def check_reparse_behavior(self, case):
+        """Real device check: a junction is detected and never written through.
+
+        ``mklink /J`` needs no elevation, so the run can measure real junction
+        semantics instead of assuming them: the link is seen as a reparse point,
+        a write target beneath it is refused before creation, the canary outside
+        keeps its bytes, and removing the link never removes the target.
+        """
+        if os.name != "nt":
+            case.check(False, "WN01 junction/重解析点实测只在真实 Windows 上有效", os.name)
+            return
+        area = self.run_root / "reparse-check"
+        area.mkdir(parents=True, exist_ok=True)
+        canary_dir = area / "canary"
+        canary_dir.mkdir(parents=True, exist_ok=True)
+        canary = canary_dir / "canary.bin"
+        canary_bytes = b"gep-reparse-canary-bytes"
+        canary.write_bytes(canary_bytes)
+        junction = area / "junction"
+        if junction.exists():
+            os.rmdir(junction)
+        created = subprocess.run(["cmd", "/c", "mklink", "/J", str(junction), str(canary_dir)],
+                                 capture_output=True, text=True)
+        case.check(created.returncode == 0 and junction.exists(),
+                   "WN01：真实 Windows junction 已创建（mklink /J，无需提权）",
+                   (created.stdout or created.stderr or "").strip()[-200:])
+        if not junction.exists():
+            return
+        case.check(reparse_point(junction), "WN01：junction 被 lstat 识别为重解析点",
+                   getattr(os.lstat(junction), "st_reparse_tag", None))
+        refused = False
+        try:
+            refuse_reparse_components(junction / "escape-dir", area)
+        except HarnessError:
+            refused = True
+        case.check(refused, "WN01：经 junction 的写出目标在创建前被拒绝", str(junction / "escape-dir"))
+        case.check(canary.read_bytes() == canary_bytes,
+                   "WN01：junction 目标外的 canary 字节未被改写")
+        os.rmdir(junction)
+        case.check(not junction.exists() and canary.is_file() and canary.read_bytes() == canary_bytes,
+                   "WN01：删除 junction 只删除链接，目标 canary 仍在且字节不变")
+        case.evidence["reparse"] = {
+            "junction": self.rel(junction), "canary": self.rel(canary),
+            "detected": True, "write_refused": refused, "canary_sha256": sha256_file(canary)}
 
     def check_accounts_acl(self, case):
         if self.accounts_path is None:
@@ -926,7 +1017,8 @@ class Harness:
                 return True
         except OSError as error:
             case.block(f"runtime prerequisite missing: TCP 127.0.0.1:{self.tunnel_port} unreachable "
-                       f"({type(error).__name__}); start the prepared scoped SSH tunnel (operator/tunnel.cmd)")
+                       f"({type(error).__name__}); the operator's scoped SSH tunnel to the prepared "
+                       "instance is not serving this run")
             case.check(False, "作用域隧道端口可达（运行前置条件）",
                        f"127.0.0.1:{self.tunnel_port} {type(error).__name__}")
             return False
@@ -1165,25 +1257,43 @@ class Harness:
 
     def wait_for(self, path, timeout):
         deadline = time.time() + timeout
+        last_error = None
         while time.time() < deadline:
             if Path(path).is_file():
                 try:
                     return read_json(path)
                 except ValueError:
                     pass
+                except OSError as error:
+                    # Windows can briefly deny access to a just-created file while
+                    # the launcher writes it; keep the bounded wait instead of
+                    # crashing the whole run, and report the last error only if
+                    # the record really never becomes readable.
+                    last_error = error
             time.sleep(0.5)
+        if last_error is not None:
+            self.log(f"wait_for {Path(path).name}: last read error "
+                     f"{type(last_error).__name__}: {last_error}")
         return None
 
     def wait_for_marker(self, out_path, markers, timeout):
         deadline = time.time() + timeout
         text = ""
+        last_error = None
         while time.time() < deadline:
             if Path(out_path).is_file():
-                text = Path(out_path).read_text(encoding="utf-8", errors="replace")
-                for marker in markers:
-                    if marker in text:
-                        return marker, text
+                try:
+                    text = Path(out_path).read_text(encoding="utf-8", errors="replace")
+                except OSError as error:
+                    last_error = error
+                else:
+                    for marker in markers:
+                        if marker in text:
+                            return marker, text
             time.sleep(0.5)
+        if last_error is not None:
+            self.log(f"wait_for_marker {Path(out_path).name}: last read error "
+                     f"{type(last_error).__name__}: {last_error}")
         return None, text
 
     def wait_for_marker_or_exit(self, out_path, exit_path, markers, timeout):
@@ -1194,29 +1304,45 @@ class Harness:
         timeout would hide the reason and waste the run. The exit record is
         written by our own launcher, so its presence means this program ended.
         Returns ``(marker, text, exit_code)`` with ``exit_code`` None while the
-        program is still running.
+        program is still running. A transient Windows sharing violation on the
+        just-created output/exit file is retried inside the same bounded wait; a
+        persistent one still ends in the honest timeout result.
         """
         deadline = time.time() + timeout
         text = ""
+        last_error = None
         while time.time() < deadline:
             if Path(out_path).is_file():
-                text = Path(out_path).read_text(encoding="utf-8", errors="replace")
-                for marker in markers:
-                    if marker in text:
-                        return marker, text, None
+                try:
+                    text = Path(out_path).read_text(encoding="utf-8", errors="replace")
+                except OSError as error:
+                    last_error = error
+                else:
+                    for marker in markers:
+                        if marker in text:
+                            return marker, text, None
             if Path(exit_path).is_file():
                 try:
                     document = read_json(exit_path)
                 except ValueError:
                     document = None
+                except OSError as error:
+                    last_error = error
+                    document = None
                 if document is not None:
                     if Path(out_path).is_file():
-                        text = Path(out_path).read_text(encoding="utf-8", errors="replace")
+                        try:
+                            text = Path(out_path).read_text(encoding="utf-8", errors="replace")
+                        except OSError as error:
+                            last_error = error
                     for marker in markers:
                         if marker in text:
                             return marker, text, None
                     return None, text, document.get("exit")
             time.sleep(0.5)
+        if last_error is not None:
+            self.log(f"wait_for_marker_or_exit: last read error "
+                     f"{type(last_error).__name__}: {last_error}")
         return None, text, None
 
     def verify_identity(self, record):
@@ -1398,6 +1524,7 @@ class Harness:
     def case_wn01(self):
         case = self.case("WN01")
         try:
+            self.check_reparse_behavior(case)
             info = self.releases["modes"]["anonymous"]
             target = Path(info["_target"])
             entry = str(target / Path(info["_manifest"]["entry"]))
@@ -2249,6 +2376,7 @@ def main(argv=None):
     except Exception as unexpected:  # unexpected: keep the evidence, fail loudly
         error = repr(unexpected)
         harness.log(f"unexpected harness failure: {error}")
+        harness.log(traceback.format_exc())
         for case_id in CASE_TITLES:
             case = harness.case(case_id)
             if not case.checks:

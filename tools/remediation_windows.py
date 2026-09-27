@@ -78,7 +78,14 @@ if str(TOOLS) not in sys.path:
 from roster_import_client import preview_and_commit, roster_csv  # noqa: E402  (tools/ path above)
 from windows_template import TemplateError, find_windows_template, verify_windows_template  # noqa: E402
 
-EVIDENCE_BASE = ROOT / 'local_data' / 'phase03_remediation_20260923' / 'p03r11a_windows'
+EVIDENCE_BASE = ROOT / 'local_data' / 'phase03_remediation_20260923' / 'p03r11w'
+# The explicit, persistent this-round selection (project-ignored). ``--prepare``
+# writes it after a successful preparation and ``--select`` re-points it at an
+# existing preparation on purpose; ``--verify`` without arguments reads exactly
+# this file. No tool ever scans for a "latest" preparation directory.
+ROUND_SELECTION_FORMAT = 'gep-windows-round-selection/v1'
+ROUND_SELECTION_ENV = 'GEP_WINDOWS_ROUND_SELECTION'
+ROUND_SELECTION_PATH = ROOT / 'local_data' / 'phase03_remediation_20260923' / 'p03r11w' / 'round_selection.json'
 BUILD_BASE = ROOT / 'build' / 'phase03_remediation_20260923'
 PROJECT = ROOT / 'examples' / 'synthetic_experiment'
 PROJECT_DESCRIPTOR = PROJECT / 'descriptor.json'
@@ -500,7 +507,142 @@ def windows_config(environ=None):
     env = os.environ if environ is None else environ
     return {'host': (env.get(SSH_HOST_ENV) or '').strip(),
             'host_key_alias': (env.get(SSH_HOST_KEY_ALIAS_ENV) or '').strip(),
-            'windows_root': (env.get(WINDOWS_ROOT_ENV) or '').strip()}
+            'windows_root': (env.get(WINDOWS_ROOT_ENV) or '').strip(),
+            'python': (env.get(WINDOWS_PYTHON_ENV) or '').strip()}
+
+
+def round_selection_path(explicit=None):
+    """The one explicit selection file; never a directory scan or a default guess."""
+    raw = (explicit or os.environ.get(ROUND_SELECTION_ENV) or '').strip()
+    return Path(raw).expanduser().resolve() if raw else ROUND_SELECTION_PATH
+
+
+def write_round_selection(document, path=None):
+    """Atomically record the explicit this-round selection, mode 0600."""
+    target = round_selection_path(path)
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    temp = target.with_name(target.name + '.tmp')
+    temp.write_bytes(canonical_json(document))
+    os.chmod(temp, 0o600)
+    os.replace(temp, target)
+    os.chmod(target, 0o600)
+    return target
+
+
+def load_round_selection(path=None):
+    """Read the explicit selection; ``(document, problems)``, never a scan.
+
+    A missing file is an explicit refusal (``document`` is None), a malformed or
+    stale file returns the problems that make it unusable: wrong format, a
+    missing kit/accounts path, a program built from different sources than the
+    working tree. The caller decides whether a problem is a stop; nothing here
+    ever falls back to "newest directory" or to an inherited PASS.
+    """
+    target = round_selection_path(path)
+    if not target.is_file():
+        return None, [f'the explicit round selection is missing: {display_path(target)} '
+                      '(run --prepare or --select first)']
+    try:
+        document = read_json(target)
+    except (OSError, ValueError) as error:
+        return None, [f'the explicit round selection is unreadable ({type(error).__name__}): '
+                      f'{display_path(target)}']
+    problems = []
+    if not isinstance(document, dict) or document.get('format') != ROUND_SELECTION_FORMAT:
+        return None, [f'the explicit round selection is not {ROUND_SELECTION_FORMAT}']
+    kit_root = Path(str(document.get('kit_root') or '')).expanduser()
+    if not kit_root.is_dir() or not (kit_root / 'integrity.json').is_file():
+        problems.append(f'the selected kit is missing or incomplete: {display_path(kit_root)}')
+    accounts = Path(str(document.get('accounts') or '')).expanduser()
+    if not accounts.is_file():
+        problems.append(f'the selected private accounts file is missing: {display_path(accounts)}')
+    if document.get('program_source_digest') != program_source_digest():
+        problems.append('the selected preparation was frozen from different program sources (stale selection)')
+    return document, problems
+
+
+def inherited_connection():
+    """The connection values already recorded for this round, if any.
+
+    A new preparation or an explicit re-selection must never silently drop the
+    operator's already-selected connection just because the environment is empty
+    at that moment: the persisted selection is exactly what the bare ``--verify``
+    reads back, so the values have to survive the rewrite.
+    """
+    document, _problems = load_round_selection()
+    stored = (document or {}).get('connection') or {}
+    return {key: str(stored.get(key) or '').strip()
+            for key in ('host', 'host_key_alias', 'windows_root', 'python')}
+
+
+def selection_from_preparation(prepare_root, build, accounts_path, environ=None):
+    """The explicit selection document for one finished preparation."""
+    prepare_root = Path(prepare_root).resolve()
+    kit_root = prepare_root / 'kit'
+    releases = {}
+    if (kit_root / 'releases.json').is_file():
+        try:
+            releases = read_json(kit_root / 'releases.json')
+        except (OSError, ValueError):
+            releases = {}
+    connection = windows_config(environ)
+    for key, value in inherited_connection().items():
+        if not connection.get(key):
+            connection[key] = value
+    return {'format': ROUND_SELECTION_FORMAT, 'task': 'p03r11w',
+            'selected_at': datetime.now(timezone.utc).isoformat(),
+            'prepare_root': str(prepare_root), 'kit_root': str(kit_root),
+            'accounts': str(Path(accounts_path).resolve()),
+            'instance_id': releases.get('instance_id'),
+            'program_sha256': (build or {}).get('program_sha256'),
+            'program_source_digest': (build or {}).get('program_source_digest'),
+            'connection': connection,
+            'note': 'Explicit this-round selection: --verify loads exactly these paths and connection '
+                    'values (environment values, when set, take precedence); no directory is ever scanned.'}
+
+
+def round_connection(selection=None, environ=None):
+    """Connection values: runtime environment first, then the explicit selection."""
+    config = windows_config(environ)
+    stored = (selection or {}).get('connection') or {}
+    for key in ('host', 'host_key_alias', 'windows_root', 'python'):
+        if not config.get(key):
+            config[key] = str(stored.get(key) or '').strip()
+    return config
+
+
+def select_preparation(prepare_root, selection_path=None, environ=None):
+    """Explicitly select one existing preparation for the official run.
+
+    Validated against the current working tree with the same strict kit/human
+    checks the aggregate gate uses; a refused selection writes nothing.
+    """
+    prepare_root = Path(prepare_root).expanduser().resolve()
+    report_path = prepare_root / 'prepare_report.json'
+    if not report_path.is_file():
+        return None, [f'the preparation is missing its prepare_report.json: {display_path(report_path)}']
+    try:
+        report = read_json(report_path)
+    except (OSError, ValueError) as error:
+        return None, [f'the preparation report is unreadable ({type(error).__name__})']
+    build = report.get('build') or {}
+    problems = []
+    if report.get('verdict') != 'ok':
+        problems.append('the preparation did not finish ok')
+    if build.get('program_source_digest') != program_source_digest():
+        problems.append('the preparation was frozen from different program sources (stale preparation)')
+    problems += verify_kit_strict(prepare_root / 'kit', expected_source_digest=program_source_digest(),
+                                  expected_program_sha256=build.get('program_sha256'),
+                                  expected_source_inputs=program_source_inputs())
+    problems += verify_human_strict(prepare_root / 'human', expected_source_digest=program_source_digest())
+    accounts = prepare_root / 'private' / 'runtime_accounts.json'
+    if not accounts.is_file():
+        problems.append(f'the preparation has no private accounts file: {display_path(accounts)}')
+    if problems:
+        return None, problems
+    document = selection_from_preparation(prepare_root, build, accounts, environ=environ)
+    write_round_selection(document, selection_path)
+    return document, []
 
 
 PROGRAM_PACKAGER_FILES = ('tools/build.py', 'tools/package_build.py', 'tools/windows_template.py')
@@ -1049,6 +1191,7 @@ class KitBuilder:
         self._prepare_member()
         self._record_admissions()
         self._record_platform_negatives()
+        self._prepare_alternate()
         self._write_kit_documents()
         self._write_private_artifacts()
         self._write_human_package()
@@ -1180,13 +1323,18 @@ class KitBuilder:
                                         ('public_summary', 'R11 合成 Windows 原生研究'),
                                         ('public_duration', '约 5 分钟'),
                                         ('public_device_requirements', 'Windows x64 桌面')])
+        self._select_current(study_id, release_id, mode)
+
+    def _select_current(self, study_id, release_id, label):
+        """Select the current release without rewriting an unchanged publication."""
         revision = self.instance.db_rows('select revision from core_study where id=?',
                                          [study_id.replace('-', '')])[0][0]
         self.study_operation(study_id, [('op', 'current_release'), ('study_revision', str(revision)),
                                         ('release_id', release_id)])
         current = self.instance.db_rows('select current_release_id from core_study where id=?',
                                         [study_id.replace('-', '')])[0][0]
-        self.require(_uuid_text(current) == release_id, f'{mode}：真实发行设为当前发行', {'release_id': release_id})
+        self.require(_uuid_text(current) == release_id, f'{label}：真实发行设为当前发行',
+                     {'release_id': release_id})
 
     def _download_release(self, label, mode, study_id, release_id, build_id, record):
         target = self.kit / 'delivery' / label
@@ -1425,6 +1573,41 @@ class KitBuilder:
         status, _, _ = self.http.get(f"/releases/{info['release_id']}/artifact")
         self.require(status == 200, 'WN06：具备授权的账号仍可下载（对照）', {'status': status})
 
+    def _prepare_alternate(self):
+        """A second, newer release for the password study (WN06 old-release input).
+
+        The already-downloaded password release stays the "old release"; this
+        second approval of the same frozen build becomes the study's current
+        release, so the device run can prove that a frozen old release still
+        admits, uploads and completes once it is no longer current. The extra
+        package is downloaded through the real authorized endpoint again and
+        recorded in the kit runtime; a preparation still never claims a run.
+        """
+        old = self.releases['password']
+        study_id = old['study_id']
+        build = self.instance.build_record(study_id)
+        self.study_operation(study_id, [('op', 'approve'), ('build_id', build['id'])])
+        row = self.instance.db_rows(
+            'select id from core_release where study_id=? order by rowid desc limit 1',
+            [study_id.replace('-', '')])
+        if not row:
+            raise KitError('the alternate release row is missing after approval')
+        release_id = _uuid_text(row[0][0])
+        if release_id == old['release_id']:
+            raise KitError('the alternate approval produced the same release id as the old release')
+        record = self.instance.release_record(release_id)
+        self.require(record['approved'] and record['digest'] and record['path'],
+                     'password-alternate：平台冻结并批准第二个发行',
+                     {'release_id': release_id, 'digest': record['digest']})
+        self._select_current(study_id, release_id, 'password-alternate')
+        _manifest, info = self._download_release('password-alternate', 'password', study_id,
+                                                 release_id, build['id'], record)
+        self.alternates['password'] = {
+            'release_id': release_id, 'study_id': study_id, 'build_id': build['id'],
+            'package_sha256': info['package_sha256'], 'package_size': info['package_size'],
+            'config_member': info.get('config_member'), 'entry': info.get('entry')}
+        self.runtime['alternates'] = {'password': dict(self.alternates['password'])}
+
     def _write_kit_documents(self):
         lines = ['# GEP Windows x64 交付 kit（合成，真实平台发行，R11 新冻结）', '',
                  f'- kit 格式：{KIT_VERSION}',
@@ -1436,6 +1619,10 @@ class KitBuilder:
         for mode, info in sorted(self.releases.items()):
             lines.append(f'- `{info["delivery"]}`：{MODE_LABELS[mode]}（release {info["release_id"]}，'
                          f'sha256 {info["artifact_sha256"][:16]}…）')
+        alternate = self.alternates.get('password') or {}
+        if alternate:
+            lines.append(f'- `delivery/password-alternate/gep-{alternate["release_id"]}.zip`：'
+                         '第二个（较新）发行，仅作 WN06 旧发行兼容输入，不是参与模式。')
         lines += ['', '## 边界', '',
                   '- `integrity.json` 只是 kit 成员哈希清单（传输完整性），**不是签名**，也不代表代码签名。',
                   '- kit 内没有账号、口令、令牌或恢复证明；可用测试账号在私有产物中，不随测试者包分发。',
@@ -1501,7 +1688,12 @@ class KitBuilder:
         digest is recorded here and in the kit release record.
         """
         delivery = self.human / 'delivery'
-        shutil.copytree(self.kit / 'delivery', delivery)
+        delivery.mkdir(parents=True, exist_ok=True)
+        # The tester package carries the three participation modes only; the
+        # password-alternate package is an old-release compatibility input for
+        # the engineering run (inside the kit), never a tester-facing mode.
+        for mode in MODES:
+            shutil.copytree(self.kit / 'delivery' / mode, delivery / mode)
         digests = {}
         for path in sorted(delivery.rglob('*')):
             if path.is_file():
@@ -1642,7 +1834,14 @@ def prepare(evidence_root=None, quiet=False):
             raise KitError('the frozen kit/human manifest self-check failed: ' + '; '.join(strict_problems[:3]))
         record(True, '严格冻结包自检：成员集合、摘要/大小、程序/源码/输入绑定与安全路径全部通过',
                {'kit_members': len(sidecar['members']), 'source_inputs': len(build['program_source_inputs'])})
-        report.update({'verdict': 'ok', 'build': build, 'summary': summary,
+        # The explicit this-round selection: --verify (official command) reads
+        # exactly these paths and connection values; a successful preparation is
+        # never itself a run result (windows_verified stays false).
+        selection_path = write_round_selection(selection_from_preparation(
+            root, build, root / 'private' / 'runtime_accounts.json'))
+        record(True, '本轮实机选择配置已显式写入（项目忽略目录，不自动授权实机通过）',
+               display_path(selection_path))
+        report.update({'selection': str(selection_path), 'verdict': 'ok', 'build': build, 'summary': summary,
                        'integrity': {'members': len(sidecar['members']),
                                      'program_sha256': sidecar['program_sha256'],
                                      'program_source_digest': sidecar['program_source_digest'],
@@ -1678,6 +1877,16 @@ def _ssh_options(config):
     return options
 
 
+def ps_literal(value):
+    """One PowerShell single-quoted string literal: embedded quotes are doubled.
+
+    Every remote path/argument is interpolated through this helper, so a value
+    containing a quote (or any other character PowerShell would interpret)
+    stays data and can never add a second command.
+    """
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 def _powershell(script):
     encoded = base64.b64encode(script.encode('utf-16-le')).decode('ascii')
     return 'powershell -NoProfile -NonInteractive -EncodedCommand ' + encoded
@@ -1688,8 +1897,121 @@ def _ssh_run(config, script, timeout):
     return subprocess.run(command, capture_output=True, text=True, timeout=timeout)
 
 
+# The remote scripts are built here (not inline) so the exact hardening is
+# testable: no ``-Force``, no rewriting of an existing root, fail-closed error
+# preference and the child exit code propagated through ``exit``.
+def remote_root_script(remote_root):
+    """Create one brand-new remote run root; an existing one is a refusal."""
+    return ("$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';"
+            f"if(Test-Path -LiteralPath {ps_literal(remote_root)})"
+            "{Write-Output 'GEP_REMOTE_ROOT_EXISTS'; exit 17};"
+            f"New-Item -ItemType Directory -Path {ps_literal(remote_root)} | Out-Null;"
+            "exit 0")
+
+
+def remote_evidence_name(root):
+    """Bind the Windows run directory to the unique local evidence round.
+
+    The aggregate gate uses a fixed child name (``windows-runtime``) under a
+    unique parent. Sending only that child to Windows would collide with the
+    previous preserved run, so include both safe components.
+    """
+    root = Path(root)
+    parts = (root.parent.name, root.name)
+    if any(not re.fullmatch(r'[A-Za-z0-9._-]+', part) for part in parts):
+        raise KitError('the local evidence root has an unsafe Windows run name')
+    return '-'.join(parts)
+
+
+def remote_expand_script(remote_zip, remote_root, remote_run):
+    """Expand the transferred bundle without overwriting anything present."""
+    return ("$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';"
+            f"Expand-Archive -LiteralPath {ps_literal(remote_zip)} -DestinationPath {ps_literal(remote_root)};"
+            f"if(-not (Test-Path -LiteralPath {ps_literal(remote_run)}))"
+            f"{{New-Item -ItemType Directory -Path {ps_literal(remote_run)} | Out-Null}};"
+            "exit 0")
+
+
+def remote_harness_script(python, harness, kit, runtime, accounts, run_root, json_out):
+    """Run the kit's own harness on the device and propagate its exit code."""
+    return ("$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';"
+            f"& {ps_literal(python)} {ps_literal(harness)} --run --kit {ps_literal(kit)} "
+            f"--runtime {ps_literal(runtime)} --accounts {ps_literal(accounts)} "
+            f"--run-root {ps_literal(run_root)} --json-out {ps_literal(json_out)};"
+            "$code=$LASTEXITCODE; Write-Output ('GEP_HARNESS_EXIT=' + $code); exit $code")
+
+
+def remote_compress_script(remote_run, remote_zip):
+    """Zip this run's evidence; a pre-existing archive is a refusal."""
+    return ("$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';"
+            f"if(Test-Path -LiteralPath {ps_literal(remote_zip)}){{exit 18}};"
+            f"Compress-Archive -Path {ps_literal(remote_run + chr(92) + '*')} "
+            f"-DestinationPath {ps_literal(remote_zip)};"
+            "exit 0")
+
+
+def scp_remote_path(remote):
+    """The remote scp argument for one Windows path.
+
+    The local scp client treats a backslash in the remote path as an escape
+    (a download of ``C:\\a\\b`` really asks for ``C:\\\\a\\\\b``), so every
+    remote path travels with forward slashes, which Windows accepts everywhere
+    the filesystem is touched. The shell is never involved on either side.
+    """
+    return str(remote).replace('\\', '/')
+
+
+def unpack_windows_run_archive(archive_path, target):
+    """Extract a Windows-made run ZIP whose member names use backslashes.
+
+    ``Compress-Archive`` records member names like ``evidence\\WN01\\out.json``;
+    on POSIX every backslash is a literal character of one flat file name, so
+    the fetched evidence would never resolve at the paths the raw harness
+    document records. Every member is re-normalised to ``/`` and written under
+    ``target`` with its exact bytes; an empty archive, a path traversal, an
+    absolute or drive-qualified member and a symlink member are refusals before
+    any member is written. Returns the number of written files.
+    """
+    archive_path = Path(archive_path)
+    target = Path(target)
+    with zipfile.ZipFile(archive_path) as archive:
+        members = []
+        file_names = set()
+        for info in archive.infolist():
+            name = info.filename.replace('\\', '/')
+            parts = [part for part in name.split('/') if part not in ('', '.')]
+            if (not parts or name.startswith('/') or any(part == '..' for part in parts)
+                    or ':' in parts[0]):
+                raise KitError(f'the fetched run archive contains an unsafe member: {info.filename!r}')
+            if stat.S_ISLNK(info.external_attr >> 16):
+                raise KitError(f'the fetched run archive contains a symbolic link: {info.filename!r}')
+            if name.endswith('/'):
+                continue
+            normalized = '/'.join(parts)
+            if normalized in file_names:
+                raise KitError(f'the fetched run archive repeats a member: {info.filename!r}')
+            file_names.add(normalized)
+            members.append((info, parts))
+        if not members:
+            raise KitError('the fetched run archive contains no files')
+        for normalized in file_names:
+            parts = normalized.split('/')
+            if any('/'.join(parts[:index]) in file_names for index in range(1, len(parts))):
+                raise KitError(f'the fetched run archive has a file/directory collision: {normalized!r}')
+        if target.is_symlink():
+            raise KitError(f'the fetched run target is a symbolic link: {target}')
+        target.mkdir(parents=True, exist_ok=True)
+        for info, parts in members:
+            destination = target.joinpath(*parts)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(info) as source, destination.open('wb') as handle:
+                shutil.copyfileobj(source, handle)
+    return len(members)
+
+
 def _scp_copy(config, local, remote, to_remote, timeout=3600):
     command = ['scp', *_ssh_options(config)]
+    remote = scp_remote_path(remote)
     if to_remote:
         command += [str(local), f"{config['host']}:{remote}"]
     else:
@@ -2134,39 +2456,37 @@ def _run_kit_over_ssh(config, kit_root, runtime_path, accounts_path, run_root, e
     remote_run = f'{remote_root}\\run'
     remote_zip = f'{remote_root}\\bundle.zip'
     remote_run_zip = f'{remote_root}\\run.zip'
-    python = (os.environ.get(WINDOWS_PYTHON_ENV) or 'python').strip() or 'python'
+    python = (config.get('python') or 'python').strip() or 'python'
     instance.start()
     tunnel = None
     try:
         tunnel, listen_port = start_reverse_tunnel(config, runtime)
-        prepared = _ssh_run(config, f"New-Item -ItemType Directory -Force -Path '{remote_root}' | Out-Null; "
-                                    f"exit 0", 120)
+        prepared = _ssh_run(config, remote_root_script(remote_root), 120)
         if prepared.returncode != 0:
-            raise KitError(f'the remote run root could not be created (exit {prepared.returncode})')
+            output = ((prepared.stderr or '') + (prepared.stdout or '')).strip()
+            detail = ('the selected remote run directory already exists and was preserved'
+                      if 'GEP_REMOTE_ROOT_EXISTS' in output else output[-300:])
+            raise KitError(f'the remote run root could not be created brand-new (exit {prepared.returncode}): '
+                           f'{detail}')
         upload = _scp_copy(config, bundle, remote_zip, to_remote=True)
         if upload.returncode != 0:
             raise KitError(f'the kit transfer to Windows failed (exit {upload.returncode}): '
                            f'{(upload.stderr or "")[-300:].strip()}')
-        expanded = _ssh_run(
-            config, f"Expand-Archive -LiteralPath '{remote_zip}' -DestinationPath '{remote_root}' -Force; "
-                    f"New-Item -ItemType Directory -Force -Path '{remote_run}' | Out-Null; exit 0", 900)
+        expanded = _ssh_run(config, remote_expand_script(remote_zip, remote_root, remote_run), 900)
         if expanded.returncode != 0:
             raise KitError(f'the kit could not be expanded on Windows (exit {expanded.returncode}): '
                            f'{(expanded.stderr or "")[-300:].strip()}')
         harness = f'{remote_kit}\\operator\\harness\\windows_native_harness.py'
-        command = (f"& '{python}' '{harness}' --run --kit '{remote_kit}' "
-                   f"--runtime '{remote_kit}\\operator\\runtime.json' --accounts '{remote_private}' "
-                   f"--run-root '{remote_run}' --json-out '{remote_run}\\run.json'; exit $LASTEXITCODE")
+        command = remote_harness_script(python, harness, remote_kit, f'{remote_kit}\\operator\\runtime.json',
+                                        remote_private, remote_run, f'{remote_run}\\run.json')
         result = _ssh_run(config, command, 7200)
         (run_root / 'remote_harness.log').write_text(result.stdout + '\n' + result.stderr, encoding='utf-8')
-        fetched = _ssh_run(config, f"Compress-Archive -Path '{remote_run}\\*' "
-                                   f"-DestinationPath '{remote_run_zip}' -Force; exit 0", 900)
+        fetched = _ssh_run(config, remote_compress_script(remote_run, remote_run_zip), 900)
         if fetched.returncode == 0:
             download = _scp_copy(config, run_root / 'remote-run.zip', remote_run_zip, to_remote=False)
             if download.returncode == 0 and (run_root / 'remote-run.zip').is_file():
                 target = run_root / 'remote'
-                target.mkdir(exist_ok=True)
-                shutil.unpack_archive(str(run_root / 'remote-run.zip'), str(target))
+                unpack_windows_run_archive(run_root / 'remote-run.zip', target)
         document = None
         remote_document = run_root / 'remote' / 'run.json'
         if remote_document.is_file():
@@ -2188,7 +2508,7 @@ def _run_kit_over_ssh(config, kit_root, runtime_path, accounts_path, run_root, e
         instance.stop()
 
 
-def verify_kit(kit_root, run_root=None, evidence_root=None, accounts_path=None):
+def verify_kit(kit_root, run_root=None, evidence_root=None, accounts_path=None, config=None):
     """Run the prepared kit on the real Windows x64 host and gate WN01-WN06.
 
     On Windows the harness runs directly. On the preparation host the command is
@@ -2200,8 +2520,12 @@ def verify_kit(kit_root, run_root=None, evidence_root=None, accounts_path=None):
     bound artifacts. A local command, a cross-compile or a missing Windows
     connection configuration is refused with a non-zero code and an exact
     reason; nothing here ever fabricates a device result from ``sys.platform``.
+
+    ``config`` is the resolved connection (the CLI passes the explicit selection
+    merged with the environment); when omitted the environment alone decides, so
+    direct calls keep the strict no-selection behaviour.
     """
-    config = windows_config()
+    config = windows_config() if config is None else config
     kit_root = Path(kit_root).resolve() if kit_root else None
     if kit_root is None or not kit_root.is_dir():
         print('--verify needs --kit-root: the prepared kit directory (gep-windows-kit/v2)',
@@ -2258,7 +2582,7 @@ def verify_kit(kit_root, run_root=None, evidence_root=None, accounts_path=None):
             return 2, report
         try:
             exit_code, document, harness_path = _run_kit_over_ssh(config, kit_root, runtime_path, accounts_path,
-                                                                  run_root, root.name)
+                                                                  run_root, remote_evidence_name(root))
         except (KitError, OSError, subprocess.SubprocessError, ValueError) as error:
             report['problems'] = [f'{type(error).__name__}: {error}']
             (root / 'verify_report.json').write_bytes(canonical_json(report))
@@ -2317,6 +2641,8 @@ def main(argv=None):
                         help='prepare the new frozen Windows kit and human-test package (preparation host)')
     parser.add_argument('--verify', action='store_true',
                         help='run the prepared kit on the real Windows x64 host and gate WN01-WN06')
+    parser.add_argument('--select', default=None, metavar='PREPARE_ROOT',
+                        help='explicitly select an existing preparation for the official run')
     parser.add_argument('--kit-root', default=None, help='prepared kit directory (--verify)')
     parser.add_argument('--accounts', default=None,
                         help='private runtime_accounts.json outside the kit (--verify)')
@@ -2324,22 +2650,52 @@ def main(argv=None):
     parser.add_argument('--evidence-root', default=None,
                         help='brand-new unique evidence root inside the project; defaults to the dedicated base')
     args = parser.parse_args(argv)
-    if args.prepare and args.verify:
-        parser.error('choose exactly one of --prepare or --verify')
+    if sum(bool(flag) for flag in (args.prepare, args.verify, args.select)) != 1:
+        parser.error('choose exactly one of --prepare, --select or --verify')
     if args.prepare:
         try:
             code, _ = prepare(args.evidence_root)
         except KitError as error:
             print(f'WINDOWS PREPARE REFUSED :: {error}', file=sys.stderr, flush=True)
-            print(json.dumps({'task': 'p03r11a-windows-prepare', 'verdict': 'refused', 'ok': False,
+            print(json.dumps({'task': 'p03r11w-windows-prepare', 'verdict': 'refused', 'ok': False,
                               'error': f'{type(error).__name__}: {error}',
                               'requested_evidence_root': args.evidence_root}, ensure_ascii=False))
             return 2
         return code
-    if args.verify:
-        code, _ = verify_kit(args.kit_root, args.run_root, args.evidence_root, args.accounts)
-        return code
-    parser.error('--prepare or --verify is required')
+    if args.select:
+        selection, problems = select_preparation(args.select)
+        if problems:
+            print(f'WINDOWS SELECT REFUSED :: {problems[0]}', file=sys.stderr, flush=True)
+            print(json.dumps({'task': 'p03r11w-windows-select', 'verdict': 'refused', 'ok': False,
+                              'problems': problems}, ensure_ascii=False, indent=2))
+            return 2
+        print(json.dumps({'task': 'p03r11w-windows-select', 'verdict': 'ok',
+                          'selection': str(round_selection_path()),
+                          'kit_root': selection['kit_root'], 'instance_id': selection['instance_id'],
+                          'program_sha256': selection['program_sha256']}, ensure_ascii=False, indent=2))
+        return 0
+    kit_root = args.kit_root
+    accounts = args.accounts
+    config = None
+    selection = None
+    if not kit_root:
+        selection, problems = load_round_selection()
+        if selection is None:
+            print('--verify needs --kit-root or a valid explicit round selection '
+                  f'({display_path(round_selection_path())})', file=sys.stderr, flush=True)
+            print(json.dumps({'verdict': 'refused', 'reason': 'kit_root_missing',
+                              'problems': problems}, ensure_ascii=False))
+            return 2
+        if problems:
+            print(f'WINDOWS VERIFY REFUSED :: {problems[0]}', file=sys.stderr, flush=True)
+            print(json.dumps({'verdict': 'refused', 'reason': 'selection_invalid',
+                              'problems': problems}, ensure_ascii=False, indent=2))
+            return 2
+        kit_root = selection.get('kit_root')
+        accounts = accounts or selection.get('accounts')
+        config = round_connection(selection)
+    code, _ = verify_kit(kit_root, args.run_root, args.evidence_root, accounts, config=config)
+    return code
 
 
 if __name__ == '__main__':

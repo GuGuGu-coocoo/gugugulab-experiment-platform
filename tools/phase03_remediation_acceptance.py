@@ -80,7 +80,7 @@ TOOLS = ROOT / 'tools'
 if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
-EVIDENCE_BASE = ROOT / 'local_data' / 'phase03_remediation_20260923' / 'p03r11a'
+EVIDENCE_BASE = ROOT / 'local_data' / 'phase03_remediation_20260923' / 'p03r11w'
 # This round's brand-new build root: the Web and macOS artifacts every bound
 # verifier consumes are exported/packaged from the current sources under one
 # unique subdirectory here, so the historical build/native and
@@ -129,6 +129,7 @@ BROWSER_SPECS = (
 )
 SHELL_VERIFIER = 'tools/phase03_verify_shell.py'
 PACKAGE_VERIFIER = 'tools/phase03_verify_package.py'
+SPREADSHEET_VERIFIER = 'tools/remediation_spreadsheet.py'
 STATUS_PASS = 'PASS'
 STATUS_FAIL = 'FAIL'
 STATUS_NOT_RUN = 'NOT_RUN'
@@ -317,6 +318,14 @@ SUBREQUIREMENTS = {
         ('真实 Windows x64 原生运行（外部设备）', (
             'windows_runtime:WN01', 'windows_runtime:WN02', 'windows_runtime:WN03',
             'windows_runtime:WN04', 'windows_runtime:WN05', 'windows_runtime:WN06')),
+        ('真实 Windows 电子表格查看与恢复（外部设备）', (
+            'spreadsheet:real_software_version',
+            'spreadsheet:text_001_literal',
+            'spreadsheet:formula_not_evaluated',
+            'spreadsheet:newline_in_one_cell',
+            'spreadsheet:null_empty_cell',
+            'spreadsheet:large_cell_intact',
+            'spreadsheet:prefix_recovery')),
     )),
     'T30': ('Dashboard/模块导航/搜索筛选分页，三主题两语言、键盘与对比度；不同账号控件与服务端权限一致；portal 实测', (
         ('Dashboard、模块导航、搜索/筛选/分页', (
@@ -528,7 +537,7 @@ SUBREQUIREMENTS = {
             'shell:native second writer is refused')),
     )),
 }
-EXTERNAL_SELECTOR_PREFIXES = ('windows_runtime:', 'windows_preparation:')
+EXTERNAL_SELECTOR_PREFIXES = ('windows_runtime:', 'windows_preparation:', 'spreadsheet:')
 
 # The new test module that owns the R11A tool/route boundary contracts; it is
 # part of the remediation suite and is additionally named here so a deleted or
@@ -555,6 +564,17 @@ REQUIRED_NEW_TESTS = (
     'tests/remediation/test_p03r11ar.py::test_binding_entry_points_refuse_ancestor_links_with_canary',
     'tests/remediation/test_p03r11ar.py::test_kit_manifest_refuses_parent_path_links_with_canary',
     'tests/remediation/test_p03r11ar.py::test_unpacked_runtime_members_must_match_the_bound_archive',
+    # P03R11W: the explicit round selection, the hardened remote PowerShell
+    # contract, the real-viewing re-read and the aggregate's selected-preparation
+    # binding.
+    'tests/remediation/test_p03r11w.py::test_round_selection_is_explicit_and_stale_is_refused',
+    'tests/remediation/test_p03r11w.py::test_verify_without_kit_or_selection_refuses_without_network',
+    'tests/remediation/test_p03r11w.py::test_remote_scripts_are_single_quote_safe_and_never_force',
+    'tests/remediation/test_p03r11w.py::test_selected_preparation_is_validated_exactly_not_scanned',
+    'tests/remediation/test_p03r11w.py::test_real_gate_refuses_missing_selection_even_with_matching_historical_kit',
+    'tests/remediation/test_p03r11w.py::test_windows_viewing_evidence_is_re_read_and_tampering_refused',
+    'tests/remediation/test_p03r11w.py::test_windows_viewing_refuses_without_explicit_configuration',
+    'tests/remediation/test_p03r11w.py::test_aggregate_never_substitutes_local_for_device_or_viewing',
 )
 
 
@@ -1117,8 +1137,14 @@ def run_docs_check(evidence_root):
     return report
 
 
-def windows_preparation(base=None):
-    """The newest fresh prepare report bound to the current program source.
+def windows_preparation(base=None, selection=None, kit_root=None):
+    """The explicitly selected fresh preparation, bound to the current sources.
+
+    With ``selection`` or ``kit_root`` the *selected* preparation is validated
+    and no directory is ever scanned: the aggregate gate must run the kit the
+    operator selected, never an arbitrary "newest" historical report. Only the
+    local ``--verify-local`` fact-finding path (no selection at all) may still
+    scan ``base``, and even then it never substitutes for the selected one.
 
     A preparation is never a run: ``windows_verified`` stays false here. A
     stale preparation (different program source digest) is NOT_RUN, never an
@@ -1131,31 +1157,68 @@ def windows_preparation(base=None):
 
     expected_digest = remediation_windows.program_source_digest()
     expected_inputs = remediation_windows.program_source_inputs()
-    base = Path(base) if base else ROOT / 'local_data' / 'phase03_remediation_20260923' / 'p03r11a_windows'
-    candidates = sorted(base.glob('*/prepare_report.json'))
-    newest = None
-    malformed = []
-    for path in candidates:
+    if kit_root is None and selection:
+        kit_root = selection.get('kit_root')
+    selected = bool(kit_root)
+
+    def invalid(reason, problems=None, status=STATUS_NOT_RUN):
+        entries = list(problems or [])
+        if not entries:
+            entries = [reason]
+        return {'status': status, 'reason': reason, 'problems': entries,
+                'expected_program_source_digest': expected_digest,
+                'selection': str(selection.get('kit_root')) if selection else None,
+                'windows_verified': False}
+
+    if selected:
+        root = Path(str(kit_root)).expanduser()
+        if not root.is_absolute():
+            root = ROOT / root
+        root = root.resolve().parent
+        path = root / 'prepare_report.json'
+        if not path.is_file():
+            return invalid(f'the selected preparation has no prepare_report.json: {path}')
         try:
             document = read_json(path)
         except (OSError, ValueError):
-            malformed.append(str(path))
-            continue
+            return invalid(f'the selected preparation report is unreadable: {path}', status=STATUS_FAIL)
         if not isinstance(document, dict) or document.get('verdict') != 'ok':
-            continue
+            return invalid(f'the selected preparation did not finish ok: {path}', status=STATUS_FAIL)
         if document.get('build', {}).get('program_source_digest') != expected_digest:
-            continue
-        newest = (path, document)
-    if newest is None and malformed:
-        return {'status': STATUS_FAIL, 'reason': 'a preparation report is unreadable',
-                'problems': [f'unreadable prepare report: {name}' for name in malformed[-3:]],
-                'expected_program_source_digest': expected_digest}
-    if newest is None:
-        return {'status': STATUS_NOT_RUN,
-                'reason': 'no fresh preparation bound to the current program source digest',
-                'expected_program_source_digest': expected_digest}
-    path, document = newest
-    root = path.parent
+            return invalid('the selected preparation was frozen from different program sources '
+                           '(stale selection)')
+        if selection:
+            if str(selection.get('prepare_root') or '') and \
+                    os.path.abspath(str(selection.get('prepare_root'))) != os.path.abspath(str(root)):
+                return invalid('the explicit selection does not point at this preparation root',
+                               status=STATUS_FAIL)
+            if selection.get('program_sha256') and \
+                    selection.get('program_sha256') != document.get('build', {}).get('program_sha256'):
+                return invalid('the explicit selection program digest does not match the preparation',
+                               status=STATUS_FAIL)
+    else:
+        base = Path(base) if base else ROOT / 'local_data' / 'phase03_remediation_20260923' / 'p03r11a_windows'
+        newest = None
+        malformed = []
+        for path in sorted(base.glob('*/prepare_report.json')):
+            try:
+                document = read_json(path)
+            except (OSError, ValueError):
+                malformed.append(str(path))
+                continue
+            if not isinstance(document, dict) or document.get('verdict') != 'ok':
+                continue
+            if document.get('build', {}).get('program_source_digest') != expected_digest:
+                continue
+            newest = (path, document)
+        if newest is None and malformed:
+            return invalid('a preparation report is unreadable',
+                           [f'unreadable prepare report: {name}' for name in malformed[-3:]],
+                           status=STATUS_FAIL)
+        if newest is None:
+            return invalid('no fresh preparation bound to the current program source digest')
+        path, document = newest
+        root = path.parent
     problems = remediation_windows.verify_kit_strict(
         root / 'kit', expected_source_digest=expected_digest,
         expected_program_sha256=document.get('build', {}).get('program_sha256'),
@@ -1178,6 +1241,7 @@ def windows_preparation(base=None):
     except (OSError, ValueError):
         pass
     return {'status': STATUS_FAIL if problems else STATUS_PASS,
+            'selection': 'explicit' if selected else 'local-scan',
             'prepare_root': str(root), 'prepare_report': str(path),
             'kit_root': str(root / 'kit'),
             'instance_id': kit_releases.get('instance_id') or kit_runtime.get('instance_id'),
@@ -1187,6 +1251,21 @@ def windows_preparation(base=None):
             'program_source_digest': expected_digest,
             'program_source_inputs': expected_inputs,
             'windows_verified': False, 'problems': problems}
+
+
+def selected_windows_preparation(require_windows, selection, selection_problems, windows_kit):
+    """A real-device gate needs an explicit kit or a valid round selection.
+
+    The local-only diagnostic may inspect a recent matching preparation, but a
+    mandatory Windows run must never silently pick one from the history.
+    """
+    if windows_kit:
+        return windows_preparation(kit_root=windows_kit)
+    if require_windows and (selection is None or selection_problems):
+        return {'status': STATUS_NOT_RUN, 'windows_verified': False,
+                'reason': 'the real Windows gate needs a valid explicit round selection or --windows-kit',
+                'problems': selection_problems or ['no explicit round selection']}
+    return windows_preparation(selection=selection)
 
 
 # ------------------------------------------------------------------ evaluation
@@ -1215,6 +1294,16 @@ def resolve_selector(selector, evidence):
         if outcome == 'skipped':
             return STATUS_NOT_RUN, 'the named spec was skipped'
         return STATUS_PASS, 'the named spec passed'
+    if source == 'spreadsheet':
+        spreadsheet = evidence.get('spreadsheet_windows') or {}
+        checks = spreadsheet.get('checks') or {}
+        outcome = checks.get(key)
+        if outcome is True:
+            return STATUS_PASS, 'the real Windows viewing evidence passed this check'
+        if outcome is False:
+            return STATUS_FAIL, 'the real Windows viewing evidence failed this check'
+        return spreadsheet.get('status', STATUS_NOT_RUN), \
+            spreadsheet.get('reason') or 'real Windows spreadsheet viewing evidence missing (R11W)'
     if source == 'docs':
         docs = evidence.get('docs') or {}
         if key == 'human_testing_wording':
@@ -1317,6 +1406,10 @@ def overall_status(matrix, steps, step_errors=None, require_windows=False):
         if steps.get('windows_runtime') != STATUS_PASS:
             return STATUS_FAIL, ('the real Windows x64 runtime is not PASS; the aggregate gate never '
                                  'substitutes the local gate: ' + str(steps.get('windows_runtime')))
+        if steps.get('spreadsheet_windows') != STATUS_PASS:
+            return STATUS_FAIL, ('the real Windows spreadsheet viewing is not PASS; the aggregate gate '
+                                 'never accepts the local file preparation as a real viewing: '
+                                 + str(steps.get('spreadsheet_windows')))
         not_passed = sorted(key for key, entry in matrix.items() if entry['status'] != STATUS_PASS)
         if local_failures or not_passed:
             return STATUS_FAIL, 'local or device failures: ' + ', '.join(sorted(set(local_failures + not_passed)))
@@ -1330,7 +1423,7 @@ def overall_status(matrix, steps, step_errors=None, require_windows=False):
                          + (f'; external classes pending: {", ".join(external_pending)}' if external_pending else ''))
 
 
-def run_windows_runtime(evidence_root, windows_kit, windows_run, preparation=None):
+def run_windows_runtime(evidence_root, windows_kit, windows_run, preparation=None, selection=None):
     """The real Windows x64 evidence: fetched run or the Mac SSH orchestration.
 
     Neither branch trusts a summary, a boolean or six case strings: the fetched
@@ -1339,6 +1432,10 @@ def run_windows_runtime(evidence_root, windows_kit, windows_run, preparation=Non
     with its bound artifacts) and the run must be bound to the same fresh
     preparation the local gate just verified. A hash-only ``PASS`` summary is an
     explicit failure, never a substituted device result.
+
+    Without an explicit ``--windows-kit`` the orchestration runs exactly the
+    preparation's kit (the explicitly selected one) and takes the connection
+    from the explicit round selection when the environment does not name one.
     """
     result = {'status': STATUS_NOT_RUN, 'cases': {}, 'reason': None, 'report': None}
     preparation = preparation or {}
@@ -1379,10 +1476,22 @@ def run_windows_runtime(evidence_root, windows_kit, windows_run, preparation=Non
                        'reason': 'complete real Windows x64 run evidence re-read and bound to the fresh '
                                  'preparation'})
         return result
+    kit_explicit = bool(windows_kit)
+    if windows_kit is None and preparation_kit and preparation.get('status') == STATUS_PASS:
+        windows_kit = preparation_kit
     if windows_kit:
         target = evidence_root / 'windows-runtime'
+        # The connection of the explicit round selection is used exactly when the
+        # run uses the selected preparation's kit; an explicitly named kit keeps
+        # the environment-only connection (its own operator's choice).
+        connect = None
+        accounts = None
+        if selection and not kit_explicit:
+            connect = remediation_windows.round_connection(selection)
+            accounts = selection.get('accounts')
         try:
-            code, report = remediation_windows.verify_kit(windows_kit, evidence_root=target)
+            code, report = remediation_windows.verify_kit(windows_kit, evidence_root=target,
+                                                          accounts_path=accounts, config=connect)
         except (OSError, ValueError, subprocess.SubprocessError) as error:
             result.update({'status': STATUS_FAIL,
                            'reason': f'the Windows orchestration failed: {type(error).__name__}: {error}'})
@@ -1419,10 +1528,75 @@ def run_windows_runtime(evidence_root, windows_kit, windows_run, preparation=Non
     return result
 
 
+def run_spreadsheet_windows(evidence_root):
+    """Execute the real-viewing gate and re-read exactly its evidence.
+
+    The tool writes its own brand-new root under ``evidence_root``; the returned
+    status is decided only by the independent re-read of the raw device result,
+    the uploaded CSV bytes and the expected-value document - never by the exit
+    code or a summary boolean alone.
+    """
+    import remediation_spreadsheet
+
+    root = evidence_root / 'spreadsheet-windows'
+    result = {'status': STATUS_NOT_RUN, 'checks': {}, 'reason': None, 'report': None}
+    command = [sys.executable, str(ROOT / SPREADSHEET_VERIFIER), '--verify-windows',
+               '--evidence-dir', str(root)]
+    log = evidence_root / 'spreadsheet-windows.log'
+    with log.open('w', encoding='utf-8') as stream:
+        stream.write('$ ' + ' '.join(command) + '\n')
+        stream.flush()
+        try:
+            process = subprocess.run(command, cwd=ROOT, stdout=stream, stderr=subprocess.STDOUT,
+                                     text=True, timeout=1800, env={**os.environ, 'GEP_T17_BROWSER': '1'})
+        except (OSError, subprocess.SubprocessError) as error:
+            result.update({'status': STATUS_FAIL,
+                           'reason': f'the spreadsheet gate could not run: {type(error).__name__}: {error}',
+                           'log': str(log)})
+            return result
+        return_code = process.returncode
+    problems, document = remediation_spreadsheet.validate_spreadsheet_windows_evidence(root)
+    if return_code != 0 and not problems:
+        problems = [f'the spreadsheet gate exited {return_code} while its evidence looked complete']
+    device_checks = (document or {}).get('device_checks') or {}
+    observed = (document or {}).get('device_observed') or {}
+    result['checks'] = {
+        'real_software_version': bool(str((document or {}).get('excel_version') or '')),
+        'text_001_literal': device_checks.get('text_001_literal') is True,
+        'formula_not_evaluated': device_checks.get('text_formula_literal') is True
+                                 and device_checks.get('no_formula_cells') is True,
+        'newline_in_one_cell': device_checks.get('study_title_newline') is True,
+        'null_empty_cell': device_checks.get('null_code_empty') is True,
+        'large_cell_intact': device_checks.get('record_json_length') is True
+                             and device_checks.get('payload_blob_chars') is True,
+        'prefix_recovery': observed.get('recovered_001') == '001'
+                           and observed.get('recovered_formula') == '=1+1',
+    }
+    result['excel_version'] = (document or {}).get('excel_version')
+    result['report'] = str(root / 'spreadsheet_windows.json')
+    result['log'] = str(log)
+    if problems:
+        result.update({'status': STATUS_FAIL,
+                       'reason': 'the real viewing evidence is not complete and bound: '
+                                 + '; '.join(problems[:4]),
+                       'problems': problems})
+    else:
+        result.update({'status': STATUS_PASS,
+                       'reason': 'real Windows spreadsheet viewing re-read and bound to this round\'s bytes'})
+    return result
+
+
 def verify_local(evidence_root=None, require_windows=False, windows_kit=None, windows_run=None):
     root = guard_evidence_root(evidence_root) if evidence_root else new_unique_root(EVIDENCE_BASE)
     print(f'evidence root: {root}', flush=True)
     env = {**os.environ, 'GEP_T17_BROWSER': '1'}
+    import remediation_windows as remediation_windows_module
+    selection, selection_problems = remediation_windows_module.load_round_selection()
+    if selection is None:
+        print(f'round selection: NOT SELECTED :: {(selection_problems or [""])[0]}', flush=True)
+    else:
+        print(f'round selection: {remediation_windows_module.display_path(remediation_windows_module.round_selection_path())}',
+              flush=True)
 
     def runner(command, log, timeout, env=None):
         log = Path(log)
@@ -1518,7 +1692,8 @@ def verify_local(evidence_root=None, require_windows=False, windows_kit=None, wi
     print(f"docs step: {steps['docs']}", flush=True)
 
     try:
-        evidence['windows_preparation'] = windows_preparation()
+        evidence['windows_preparation'] = selected_windows_preparation(
+            require_windows, selection, selection_problems, windows_kit)
     except (ImportError, OSError, ValueError) as error:
         evidence['windows_preparation'] = {'status': STATUS_FAIL,
                                            'reason': f'{type(error).__name__}: {error}'}
@@ -1527,17 +1702,29 @@ def verify_local(evidence_root=None, require_windows=False, windows_kit=None, wi
     if require_windows:
         try:
             evidence['windows_runtime'] = run_windows_runtime(root, windows_kit, windows_run,
-                                                             preparation=evidence.get('windows_preparation'))
+                                                             preparation=evidence.get('windows_preparation'),
+                                                             selection=selection)
         except (ImportError, OSError, ValueError) as error:
             evidence['windows_runtime'] = {'status': STATUS_FAIL, 'cases': {},
                                            'reason': f'{type(error).__name__}: {error}'}
         steps['windows_runtime'] = evidence['windows_runtime']['status']
         print(f"windows runtime: {steps['windows_runtime']} "
               f":: {evidence['windows_runtime'].get('reason')}", flush=True)
+        try:
+            evidence['spreadsheet_windows'] = run_spreadsheet_windows(root)
+        except (ImportError, OSError, ValueError) as error:
+            evidence['spreadsheet_windows'] = {'status': STATUS_FAIL, 'checks': {},
+                                               'reason': f'{type(error).__name__}: {error}'}
+        steps['spreadsheet_windows'] = evidence['spreadsheet_windows']['status']
+        print(f"spreadsheet windows: {steps['spreadsheet_windows']} "
+              f":: {evidence['spreadsheet_windows'].get('reason')}", flush=True)
     else:
         evidence['windows_runtime'] = {'status': STATUS_NOT_RUN, 'cases': {},
                                        'reason': 'external Windows x64 runtime; R11W owns the real run'}
         steps['windows_runtime'] = STATUS_NOT_RUN
+        evidence['spreadsheet_windows'] = {'status': STATUS_NOT_RUN, 'checks': {},
+                                           'reason': 'external Windows real viewing; R11W owns the real run'}
+        steps['spreadsheet_windows'] = STATUS_NOT_RUN
 
     missing_new = [node for node in REQUIRED_NEW_TESTS
                    if selector_outcome('pytest:' + node, evidence['remediation']['nodes'])[0] != STATUS_PASS]
@@ -1565,6 +1752,9 @@ def verify_local(evidence_root=None, require_windows=False, windows_kit=None, wi
                 'docs': evidence['docs'],
                 'windows_preparation': evidence['windows_preparation'],
                 'windows_runtime': evidence['windows_runtime'],
+                'spreadsheet_windows': evidence['spreadsheet_windows'],
+                'selection': {'path': str(remediation_windows_module.round_selection_path()),
+                              'used': selection is not None},
                 'windows_verified': evidence['windows_runtime'].get('status') == STATUS_PASS,
                 'human_testing': 'NOT_RUN: the human round is recorded by people, never by this tool',
                 'run_at': datetime.now(timezone.utc).isoformat()}
