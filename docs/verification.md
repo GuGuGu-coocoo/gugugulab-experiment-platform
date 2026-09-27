@@ -1,6 +1,6 @@
 # 合成工程验收记录
 
-更新：2026-09-23。全部使用隔离合成数据。Phase 01、02 的有限工程门槛通过；Phase 03 工程回归与 Windows x64 实机工程门槛于 2026-09-21 通过，**2026-09-21 已进行非开发者人工测试并形成修复反馈；修复后的完整回归与新一轮人工测试尚未进行**。真实研究尚未启用。
+更新：2026-09-27。全部使用隔离合成数据。Phase 01、02 的有限工程门槛通过；2026-09-21 的非开发者人工测试形成修复反馈。**修复后的新冻结包、本机完整回归、Windows x64 原生与 Excel 实机工程门槛现已通过；新一轮人工测试尚未运行，Phase 03 未完成。**真实研究尚未启用。
 
 ## 实际环境
 
@@ -270,3 +270,22 @@ R11AR 修复关键复核发现的证据链缺陷并复验；未运行真实 Wind
 - **真实命令与结果**：`GEP_T17_BROWSER=1 .venv/bin/pytest -q tests/remediation/test_p03r11a.py tests/remediation/test_p03r11ar.py` → 退出 0、**30 passed**（新增 9 项负向）；`.venv/bin/python tools/phase03_remediation_acceptance.py --verify-local` → 退出 0、`verdict=PASS`（源码摘要 `9362b2a0…` 前后一致、输入 33 项；Web/macOS 产物每轮重新导出，摘要见该轮 `artifact_binding.json`：boundary、shell **133 项检查 0 失败**、package **112 项检查 0 失败**、browser 6 规格 **20 用例 0 失败**、`tests/remediation` **262 通过 / 0 失败 / 0 跳过**、受影响旧套件 **438 通过 / 0 失败 / 0 跳过**、docs 与 Windows 准备全部 PASS；仅 T20/T29 外部 WN01–WN06 为 `NOT_RUN`。本轮 gate 复跑均退出 0，本文结论对每次复跑一致；示例证据根 `local_data/phase03_remediation_20260923/p03r11a/20260924T051324Z-633f99d8`（构建根 `build/phase03_remediation_20260923/20260924T051324Z-e8f91a82`），各次运行的证据根、构建根与产物摘要见其目录与内部报告，先前证据保留不覆盖）；`.venv/bin/python tools/remediation_windows.py --prepare` → 退出 0、`windows_verified: false`（最新证据根 `local_data/phase03_remediation_20260923/p03r11a_windows/20260924T052550Z-20e9e908`、构建根 `build/phase03_remediation_20260923/20260924T052550Z-c73f653d`、`program_sha256=dd0355f4…`、源码摘要 `9362b2a0…`、输入 33 项；同源码的首次准备 `.../20260924T051226Z-25030b78`（`d4656626…`）保留不覆盖）。
 
 边界：以上为本机合成工程证据；真实 Windows x64（WN01–WN06）、新旧 Windows 包联测与人工测试仍未运行，工具不产生人的 PASS；Phase 03 未完成；旧失败现场与本轮前证据保留不清理。
+
+## R11W 真实 Windows x64 回归、实机电子表格查看与总门槛（2026-09-24）
+
+R11W 在真实 Windows x64 主机上完成新冻结 Windows 包的 WN01–WN06 运行与 Excel 实机查看，并在同一总门槛中复跑全部本机与设备证据；人的测试仍未运行（T17 保留编号，帮助/失败/未运行分别记录，工具不产生人的 PASS）。本轮使用显式持久的本轮选择（项目忽略目录；裸 `--verify` 读取，环境变量仍优先），不继承任何旧版实机结果。
+
+- `GEP_T17_BROWSER=1 .venv/bin/pytest -q tests/remediation/test_p03r11w.py` → 退出 0，**9 passed**（显式选择与陈旧拒绝、远程单引号/`$ErrorActionPreference`/失败退出码/拒绝覆盖既有根契约、抓取归档反斜杠成员的安全解包、真实查看证据重读、总门槛不替换本机或实机证据）。
+- `.venv/bin/python tools/remediation_windows.py --verify` → 退出 0，`verdict=ok`、`windows_verified=true`，WN01–WN06 全部 PASS、无证据问题；设备 `Microsoft Windows 11 Pro 10.0.26200`、AMD64、交互控制台会话 2；harness **241 项检查 0 失败**（WN01 12 / WN02 80 / WN03 36 / WN04 74 / WN05 19 / WN06 20）；新冻结程序摘要 `89f64dd6…`、源码摘要 `9362b2a0…`（输入 33 项）、kit 成员 24。WN01 含真实 junction/重解析点实测（`mklink /J`；经 junction 的写出目标在创建前被拒绝；目标外 canary 字节不变；删除链接不影响目标）。证据根 `local_data/phase03_remediation_20260923/p03r11w/20260924T084737Z-e3281bb8`（准备/构建根 `local_data/.../20260924T084615Z-2b6e934e`、`build/.../20260924T084615Z-d5dbe661`）。
+- `.venv/bin/python tools/remediation_spreadsheet.py --verify-windows` → 退出 0、`status=PASS`、`windows_verified=true`；真实电子表格软件 **Excel 16.0（build 17932）** 在交互控制台会话中导入 `participants.csv`/`events.csv`：`text:001` 与 `text:=1+1` 原样保留而非公式、标题内换行留在同一单元格、名单码 null 为空单元格、接近单元格上限的 JSON 单元格（30343 字符、payload 30000 字符）完整、`text:`/`json:` 前缀按规则恢复；证据根 `local_data/phase03_remediation_20260923/p03r11w/20260924T085721Z-56574ee5`。
+- `.venv/bin/python tools/phase03_remediation_acceptance.py --verify` → 退出 0、`verdict=PASS`、`windows_verified=true`、`failed_requirements=[]`（工程项无 NOT_RUN）：artifacts/boundary/shell（**133 项检查 0 失败**）/package（**112 项检查 0 失败**）/browser（6 规格 **20 用例 0 失败**）/`tests/remediation`（**271 通过 0 失败 0 跳过**）/受影响旧套件（**438 通过 0 失败 0 跳过**）/docs/Windows 准备/真实 Windows 运行/实机查看全部 PASS；同一门槛内再次真实运行 WN01–WN06 与 Excel 查看并重读绑定。证据根 `local_data/phase03_remediation_20260923/p03r11w/20260924T085751Z-9924f306`。
+
+本轮实现与修复：抓取运行归档的 Windows 反斜杠成员名在 POSIX 会被当成单层文件名，现逐成员规范化解包并拒绝穿越/绝对/链接名（修复前首次运行六个用例已 PASS 但证据无法核对，失败现场保留不清理）；harness 对刚创建文件的一过性 Windows 共享冲突改为同一有界等待内重试、未预期异常记录真实 traceback；显式本轮选择在重新 prepare/select 时保留已选连接值（环境仍优先），避免裸 `--verify` 因连接丢失拒绝。
+
+边界：以上为合成工程证据与设备证据；人的测试仍为 `NOT_RUN`，工程与工具结果不替代人的结论；Phase 03 仍未完成，Phase 04（含 LAN 真实部署）、真实数据与真实被试未授权。
+
+## 2026-09-27 Codex 复核与新冻结包
+
+在 R11W 结果上复核并修正三个验收工具边界：Windows 证据 ZIP 先检查全部成员再解包，拒绝重复规范化路径与文件/目录冲突；原生 harness 在删除既有提取目录前拒绝重解析点边界；正式总门槛缺少有效本轮选择和显式 kit 时不从历史目录猜选。Excel 计划任务不覆盖已有同名任务。首次总门槛本机 273 项修复回归、438 项旧回归及 Excel 实机均通过，但 Windows 远端运行目录只取固定子目录名，撞上保留的旧证据，因此整体**失败**；失败根 `local_data/phase03_remediation_20260923/p03r11w/20260927T003656Z-31ac3d08` 保留。修复为本地唯一轮次和子目录共同命名远端目录，既有目录仍拒绝覆盖。
+
+修复后从当前源码重新准备冻结 Windows x64 程序（`program_sha256=cac82363b81fb40b96c87220b877a67dc5d6dd9c2d7408afd38a7396a26f5eb9`，源码摘要 `9362b2a0…`，33 项输入；准备根 `local_data/phase03_remediation_20260923/p03r11w/20260927T003610Z-2780f5f7`）。定向回归 **160 passed**，另新增远端唯一命名断言后 R11W 模块 **11 passed**。独立 Windows 实机 `--verify` 退出 0：WN01–WN06 全 PASS、无证据问题，原始证据根 `local_data/phase03_remediation_20260923/p03r11w/20260927T004809Z-dddd1147`。最终 `.venv/bin/python tools/phase03_remediation_acceptance.py --verify --windows-run <该新实机证据根>` 退出 0、`verdict=PASS`：shell 133、package 112、浏览器 20 用例、修复回归 **273 passed**、旧回归 **438 passed**，零失败零跳过；完整 Windows 原始证据重读、同轮新冻结准备与真实 Excel 16.0 build 17932 查看均 PASS。总证据根 `local_data/phase03_remediation_20260923/p03r11w/20260927T005813Z-26934c3b`。工具结果不产生人的 PASS；人工测试仍 `NOT_RUN`，Phase 04 与真实研究未启动。

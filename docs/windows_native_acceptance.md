@@ -26,7 +26,20 @@ P03R11AR 在 R11A 之上修复复核发现的证据链缺陷；新冻结字节�
 - 本轮新 kit：最新证据根 `local_data/phase03_remediation_20260923/p03r11a_windows/20260924T052550Z-20e9e908`，`program_sha256=dd0355f4…`、源码摘要 `9362b2a0…`、输入 33 项、`windows_verified: false`（同源码的首次准备 `.../20260924T051226Z-25030b78` 保留不覆盖）。**R11W 必须使用本轮新 kit 与新运行结果，不能继承旧 kit/旧运行。**
 - 本机 `--verify-local` 退出 0（shell 133、package 112、browser 20 用例、remediation 262、legacy 438，零失败零跳过）；T20/T29 的 WN01–WN06 仍为 `NOT_RUN`；人工测试未运行。本机 gate 在最终文档定稿后复跑一次，仍退出 0（证据根 `local_data/phase03_remediation_20260923/p03r11a/20260924T052713Z-048627e1`），产物摘要每轮重导出、以该轮 `artifact_binding.json` 为准。
 
-## 2026-09-21 P0308 真实 Windows x64 实机运行（当前状态）
+### 2026-09-24 R11W 真实 Windows x64 运行与实机查看（设备证据）
+
+P03R11W 在授权 Windows x64 主机上用显式本轮选择（项目忽略目录，裸 `--verify` 读取，环境变量优先）执行新冻结包的完整运行与 Excel 实机查看；不继承任何旧版实机结果：
+
+- `.venv/bin/python tools/remediation_windows.py --verify` → 退出 0、`windows_verified=true`，WN01–WN06 全部 PASS、harness **241 项检查 0 失败**；设备 Windows 11 Pro 10.0.26200 / AMD64 / 交互控制台会话 2；WN01 含真实 junction 重解析点实测（写入前拒绝、canary 字节不变、删除链接不影响目标）；新冻结程序摘要 `89f64dd6…`、源码摘要 `9362b2a0…`、输入 33 项。证据根 `local_data/phase03_remediation_20260923/p03r11w/20260924T084737Z-e3281bb8`。
+- `.venv/bin/python tools/remediation_spreadsheet.py --verify-windows` → 退出 0、`status=PASS`；真实 **Excel 16.0（build 17932）** 实机导入与恢复：前导零 `text:001` 与 `text:=1+1` 字面保留、单元格内换行、null 空单元格、接近上限 JSON 单元格（30343 字符）完整、前缀恢复；证据根 `.../20260924T085721Z-56574ee5`。
+- `.venv/bin/python tools/phase03_remediation_acceptance.py --verify` → 退出 0、`verdict=PASS`、`windows_verified=true`、`failed_requirements=[]`；本机矩阵（shell 133 / package 112 / browser 20 用例 / remediation 271 / legacy 438，零失败零跳过）、docs、Windows 准备与设备/查看证据在同一门槛内重读绑定；证据根 `.../20260924T085751Z-9924f306`。
+- 人工测试材料：新冻结人工包 `local_data/phase03_remediation_20260923/p03r11w/20260924T084615Z-2b6e934e/human/`（三模式交付包 + 哈希清单 + T17 记录口径，不含账号/口令/令牌；账号与连接材料单独 0600 私有存放，由操作者私下交付）。**人工测试仍为 `NOT_RUN`**；工具结果不产生人的 PASS，Phase 03 未完成。
+
+### 2026-09-27 最新冻结包复核
+
+Codex 对 R11W 工具做了归档预检、重解析点清理前拒绝与显式选择复核，再从当前程序源码生成新冻结包（程序摘要 `cac82363…`，33 项源码输入）。总门槛首次运行时远端证据名和保留的旧目录冲突，按规则判 FAIL 且旧目录未覆盖；远端目录名现绑定本地唯一轮次。新 Windows x64 实机运行 WN01–WN06 全 PASS，原始证据根 `local_data/phase03_remediation_20260923/p03r11w/20260927T004809Z-dddd1147`。最终总门槛以 `--windows-run` 显式重读该完整设备证据并再次在 Windows Excel 16.0 build 17932 导入 CSV：本机修复回归 273、旧回归 438、浏览器 20 用例、壳 133、打包 112，全部无失败或跳过，证据根 `local_data/phase03_remediation_20260923/p03r11w/20260927T005813Z-26934c3b`。新的无凭据人工包与测试账号分别存放；人工操作仍未运行，不能把上述工具 PASS 当成人工结论。
+
+## 2026-09-21 P0308 真实 Windows x64 实机运行（历史证据）
 
 2026-09-21：在真实 Windows x64 桌面上，用与准备 kit 严格绑定的**同一不可变 Windows x64 构建**（三个冻结研究/发行共用该构建；程序摘要以 `releases.json`/`artifact_manifest.json` 记录为准）完成一次完整实机工程运行。准备主机与 Windows 之间是**作用域反向 SSH 隧道**（仅公钥、严格主机密钥；不改 DNS、防火墙或证书信任），主机名、地址与端口隧道细节只保留在本机忽略目录的交接证据中，不写入公开文档。
 
