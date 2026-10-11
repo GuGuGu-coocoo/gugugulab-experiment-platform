@@ -669,7 +669,14 @@ def study_page(request,study_id,module='overview'):
           return JsonResponse({'code':code,'error':study_error_message(request,code)},status=status)
         raise
       context=study_context(request,study,notice,module)
-      context.update(error=study_error_message(request,code),error_code=code,module_error=True)
+      # A rejected descriptor or upload still leaves the builds form available
+      # for correction. Keep the dangerous deletion confirmation out of this
+      # retry path; each rendered control is still filtered by current rights.
+      retry_builds=(request.method=='POST' and module=='builds'
+                    and workbench.module_allowed(request,study,module))
+      context.update(error=study_error_message(request,code),error_code=code,
+                     module_error=not retry_builds,
+                     descriptor_draft=request.POST.get('descriptor','') if retry_builds else '')
       return render(request,'core/study.html',context,status=status)
 
 @endpoint
