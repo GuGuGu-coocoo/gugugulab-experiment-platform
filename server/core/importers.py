@@ -134,7 +134,7 @@ def _normalize_users(actor, raw):
             if not all(access.allowed_platform(actor, action) for action in required):
                 _row_error(errors, number, 'forbidden', '当前账号没有维护该目标角色的平台权限。', 'This actor lacks the platform action to manage that target role.')
                 continue
-            if not access.takeover_allowed(actor, target):
+            if operation != 'update' and not access.takeover_allowed(actor, target):
                 _row_error(errors, number, 'higher_privilege_target', '目标账号拥有操作者无法支配的研究权限。', 'The target holds study privileges this actor cannot dominate.')
                 continue
         if operation in ('disable', 'enable'):
@@ -178,12 +178,17 @@ def _normalize_users(actor, raw):
                 continue
         if version == 2:
             try:
-                after = access.with_study_override(access.canonical_policy(target), study.pk, actions)
-            except ValueError:
-                _row_error(errors, number, 'unsupported_policy_version', '账号存储的策略版本不受支持。', 'The stored policy version is not supported.')
-                continue
-            if not access.takeover_allowed(actor, target, after=after):
-                _row_error(errors, number, 'higher_privilege_target', '目标账号拥有操作者无法支配的研究权限。', 'The target holds study privileges this actor cannot dominate.')
+                current = permissions._matrix_current(version, target, study)
+                permissions._matrix_authorize(actor, target, study, current,
+                                               {action: False for action in actions})
+            except Rejected as error:
+                if error.code == 'unsupported_policy_version':
+                    message = '账号存储的策略版本不受支持。'
+                    message_en = 'The stored policy version is not supported.'
+                else:
+                    message = '包含操作者无权管理的现有或拟选动作，或目标研究超出授权范围。'
+                    message_en = 'Existing or selected actions exceed the actor\'s authority, or the study is outside their scope.'
+                _row_error(errors, number, error.code, message, message_en)
                 continue
         key = (target.pk, study.pk)
         if key in seen_study:
@@ -251,7 +256,8 @@ def _reauthorize_user_op(actor, op, version):
         required = accounts.lifecycle_platform_actions('manage',
                                                        target_role=profile.role if profile else 'user')
         require(all(access.allowed_platform(actor, action) for action in required), 'preview_stale', 403)
-        require(access.takeover_allowed(actor, target), 'preview_stale', 409)
+        if op['operation'] != 'update':
+            require(access.takeover_allowed(actor, target), 'preview_stale', 409)
     return target
 
 
@@ -330,20 +336,14 @@ def commit_users(actor, password, preview_id):
 
 def _matrix_authorize_import(actor, target_user, study, target, version=1):
     if version == 2:
-        if is_instance_owner(target_user) or target_user.pk == actor.pk:
-            return False
-        profile = permissions._profile(target_user.pk)
-        required = accounts.lifecycle_platform_actions('manage',
-                                                       target_role=profile.role if profile else 'user')
-        if not all(access.allowed_platform(actor, action) for action in required):
-            return False
-        if not set(target) <= access.assignable_actions(actor, study):
-            return False
+        # Use the same local study boundary as the GUI matrix. Other studies
+        # stay untouched; whole-account takeover still guards lifecycle rows.
         try:
-            after = access.with_study_override(access.canonical_policy(target_user), study.pk, target)
-        except ValueError:
+            current = permissions._matrix_current(version, target_user, study)
+            permissions._matrix_authorize(actor, target_user, study, current, target)
+        except Rejected:
             return False
-        return access.takeover_allowed(actor, target_user, after=after)
+        return True
     if is_instance_owner(actor):
         return not is_instance_owner(target_user) and target_user.pk != actor.pk
     return (target_user.pk != actor.pk and not is_instance_owner(target_user)
@@ -600,7 +600,8 @@ def replay_authorize(locked, row):
                 required = accounts.lifecycle_platform_actions('manage',
                                                                target_role=profile.role if profile else 'user')
                 require(all(access.allowed_platform(locked, action) for action in required), 'preview_stale', 403)
-                require(access.takeover_allowed(locked, target), 'preview_stale', 409)
+                if operation != 'update':
+                    require(access.takeover_allowed(locked, target), 'preview_stale', 409)
             if operation == 'update':
                 study = Study.objects.filter(pk=op.get('study_id')).first()
                 require(study is not None, 'preview_stale', 409)
@@ -609,8 +610,8 @@ def replay_authorize(locked, row):
                     require(is_instance_owner(locked) or set(op.get('actions') or []) <= manageable_actions(locked, study),
                             'preview_stale', 409)
                 else:
-                    require(is_instance_owner(locked)
-                            or set(op.get('actions') or []) <= access.assignable_actions(locked, study),
+                    target_actions = {action: False for action in op.get('actions') or []}
+                    require(_matrix_authorize_import(locked, target, study, target_actions, version),
                             'preview_stale', 409)
         return
     if row.kind == ROSTER_KIND:

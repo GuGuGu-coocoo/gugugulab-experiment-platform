@@ -451,8 +451,8 @@ def _matrix_page_v2(actor, search='', page=1, lang='zh'):
     no ``study.view`` on is never rendered (a restricted count is reported
     instead). A target Admin's future/default actions are included through the
     same kernel, so the Admin default is never missed; each cell is editable in
-    exactly the actor's assignable set and only while the whole-account takeover
-    comparison still holds.
+    exactly the actor's assignable set with the target role's account-management
+    capability. Whole-account takeover remains a lifecycle-operation boundary.
     """
     User = get_user_model()
     instance = Instance.objects.get(pk=1)
@@ -493,11 +493,13 @@ def _matrix_page_v2(actor, search='', page=1, lang='zh'):
         except ValueError:
             target_policy = None
         dominated = False
+        can_configure = False
         if target_policy is not None and not is_owner_row and not own_row:
             target_role = profile.role if profile is not None else 'user'
             platform_action = 'accounts.manage_admin' if target_role == 'admin' else 'accounts.manage_user'
+            can_configure = access.allowed_platform(actor, platform_action)
             dominated = ((owner_scope or access.takeover_allowed(actor, user, after=target_policy))
-                         and access.allowed_platform(actor, platform_action))
+                         and can_configure)
         hidden = set()
         if target_policy is not None and not is_owner_row:
             stored = set(target_policy.study_overrides) | set(target_policy.grants)
@@ -516,7 +518,7 @@ def _matrix_page_v2(actor, search='', page=1, lang='zh'):
                 reason = 'owner'
             elif own_row:
                 reason = 'self'
-            elif not manageable or not current <= manageable or not dominated:
+            elif not manageable or not current <= manageable or not can_configure:
                 reason = 'outside'
             else:
                 reason = ''
@@ -833,9 +835,9 @@ def _matrix_authorize(actor, target_user, study, current, target):
     """Version-routed matrix authority for one target/study edit.
 
     v1 keeps effective AND delegable actions plus the study-scoped dominance
-    comparison. v2 uses the kernel's assignable set on this study and the
-    whole-account before/after takeover comparison over every study, so a legal
-    difference on B can never overwrite the target's A permission.
+    comparison. v2 uses the kernel's assignable set on this study. This bounded
+    edit preserves all other studies; whole-account takeover is reserved for
+    account lifecycle operations such as reset, enable, role change and delete.
     """
     _require_target(actor, target_user)
     version = access.authorization_version()
@@ -854,11 +856,6 @@ def _matrix_authorize(actor, target_user, study, current, target):
     require(access.allowed_platform(actor, platform_action), 'forbidden', 403)
     manageable = access.assignable_actions(actor, study)
     require(set(current) | set(target) <= manageable, 'delegation_forbidden', 403)
-    try:
-        after = access.with_study_override(access.canonical_policy(target_user), study.pk, target)
-    except ValueError:
-        raise Rejected('unsupported_policy_version', 409) from None
-    require(access.takeover_allowed(actor, target_user, after=after), 'higher_privilege_target', 403)
 
 
 def _matrix_current(version, user, study):

@@ -11,10 +11,11 @@ and explicit synthetic inputs, never the implementation under test:
 - platform = role default + explicit boolean overrides; a study = the complete
   explicit override, else the Admin bound/template, else the user's grants;
   without ``study.view`` the result is empty;
-- an account edit needs the target role's lifecycle capability, the actor's own
-  view + configure there, and the whole-account before/after takeover comparison
-  over every study, so a B difference can never overwrite A and using an action
-  never equals managing it;
+- a per-study matrix edit needs the target role's account-management capability
+  and the actor's own view + configure plus assignable actions on that study;
+  it leaves every other study unchanged. Whole-account lifecycle operations
+  still compare the complete before/after policy, so using an action never
+  equals managing it;
 - the migration difference/projection must be computed from the *real* v1 route
   (an Owner without grants could not view a study) and the previewed final
   strategy must equal the real v2 route after confirmation;
@@ -477,7 +478,7 @@ def test_readonly_use_only_and_lifecycle_boundaries(v2_world):
         str(v2_world['study_a'].pk): sorted([VIEW, 'build.upload'])}
 
 
-def test_b_edit_requires_a_dominance_and_never_overwrites_a(v2_world, evidence):
+def test_b_edit_is_scoped_and_never_overwrites_a(v2_world, evidence):
     scoped_client = login(v2_world['scoped'].username)
     peer_client = login(v2_world['peer'].username)
     target = v2_world['export_user']
@@ -486,13 +487,18 @@ def test_b_edit_requires_a_dominance_and_never_overwrites_a(v2_world, evidence):
     instance = v2_world['instance']
     before_a = stored_overrides(target)[key_a]
 
-    # The actor holds a legal scope on B but cannot dominate the target's A
-    # permission: the B difference is refused and nothing is written.
-    refused = matrix_preview(scoped_client, target, study_b, [])
-    assert_users_rejected(refused, 403, 'higher_privilege_target')
-    assert key_b not in stored_overrides(target)
+    # Current requirements §2.2 makes matrix changes study-scoped: the actor
+    # can edit B without taking over the target's unrelated A permission.
+    scoped = matrix_preview(scoped_client, target, study_b, [])
+    assert scoped.status_code == 200
+    assert stored_overrides(target).get(key_b) is None  # preview never writes
+    instance.refresh_from_db()
+    assert matrix_commit(scoped_client, preview_id_of(scoped),
+                         instance.governance_revision).status_code == 200
+    assert stored_overrides(target)[key_a] == before_a
+    assert stored_overrides(target)[key_b] == [VIEW]
 
-    # With full dominance on A the B change is legal and leaves A untouched.
+    # A second B difference remains legal and A is still untouched.
     instance.refresh_from_db()
     allowed = matrix_preview(peer_client, target, study_b, ['+build.upload'])
     assert allowed.status_code == 200
