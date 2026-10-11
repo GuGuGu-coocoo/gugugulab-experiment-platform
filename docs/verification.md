@@ -289,3 +289,11 @@ R11W 在真实 Windows x64 主机上完成新冻结 Windows 包的 WN01–WN06 �
 在 R11W 结果上复核并修正三个验收工具边界：Windows 证据 ZIP 先检查全部成员再解包，拒绝重复规范化路径与文件/目录冲突；原生 harness 在删除既有提取目录前拒绝重解析点边界；正式总门槛缺少有效本轮选择和显式 kit 时不从历史目录猜选。Excel 计划任务不覆盖已有同名任务。首次总门槛本机 273 项修复回归、438 项旧回归及 Excel 实机均通过，但 Windows 远端运行目录只取固定子目录名，撞上保留的旧证据，因此整体**失败**；失败根 `local_data/phase03_remediation_20260923/p03r11w/20260927T003656Z-31ac3d08` 保留。修复为本地唯一轮次和子目录共同命名远端目录，既有目录仍拒绝覆盖。
 
 修复后从当前源码重新准备冻结 Windows x64 程序（`program_sha256=cac82363b81fb40b96c87220b877a67dc5d6dd9c2d7408afd38a7396a26f5eb9`，源码摘要 `9362b2a0…`，33 项输入；准备根 `local_data/phase03_remediation_20260923/p03r11w/20260927T003610Z-2780f5f7`）。定向回归 **160 passed**，另新增远端唯一命名断言后 R11W 模块 **11 passed**。独立 Windows 实机 `--verify` 退出 0：WN01–WN06 全 PASS、无证据问题，原始证据根 `local_data/phase03_remediation_20260923/p03r11w/20260927T004809Z-dddd1147`。最终 `.venv/bin/python tools/phase03_remediation_acceptance.py --verify --windows-run <该新实机证据根>` 退出 0、`verdict=PASS`：shell 133、package 112、浏览器 20 用例、修复回归 **273 passed**、旧回归 **438 passed**，零失败零跳过；完整 Windows 原始证据重读、同轮新冻结准备与真实 Excel 16.0 build 17932 查看均 PASS。总证据根 `local_data/phase03_remediation_20260923/p03r11w/20260927T005813Z-26934c3b`。工具结果不产生人的 PASS；人工测试仍 `NOT_RUN`，Phase 04 与真实研究未启动。
+
+## 2026-10-11 跨机 Web 合成闭环与界面复验状态
+
+Windows 隔离合成服务经 Mac Chrome 实际完成一次**匿名 Web**参与。Windows 数据库只读核对到 **1 个会话、4 条唯一事件**（`exp.rt` 2 条、`exp.interaction` 2 条），与完成声明集合精确相等；Mac Chrome 显示服务器收齐并清理本机记录。授权固定快照导出另核对到 **1 名参与者、4 条事件**。这证明该隔离服务、浏览器、API、数据库与授权导出的具体闭环，不是 Windows 原生新版包或真实研究的验收。
+
+同期真实 Chrome 走查发现并推动了账号页信息层级与 Owner 有效角色显示、移动导航、构建错误表单保留、导出快照即时显示、隔离预览参与模式、无人工 ID 会话标签和 GEC 准入/本机写入者错误提示修复。浏览器扩展文件权限阻止了本轮文件选择器操作，随后用真实 HTTP 上传核对服务端路径；**Chrome 文件选择器交互尚未通过**。服务器快照 ZIP 已核对，**Chrome 下载文件最终落盘、打开仍未独立核实**。
+
+本轮首次综合门槛因旧测试夹具参与模式错置而失败；将夹具改为名单 ID 模式后，按当前源码完整重跑。`.venv/bin/python tools/phase03_remediation_acceptance.py --verify` **退出 0，`verdict=PASS`**：修复回归 **275 passed**、受影响旧回归 **439 passed**（均 0 失败、0 错误、0 跳过）；当前冻结 Windows x64 程序在真实 Windows 上 **WN01–WN06 全 PASS，241 项检查 0 失败**，Windows Excel 实机导入 PASS。机器证据保存在忽略目录 `local_data/phase03_remediation_20260923/p03r11w/20261011T060934Z-29781398/`。此门槛后，旧版 JSONL 按钮只调整了次级按钮样式，受影响的三项浏览器／服务端测试重新运行并通过，完整门槛未因这项纯呈现改动重复运行。Windows 人工测试包及原始输入已复制到约定的 Windows 项目工作区并逐哈希核对，当前包与 2026-09-27 旧包分开。上述 **PASS 仅指本轮合成工程门槛**；新一轮人工 T17 为 **未运行**，Phase 03 未完成，Phase 04 与真实研究未授权。人工步骤与记录见[人工测试指南](researcher_acceptance.md)。
