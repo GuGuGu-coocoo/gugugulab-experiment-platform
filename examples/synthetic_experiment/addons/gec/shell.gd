@@ -22,7 +22,8 @@ const LOCALIZED := {
 		"title": "合成实验参与",
 		"status": "本地保存与服务器回执是两种状态。",
 		"anonymous": "本研究无需 ID。",
-		"code": "名单 ID（可留空表示匿名）",
+		"code": "名单 ID",
+		"code_legacy": "名单 ID（可留空表示匿名）",
 		"password": "名单密码",
 		"recovery_legend": "同设备恢复",
 		"short_code": "六位恢复码（研究者签发）",
@@ -74,6 +75,8 @@ const LOCALIZED := {
 		"no_server": "本地运行模式：不连接服务器。",
 		"bridge_unavailable": "参与界面未能连接到浏览器桥接。",
 		"err_admission_denied": "名单 ID 或密码不正确，或该名单不可用。",
+		"err_admission_denied_id": "名单 ID 不正确或不可用。",
+		"err_admission_denied_anonymous": "当前无法开始参与，请联系研究人员。",
 		"err_participation_limit": "该名单 ID 已达到参与次数上限。",
 		"err_admission_closed": "该研究当前未开放新参与。",
 		"err_wrong_program_version": "参与包版本与发行不一致，请联系研究人员。",
@@ -81,13 +84,16 @@ const LOCALIZED := {
 		"err_entry_closed": "该研究当前没有可用的参与版本。",
 		"err_unsupported_capability": "服务器不支持该恢复能力，请联系研究人员。",
 		"err_not_recoverable": "本机没有可恢复的会话。",
+		"err_not_ready": "实验窗口尚未就绪；若另一个实验窗口仍打开，请关闭后刷新重试。",
+		"err_writer_busy": "另一个实验窗口正在使用本机存储；请关闭后刷新重试。",
 		"err_results_export_unavailable": "结果导出失败：无法写入结果文件；本机记录仍保留。",
 	},
 	"en": {
 		"title": "Synthetic experiment",
 		"status": "Local save and server receipt are separate states.",
 		"anonymous": "This study does not require an ID.",
-		"code": "Roster ID (leave empty for anonymous)",
+		"code": "Roster ID",
+		"code_legacy": "Roster ID (leave empty for anonymous)",
 		"password": "Roster password",
 		"recovery_legend": "Same-device recovery",
 		"short_code": "Six-digit recovery code (issued by the researcher)",
@@ -139,6 +145,8 @@ const LOCALIZED := {
 		"no_server": "Local-only mode: no server connection.",
 		"bridge_unavailable": "The participation panel could not reach the browser bridge.",
 		"err_admission_denied": "The roster ID or password is not valid, or the ID is unavailable.",
+		"err_admission_denied_id": "The roster ID is not valid or is unavailable.",
+		"err_admission_denied_anonymous": "Participation is unavailable; contact the researcher.",
 		"err_participation_limit": "This roster ID reached its participation limit.",
 		"err_admission_closed": "This study is not open for new participation.",
 		"err_wrong_program_version": "The participation build does not match the release version.",
@@ -146,6 +154,8 @@ const LOCALIZED := {
 		"err_entry_closed": "This study has no available participation release.",
 		"err_unsupported_capability": "The server does not support this recovery capability.",
 		"err_not_recoverable": "No recoverable session exists on this device.",
+		"err_not_ready": "This experiment window is not ready. If another window is open, close it and refresh.",
+		"err_writer_busy": "Another experiment window is using this device's storage. Close it, then refresh.",
 		"err_results_export_unavailable": "Results export failed: the results file could not be written; local records are kept.",
 	},
 }
@@ -270,6 +280,10 @@ func t(key: String, values: Dictionary = {}) -> String:
 	return text
 
 
+func code_label() -> String:
+	return t("code_legacy" if mode == "legacy" else "code")
+
+
 func set_locale(code: String) -> void:
 	if not LOCALIZED.has(code):
 		return
@@ -280,7 +294,7 @@ func set_locale(code: String) -> void:
 	if hint != null and mode == "anonymous":
 		hint.text = t("anonymous")
 	if code_field() != null:
-		code_field().placeholder_text = t("code")
+		code_field().placeholder_text = code_label()
 	if password != null:
 		password.placeholder_text = t("password")
 	if short_code != null:
@@ -337,7 +351,7 @@ func _build_native_ui() -> void:
 	box.add_child(hint)
 	if mode != "anonymous":
 		code = LineEdit.new()
-		code.placeholder_text = t("code")
+		code.placeholder_text = code_label()
 		box.add_child(code)
 	if mode in ["password", "legacy"]:
 		password = LineEdit.new()
@@ -483,7 +497,7 @@ func _mount_web_shell() -> void:
 				"local_only": local_test_mode,
 				"messages": {
 					"anonymous": t("anonymous"),
-					"code": t("code"),
+					"code": code_label(),
 					"password": t("password"),
 					"recovery_legend": t("recovery_legend"),
 					"short_code": t("short_code"),
@@ -620,6 +634,8 @@ func announce(text: String) -> void:
 
 func _error_message(code: String) -> String:
 	var table: Dictionary = LOCALIZED.get(locale, LOCALIZED["zh"])
+	if code == "admission_denied" and mode in ["id", "anonymous"]:
+		return t("err_admission_denied_" + mode)
 	var key := "err_" + code
 	if table.has(key):
 		return str(table[key])
