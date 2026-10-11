@@ -89,6 +89,7 @@ def preview(request,token,resource_path):
     from django.contrib.auth import get_user_model
     from .models import Build,Instance
     from .access import guard
+    from .services import SHELL_CAPABILITY
     require(request.get_host().split(':')[0]==settings.EXPERIMENT_HOST,'wrong_host',403)
     require(request.method=='GET' and resource_path.startswith('web/') and '..' not in resource_path.split('/'),'path',404)
     try: claims=signing.loads(token,salt='preview',max_age=900)
@@ -102,5 +103,5 @@ def preview(request,token,resource_path):
     from .protocol import require as _require
     _require(build is not None and user is not None and build.study.lifecycle=='active','not_published',404)
     guard(user,build.study,'build.preview')
-    config={'config_version':'1','protocol_version':'gep/1','sdk_version':'0.1.0','purpose':'synthetic','api_url':public_api_url(),'instance_id':str(Instance.objects.get(pk=1).instance_id),'study_id':str(build.study_id),'release_id':'preview','build_id':str(build.id),'preview':True}
+    config={'config_version':'1','protocol_version':'gep/1','sdk_version':'0.1.0','purpose':'synthetic','api_url':public_api_url(),'instance_id':str(Instance.objects.get(pk=1).instance_id),'study_id':str(build.study_id),'release_id':'preview','build_id':str(build.id),'preview':True,'mode':build.study.mode,'shell_capability':SHELL_CAPABILITY}
     return serve(build,config,resource_path)

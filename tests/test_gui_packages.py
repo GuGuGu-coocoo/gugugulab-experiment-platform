@@ -30,8 +30,11 @@ def test_valid_package():
 
 def test_gui_and_preview_use_configured_public_api(setup,tmp_path,settings,monkeypatch):
     from core.models import Build
+    from core.services import SHELL_CAPABILITY
     monkeypatch.setenv('GEP_PUBLIC_API','http://experiment.localhost:8123/')
     settings.DATA_DIR=tmp_path
+    setup['study'].mode='id'
+    setup['study'].save(update_fields=['mode'])
     package_root=tmp_path/'packages';package_root.mkdir()
     archive=io.BytesIO()
     with zipfile.ZipFile(archive,'w') as output:
@@ -51,6 +54,8 @@ def test_gui_and_preview_use_configured_public_api(setup,tmp_path,settings,monke
     preview=c.get(response['Location'],HTTP_HOST='experiment.localhost:8123')
     assert preview.status_code==200
     assert b'"api_url": "http://experiment.localhost:8123"' in preview.content
+    assert b'"mode": "id"' in preview.content
+    assert f'"shell_capability": "{SHELL_CAPABILITY}"'.encode() in preview.content
 
 def test_gui_real_object_authority_and_invitation(setup):
     c=Client();c.force_login(setup['owner'])
