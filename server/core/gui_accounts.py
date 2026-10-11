@@ -319,6 +319,13 @@ def activate_account_page(request):
         try:
             user = accounts.activate_account(request.POST.get('token', ''), request.POST.get('password', ''), request.POST.get('confirm', ''))
         except Rejected as exc:
-            return render(request, 'core/activate_account.html', {'error': message_for(exc.code, lang), 'token': '', 'done': False}, status=exc.status)
+            token = request.POST.get('token', '')
+            retry = (exc.code in ('password_weak', 'password_mismatch') and bool(token)
+                     and accounts.invitation_retry_allowed(token))
+            response = render(request, 'core/activate_account.html',
+                              {'error': message_for(exc.code, lang), 'token': token if retry else '', 'done': False},
+                              status=exc.status)
+            response['Cache-Control'] = 'no-store'
+            return response
         return render(request, 'core/activate_account.html', {'error': '', 'token': '', 'done': True, 'username': user.username})
     return render(request, 'core/activate_account.html', {'error': '', 'token': request.GET.get('token', ''), 'done': False})

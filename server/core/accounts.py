@@ -327,6 +327,50 @@ def change_own_password(user, current, new, confirm):
         return profile
 
 
+def _invitation_authority(invitation, issuer, instance):
+    """Current role/bound checks shared by activation and its retry form."""
+    require(invitation.role in ROLES, 'activation_failed', 403)
+    version = access.authorization_version(instance)
+    bound_fields = {}
+    if version == 1:
+        require(issuer.is_active and (is_instance_owner(issuer) or effective_role(issuer) == 'admin'), 'activation_failed', 403)
+        require(invitation.role == 'user' or is_instance_owner(issuer), 'activation_failed', 403)
+    else:
+        # Exact v2 route: an unknown stored version refuses here instead of
+        # being silently treated as v2.
+        require(version == 2, 'unsupported_version', 409)
+        require(issuer.is_active, 'activation_failed', 403)
+        operation = 'create_admin' if invitation.role == 'admin' else 'create_user'
+        require(all(allowed_platform(issuer, action, instance=instance)
+                    for action in lifecycle_platform_actions(operation)), 'activation_failed', 403)
+        if invitation.role == 'admin' and invitation.bound_policy is not None:
+            try:
+                normalized = access.validate_account_bound(invitation.bound_policy)
+            except ValueError:
+                raise Rejected('activation_failed', 403) from None
+            require(normalized['role'] == invitation.role, 'activation_failed', 403)
+            require(access.takeover_bound_allowed(issuer, invitation.bound_policy, instance=instance),
+                    'activation_failed', 403)
+            bound_fields = {'platform_overrides': normalized['platform_overrides'],
+                            'study_overrides': normalized['study_overrides'],
+                            'future_study_actions': normalized['future_study_actions']}
+    return bound_fields
+
+
+def invitation_retry_allowed(token):
+    """Read-only hint; activation always locks and checks again before writing."""
+    invitation = AccountInvitation.objects.select_related('issuer').filter(
+        token_hash=digest(token), consumed=False, revoked=False,
+        expires_at__gt=timezone.now()).first()
+    if invitation is None or get_user_model().objects.filter(username=invitation.username).exists():
+        return False
+    try:
+        _invitation_authority(invitation, invitation.issuer, Instance.objects.get(pk=1))
+    except (Rejected, ValueError):
+        return False
+    return True
+
+
 def activate_account(token, password, confirm):
     """Single-use activation; every token failure is one generic non-enumerating error.
 
@@ -347,31 +391,7 @@ def activate_account(token, password, confirm):
         issuer = get_user_model().objects.select_for_update().get(pk=pending.issuer_id)
         invitation = AccountInvitation.objects.select_for_update().filter(pk=pending.pk).first()
         require(invitation is not None and not invitation.consumed and not invitation.revoked and invitation.expires_at > timezone.now(), 'activation_failed', 403)
-        require(invitation.role in ROLES, 'activation_failed', 403)
-        version = access.authorization_version(instance)
-        bound_fields = {}
-        if version == 1:
-            require(issuer.is_active and (is_instance_owner(issuer) or effective_role(issuer) == 'admin'), 'activation_failed', 403)
-            require(invitation.role == 'user' or is_instance_owner(issuer), 'activation_failed', 403)
-        else:
-            # Exact v2 route: an unknown stored version refuses here instead of
-            # being silently treated as v2.
-            require(version == 2, 'unsupported_version', 409)
-            require(issuer.is_active, 'activation_failed', 403)
-            operation = 'create_admin' if invitation.role == 'admin' else 'create_user'
-            require(all(allowed_platform(issuer, action, instance=instance)
-                        for action in lifecycle_platform_actions(operation)), 'activation_failed', 403)
-            if invitation.role == 'admin' and invitation.bound_policy is not None:
-                try:
-                    normalized = access.validate_account_bound(invitation.bound_policy)
-                except ValueError:
-                    raise Rejected('activation_failed', 403) from None
-                require(normalized['role'] == invitation.role, 'activation_failed', 403)
-                require(access.takeover_bound_allowed(issuer, invitation.bound_policy, instance=instance),
-                        'activation_failed', 403)
-                bound_fields = {'platform_overrides': normalized['platform_overrides'],
-                                'study_overrides': normalized['study_overrides'],
-                                'future_study_actions': normalized['future_study_actions']}
+        bound_fields = _invitation_authority(invitation, issuer, instance)
         require(not get_user_model().objects.filter(username=invitation.username).exists(), 'activation_failed', 403)
         user = get_user_model().objects.create_user(invitation.username, password=password)
         AccountProfile.objects.create(user=user, role=invitation.role, must_change_password=False,
