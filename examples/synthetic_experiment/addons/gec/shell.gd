@@ -175,6 +175,7 @@ var pending_credentials: Dictionary = {}
 ## The host declares its immutable build version; legacy hosts keep the default.
 var program_version := "synthetic-1"
 var overlay_visible := true
+var _web_shell_mounted := false
 
 var message: Label
 var hint: Label
@@ -344,8 +345,7 @@ func _build_native_ui() -> void:
 	# Keep the two-line status region stable when trial/error text uses one line.
 	message.custom_minimum_size.y = message.get_minimum_size().y
 	if web:
-		# Web entry, recovery and finish controls are owned by the browser panel;
-		# the canvas only carries the localized status/trial line.
+		# Keep a canvas status fallback until the browser panel actually mounts.
 		return
 	hint = Label.new()
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -520,6 +520,8 @@ func _mount_web_shell() -> void:
 					"cancel": t("cancel"),
 				},
 			}))
+			_web_shell_mounted = true
+			visible = false
 			return
 		await get_tree().process_frame
 	_set_error(t("bridge_unavailable"))
@@ -861,7 +863,10 @@ func set_overlay_visible(value: bool) -> void:
 	## The scientific task owns its canvas while running. Hiding this panel does
 	## not change admission, queue, failure or retired-entry state.
 	overlay_visible = value
-	visible = value
+	# A mounted Web panel already renders every announcement. Revealing the
+	# overlay must not also draw its native status behind the DOM. If mounting
+	# fails, the canvas status remains available to show the bridge error.
+	visible = value and (not web or not _web_shell_mounted)
 	if not value:
 		var focused = get_viewport().gui_get_focus_owner() if get_viewport() != null else null
 		if focused != null and is_ancestor_of(focused):
