@@ -47,6 +47,8 @@ func check(condition: bool, label: String) -> void:
 
 func build(backend: FakeBackend) -> Node:
 	var shell = Shell.new()
+	# The harness owns its scripted backend, so freeing a shell also frees it.
+	shell.add_child(backend)
 	root.add_child(shell)
 	shell.setup(backend)
 	return shell
@@ -61,6 +63,8 @@ func run() -> void:
 	check(shell.code == null and shell.password == null, "anonymous hides ID and password")
 	check(shell.short_code != null and shell.recovery != null and shell.permit != null, "recovery panel always available")
 	check(shell.start != null and not shell.start.disabled, "anonymous start enabled")
+	await shell.submit_entry()
+	check(anonymous.prepared.size() == 1 and anonymous.prepared[0].expected_version == "synthetic-1", "legacy host default still prepares the synthetic build version")
 	shell.queue_free()
 
 	# Frozen roster modes render exactly the required fields.
@@ -187,6 +191,53 @@ func run() -> void:
 	shell_finish.set_locale("zh")
 	check(shell_finish.t("start") == "开始参与", "chinese locale strings")
 	shell_finish.queue_free()
+
+	# A host build version travels through actual entry and fresh-session paths.
+	var version_backend := FakeBackend.new()
+	version_backend.config = {"config_version": "1", "purpose": "synthetic", "mode": "password", "shell_capability": "gec-shell/v1"}
+	var shell_version = build(version_backend)
+	shell_version.program_version = "moss-duel-1"
+	shell_version.code.text = "moss-001"
+	shell_version.password.text = "synthetic-test-password"
+	shell_version.code.grab_focus()
+	await process_frame
+	check(root.gui_get_focus_owner() == shell_version.code, "real native entry field can hold focus")
+	var state_before: String = shell_version.state
+	shell_version.set_overlay_visible(false)
+	check(not shell_version.visible and not shell_version.shell_box.is_visible_in_tree(), "host hides the actual native Control tree")
+	check(root.gui_get_focus_owner() != shell_version.code, "hiding native shell releases entry focus")
+	check(not shell_version.entry_locked and shell_version.state == state_before and version_backend.prepared.is_empty(), "visibility does not admit or retire entry")
+	shell_version.announce("Synthetic upload status")
+	check(not shell_version.visible and not shell_version.overlay_visible, "native status updates do not reveal hidden overlay")
+	shell_version.set_overlay_visible(true)
+	check(shell_version.visible and shell_version.code.editable and not shell_version.entry_locked, "revealing unused entry keeps it available")
+	await shell_version.submit_entry()
+	check(version_backend.prepared.size() == 1 and version_backend.prepared[0].expected_version == "moss-duel-1", "custom program version is passed to real prepare")
+	check(shell_version.entry_locked, "successful custom-version admission retires entry")
+	shell_version.set_overlay_visible(false)
+	check(shell_version.entry_locked and shell_version.state == "active", "hiding admitted overlay preserves entry retirement and state")
+	shell_version.announce_finished({"state": "local_committed"})
+	check(shell_version.visible and shell_version.overlay_visible and shell_version.finished_announced, "finish reveals the native shell again")
+	check(shell_version.entry_locked and shell_version.start.disabled and not shell_version.code.visible, "finish never unlocks retired native entry")
+	var stale_result: Dictionary = await shell_version.submit_entry()
+	check(stale_result.get("error") == "already_started" and version_backend.prepared.size() == 1, "re-shown native shell rejects stale admission")
+	shell_version.queue_free()
+
+	var new_backend := FakeBackend.new()
+	new_backend.config = {"config_version": "1", "purpose": "synthetic", "mode": "password", "shell_capability": "gec-shell/v1"}
+	new_backend.named_result = {"state": "confirm", "session_id": "previous-session", "token": "synthetic-proof", "can_resume": true}
+	var shell_new = build(new_backend)
+	shell_new.program_version = "moss-duel-1"
+	shell_new.code.text = "moss-002"
+	shell_new.password.text = "synthetic-test-password"
+	await shell_new.submit_entry()
+	check(shell_new.state == "confirm" and new_backend.prepared.is_empty(), "named candidate awaits the fresh-session choice")
+	await shell_new.confirm_new_session()
+	check(new_backend.prepared.size() == 1 and new_backend.prepared[0].expected_version == "moss-duel-1" and new_backend.prepared[0].participant_code == "moss-002", "explicit new session carries the custom program version and issued ID")
+	check(new_backend.confirmed.is_empty() and shell_new.entry_locked, "fresh-session choice never silently recovers the previous session")
+	shell_new.queue_free()
+	await process_frame
+	await process_frame
 
 	if failures.is_empty():
 		print("SHELL_UNIT_VERIFIED")

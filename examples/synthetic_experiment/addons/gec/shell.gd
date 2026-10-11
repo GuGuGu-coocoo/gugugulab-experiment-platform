@@ -172,6 +172,9 @@ var local_test_mode := false
 var entry_locked := false
 var pending: Dictionary = {}
 var pending_credentials: Dictionary = {}
+## The host declares its immutable build version; legacy hosts keep the default.
+var program_version := "synthetic-1"
+var overlay_visible := true
 
 var message: Label
 var hint: Label
@@ -495,6 +498,7 @@ func _mount_web_shell() -> void:
 				"mode": mode,
 				"show_code": mode == "legacy",
 				"local_only": local_test_mode,
+				"panel_hidden": not overlay_visible,
 				"messages": {
 					"anonymous": t("anonymous"),
 					"code": code_label(),
@@ -750,7 +754,7 @@ func _submit_named(values: Dictionary) -> Dictionary:
 				print("SYNTHETIC_NAMED cleaned")
 			_:
 				print("SYNTHETIC_NAMED none")
-	var credentials := {"expected_version": "synthetic-1"}
+	var credentials := {"expected_version": program_version}
 	if mode != "anonymous":
 		if not participant_code.is_empty():
 			credentials["participant_code"] = participant_code
@@ -799,7 +803,7 @@ func confirm_session() -> Dictionary:
 func confirm_new_session() -> Dictionary:
 	if pending_credentials.is_empty():
 		return {"error": "no_pending_recovery"}
-	var credentials := {"expected_version": "synthetic-1"}
+	var credentials := {"expected_version": program_version}
 	if not str(pending_credentials.get("participant_code", "")).is_empty():
 		credentials["participant_code"] = pending_credentials["participant_code"]
 	if not str(pending_credentials.get("password", "")).is_empty():
@@ -853,7 +857,22 @@ func _fingerprint(state_name: String, error: String) -> String:
 	return state_name + "|" + error
 
 
+func set_overlay_visible(value: bool) -> void:
+	## The scientific task owns its canvas while running. Hiding this panel does
+	## not change admission, queue, failure or retired-entry state.
+	overlay_visible = value
+	visible = value
+	if not value:
+		var focused = get_viewport().gui_get_focus_owner() if get_viewport() != null else null
+		if focused != null and is_ancestor_of(focused):
+			focused.release_focus()
+	_web_state({"panel_hidden": not value})
+	if not value:
+		_focus_canvas()
+
+
 func announce_finished(result: Dictionary = {}) -> void:
+	set_overlay_visible(true)
 	if result.has("error"):
 		## A failed finish is never a saved finish: no completion is announced and
 		## the records stay available for a retry or an explicit result export.
@@ -1176,6 +1195,7 @@ func auto_submit(credentials: Dictionary, auto_new := false) -> Dictionary:
 func status_snapshot() -> Dictionary:
 	var delivery: Dictionary = last_summary.get("delivery", {})
 	return {"state": state, "mode": mode, "locale": locale, "data_only": data_only, "finished_announced": finished_announced,
+			"program_version": program_version, "overlay_visible": overlay_visible,
 			"pending": not pending.is_empty(), "entry_locked": entry_locked, "failure_surface": failure_surface,
 			"last_announcement": last_announcement,
 			"summary": {"state": str(last_summary.get("state", "")), "kind": str(last_summary.get("kind", "")),

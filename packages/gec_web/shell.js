@@ -102,10 +102,19 @@ export function installShell(specification,action) {
   window.addEventListener('scroll',position);
   new ResizeObserver(position).observe(canvas);
 
+  const showPanel=hidden=>{
+    panel.style.display=hidden?'none':'flex';
+    panel.inert=hidden;
+    panel.setAttribute('aria-hidden',hidden?'true':'false');
+    if(hidden){if(panel.contains(document.activeElement))document.activeElement.blur();canvas?.focus();}
+  };
+  showPanel(!!spec.panel_hidden);
+
   return {
     values(){return JSON.stringify(Object.fromEntries([...fields].map(([name,input])=>[name,input.value])));},
     clearSecrets(){for(const name of ['password','permit','short_code']){const input=fields.get(name);if(input)input.value='';}},
     setState(state){
+      if(state.panel_hidden!==undefined)showPanel(!!state.panel_hidden);
       if(state.status!==undefined)document.getElementById('gec-shell-status').textContent=state.status;
       if(state.reason!==undefined)document.getElementById('gec-shell-status').dataset.reason=state.reason;
       if(state.busy!==undefined)for(const [name,node] of buttons)node.disabled=(state.busy||(panel.dataset.entryHidden==='1'&&['start','recover-code','recover-permit'].includes(name)))&&node.id!=='gec-confirm-cancel';
@@ -128,7 +137,7 @@ export function installShell(specification,action) {
         if(state.confirm){confirmText.textContent=state.confirm.text;buttons.get('confirm-new').style.display=state.confirm.new_session?'':'none';confirm.style.display='flex';}
         else confirm.style.display='none';
       }
-      if(state.focus){const input=fields.get(state.focus)??buttons.get(state.focus);input?.focus();}
+      if(state.focus&&!panel.inert){const input=fields.get(state.focus)??buttons.get(state.focus);input?.focus();}
     },
     blur(){for(const input of fields.values())input.blur();canvas?.focus();}
   };
