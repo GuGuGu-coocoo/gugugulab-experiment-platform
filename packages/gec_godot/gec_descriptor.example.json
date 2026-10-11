@@ -1,0 +1,20 @@
+{
+  "version": "example-1",
+  "platform": "godot_web",
+  "host_version": "4.7.2",
+  "sdk_version": "0.1.0",
+  "protocol_version": "gep/1",
+  "program_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "schemas": {
+    "task.event": {
+      "id": "task_event",
+      "version": "1",
+      "schema": {
+        "type": "object"
+      }
+    }
+  },
+  "codebook": {
+    "note": "Template only. Define the actual recorded fields, units, sources and recovery policy before registering a build."
+  }
+}

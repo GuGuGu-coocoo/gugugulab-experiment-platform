@@ -1,6 +1,6 @@
 # Third-party dependencies
 
-Moss Duel uses nine unmodified Kenney CC0 sound files from RPG Audio 1.0 and Impact Sounds 1.0. Official sources, original license files, archive/file hashes and mappings are preserved in [the asset notice](../examples/moss_duel/THIRD_PARTY_NOTICES.md) and `assets/asset_manifest.json` in that project. Its graphics are original code drawings; it includes no Hollow Knight assets. Standalone distributions carry the existing project license, Godot engine/dependency notices and sound licenses separately. The optional GEC kit additionally carries the godot-sqlite MIT notice and SQLite public-domain statement.
+Moss Duel uses nine unmodified Kenney CC0 sound files from RPG Audio 1.0 and Impact Sounds 1.0. Official sources, original license files, archive/file hashes and mappings are preserved in [the asset notice](../examples/moss_duel/THIRD_PARTY_NOTICES.md) and `assets/asset_manifest.json` in that project. Its graphics are original code drawings; it includes no Hollow Knight assets. Standalone distributions carry the existing project license, Godot engine/dependency notices and sound licenses separately. The independent generic GEC download carries its license as `GEC_LICENSE.txt`, the godot-sqlite MIT notice and SQLite public-domain statement; installing it does not replace the game's license.
 
 Original GEP and GEC project code is licensed under [Apache-2.0](../LICENSE). Third-party dependencies and materials retain their respective licenses.
 
