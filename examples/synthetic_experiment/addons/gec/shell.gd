@@ -15,6 +15,7 @@ extends Control
 
 signal session_started(checkpoint)
 signal session_data_only()
+signal local_save_retry_requested()
 
 const SHELL_CAPABILITY := "gec-shell/v1"
 const LOCALIZED := {
@@ -68,6 +69,7 @@ const LOCALIZED := {
 		"retrying": "正在补传：已连续 {n} 次发送失败，将按退避自动重试；本地记录不会丢失。",
 		"retry_ready": "补传已连续失败 {n} 次；可重试上传，或导出本机数据（导出不含凭据）。",
 		"retry_upload": "重试上传",
+		"retry_local_save": "重试本地保存",
 		"export_failure": "导出失败数据",
 		"retry_requested": "已请求重试上传；本地记录仍保留。",
 		"deleted_terminal": "该研究已永久删除，上传已停止；本机未确认数据仍可导出。",
@@ -138,6 +140,7 @@ const LOCALIZED := {
 		"retrying": "Upload retry in progress: {n} consecutive send round(s) failed; retries back off automatically and local records are kept.",
 		"retry_ready": "Upload failed {n} consecutive round(s); you can retry the upload or export the local data (the export contains no credentials).",
 		"retry_upload": "Retry upload",
+		"retry_local_save": "Retry local save",
 		"export_failure": "Export failure data",
 		"retry_requested": "Upload retry requested; local records are kept.",
 		"deleted_terminal": "This study was permanently deleted; uploads stopped and the unconfirmed local data can still be exported.",
@@ -176,6 +179,7 @@ var pending_credentials: Dictionary = {}
 var program_version := "synthetic-1"
 var overlay_visible := true
 var _web_shell_mounted := false
+var local_save_retry := false
 
 var message: Label
 var hint: Label
@@ -503,6 +507,7 @@ func _mount_web_shell() -> void:
 				"show_code": mode == "legacy",
 				"local_only": local_test_mode,
 				"panel_hidden": not overlay_visible,
+				"local_save_retry": local_save_retry,
 				"messages": {
 					"anonymous": t("anonymous"),
 					"code": code_label(),
@@ -518,6 +523,7 @@ func _mount_web_shell() -> void:
 					"export": t("export"),
 					"download_results": t("download_results"),
 					"retry_upload": t("retry_upload"),
+					"retry_local_save": t("retry_local_save"),
 					"export_failure": t("export_failure"),
 					"continue_": t("continue_"),
 					"start_new": t("start_new"),
@@ -557,6 +563,11 @@ func _on_web_action(args: Array) -> void:
 			await export_results()
 		"retry":
 			await _request_retry()
+		"local-retry":
+			# Local commit retry belongs to the host's retained buffer. It must
+			# never start admission or retry a persisted upload queue instead.
+			if local_save_retry:
+				local_save_retry_requested.emit()
 		"failure-export":
 			await export_recovery()
 	_focus_canvas()
@@ -880,6 +891,14 @@ func set_overlay_visible(value: bool) -> void:
 		_focus_canvas()
 
 
+func set_local_save_retry(value: bool) -> void:
+	## Web controls live above the engine canvas; a canvas Button cannot be
+	## relied on while this DOM panel is visible. Native hosts may use their own
+	## retry control and listen to the same action signal.
+	local_save_retry = value
+	_web_state({"local_save_retry": value})
+
+
 func announce_finished(result: Dictionary = {}) -> void:
 	set_overlay_visible(true)
 	if result.has("error"):
@@ -899,13 +918,19 @@ func announce_finished(result: Dictionary = {}) -> void:
 
 
 func _refresh_state() -> void:
-	if backend == null or state in ["unsupported", "busy", "confirm"]:
+	if backend == null or local_save_retry or state in ["unsupported", "busy", "confirm"]:
+		# An older batch receipt cannot overwrite a host's uncommitted-save
+		# failure while records still wait in its in-process buffer.
 		return
 	var summary: Dictionary = {}
 	if backend.has_method("summary"):
 		summary = await backend.summary()
 	elif backend.has_method("status"):
 		summary = backend.status()
+	if local_save_retry:
+		# A Web summary can await IndexedDB while the host fails a commit.
+		# Recheck after that await before replacing the failure announcement.
+		return
 	last_summary = summary
 	var current := str(summary.get("state", "unprepared"))
 	var current_error := str(summary.get("error", ""))
@@ -1204,7 +1229,7 @@ func auto_submit(credentials: Dictionary, auto_new := false) -> Dictionary:
 func status_snapshot() -> Dictionary:
 	var delivery: Dictionary = last_summary.get("delivery", {})
 	return {"state": state, "mode": mode, "locale": locale, "data_only": data_only, "finished_announced": finished_announced,
-			"program_version": program_version, "overlay_visible": overlay_visible,
+			"program_version": program_version, "overlay_visible": overlay_visible, "local_save_retry": local_save_retry,
 			"pending": not pending.is_empty(), "entry_locked": entry_locked, "failure_surface": failure_surface,
 			"last_announcement": last_announcement,
 			"summary": {"state": str(last_summary.get("state", "")), "kind": str(last_summary.get("kind", "")),

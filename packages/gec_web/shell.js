@@ -28,6 +28,8 @@ export function installShell(specification,action) {
   panel.dataset.localOnly=spec.local_only?'1':'0';
   const fields=new Map();
   const buttons=new Map();
+  let busy=false;
+  let localSaveRetry=!!spec.local_save_retry;
 
   const field=(name,label,options={}) => {
     const row=el('label',{text:label},{display:'block',fontSize:'14px',lineHeight:'1.3'});
@@ -75,6 +77,13 @@ export function installShell(specification,action) {
 
   const actions=el('div',{},{display:'flex',gap:'8px',flexWrap:'wrap'});
   actions.append(button('start',spec.messages.start),button('export',spec.messages.export));
+  const localRetry=button('local-retry',spec.messages.retry_local_save||'Retry local save',{hidden:true});
+  actions.append(localRetry);
+  const updateLocalRetry=()=>{
+    localRetry.style.display=localSaveRetry?'':'none';
+    localRetry.disabled=!localSaveRetry||busy;
+  };
+  updateLocalRetry();
   // Local-only preview: the participant explicitly downloads the JSONL result
   // document; nothing is exported silently and no server receipt is implied.
   if(spec.local_only)actions.append(button('download-results',spec.messages.download_results||'Download results JSONL'));
@@ -117,7 +126,7 @@ export function installShell(specification,action) {
       if(state.panel_hidden!==undefined)showPanel(!!state.panel_hidden);
       if(state.status!==undefined)document.getElementById('gec-shell-status').textContent=state.status;
       if(state.reason!==undefined)document.getElementById('gec-shell-status').dataset.reason=state.reason;
-      if(state.busy!==undefined)for(const [name,node] of buttons)node.disabled=(state.busy||(panel.dataset.entryHidden==='1'&&['start','recover-code','recover-permit'].includes(name)))&&node.id!=='gec-confirm-cancel';
+      if(state.busy!==undefined){busy=!!state.busy;for(const [name,node] of buttons)node.disabled=(busy||(panel.dataset.entryHidden==='1'&&['start','recover-code','recover-permit'].includes(name)))&&node.id!=='gec-confirm-cancel';}
       if(state.entry_hidden){
         // A successful admission retires the pre-entry form: hidden, disabled
         // and unfocused, so it cannot be submitted twice or cover the stimulus.
@@ -132,7 +141,9 @@ export function installShell(specification,action) {
         buttons.get('retry').disabled=!(state.failure&&state.failure.retry);
         buttons.get('failure-export').disabled=!(state.failure&&state.failure.export);
       }
-      if(state.visible)for(const [name,node] of buttons)if(!['confirm-continue','confirm-new','confirm-cancel','retry','failure-export'].includes(name))node.style.display=state.visible.includes(name)?'':'none';
+      if(state.visible)for(const [name,node] of buttons)if(!['confirm-continue','confirm-new','confirm-cancel','retry','failure-export','local-retry'].includes(name))node.style.display=state.visible.includes(name)?'':'none';
+      if(state.local_save_retry!==undefined)localSaveRetry=!!state.local_save_retry;
+      updateLocalRetry();
       if(state.confirm!==undefined){
         if(state.confirm){confirmText.textContent=state.confirm.text;buttons.get('confirm-new').style.display=state.confirm.new_session?'':'none';confirm.style.display='flex';}
         else confirm.style.display='none';
