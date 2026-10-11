@@ -535,7 +535,7 @@ def study_page(request,study_id,module='overview'):
             elif op=='preview':
                 guard(request.user,study,'build.preview')
                 build=Build.objects.get(pk=request.POST['build_id'],study=study)
-                require(bool(build.package_path),'web_preview_only')
+                require(build.descriptor.get('platform')=='godot_web' and bool(build.package_path),'web_preview_only')
                 from django.core import signing
                 token=signing.dumps({'build':str(build.id),'user':request.user.id},salt='preview')
                 return redirect(public_api_url()+'/preview/'+token+'/web/index.html')

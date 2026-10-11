@@ -103,5 +103,6 @@ def preview(request,token,resource_path):
     from .protocol import require as _require
     _require(build is not None and user is not None and build.study.lifecycle=='active','not_published',404)
     guard(user,build.study,'build.preview')
+    require(build.descriptor.get('platform')=='godot_web' and bool(build.package_path),'web_preview_only',404)
     config={'config_version':'1','protocol_version':'gep/1','sdk_version':'0.1.0','purpose':'synthetic','api_url':public_api_url(),'instance_id':str(Instance.objects.get(pk=1).instance_id),'study_id':str(build.study_id),'release_id':'preview','build_id':str(build.id),'preview':True,'mode':build.study.mode,'shell_capability':SHELL_CAPABILITY}
     return serve(build,config,resource_path)
