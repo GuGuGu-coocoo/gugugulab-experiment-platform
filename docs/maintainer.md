@@ -1,5 +1,7 @@
 # 维护者说明
 
+Moss Duel 的独立源码与可选 GEC 接入包必须分开发放，操作步骤见[接入指南](moss_duel_gec.md)。开发者可用 `tools/moss_duel_delivery.py --output build/<新目录> --sqlite-archive <官方v4.7 demo.zip>` 准备两个 ZIP；加 `--build --templates-archive <官方Godot4.7.2 tpz>` 在独立副本导出 Web/macOS/Windows。工具校验固定 SHA-256，拒绝已有输出、链接、路径逃逸及连接配置/秘密/数据库；二进制与输出保持忽略。包不携带研究配置，完整原生发行仍由 GEP 冻结公开配置。Godot 冷 GDExtension 导入若仅关闭时 SIGABRT，工具保留原日志后只重试一次；脚本错误或再次失败不能跳过。此示例未扩大正式支持范围，人工接入仍待验。
+
 2026-10-11 复验结果：Windows 隔离合成服务经 Mac Chrome 跑通一个匿名 Web 会话，服务端 4 条唯一事件与完成声明集合精确相等，客户端显示服务器收齐并清理，授权导出与这 4 条事件对账。近期账号页、窄屏导航、构建表单、导出快照显示、隔离预览与 GEC 文案改动已按当前源码重新冻结并通过完整合成工程门槛；2026-09-27 的 PASS 仍只属于当时冻结的工程基线。新一轮人工 T17 未运行，不得用该跨机闭环或自动浏览器替代人工判断。步骤见[验收记录](verification.md)与[人工测试指南](researcher_acceptance.md)。
 
 仅在明确合成环境运行。[启动指南](quickstart.md)说明实例初始化与构建；不得重新初始化已有实例。管理站与实验资源维持信任边界，GEP_PUBLIC_API应包含实验服务实际协议、hostname和端口。旧session/下载/队列不因修改此配置自动迁移。
