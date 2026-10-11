@@ -2,6 +2,7 @@ extends SceneTree
 ## Integration of the real main scene, menus, combat signals and end-of-run order.
 
 const MainScene := preload("res://main.tscn")
+const JsonContract := preload("res://tests/json_contract.gd")
 var checks := 0
 var failures: Array[String] = []
 var finishes: Array[Dictionary] = []
@@ -36,10 +37,22 @@ func _stop_actor_physics() -> void:
 	game.boss.set_physics_process(false)
 
 
+func _validate_telemetry(kind: String, payload: Dictionary) -> void:
+	var error: String = JsonContract.problem(payload)
+	_check(error.is_empty(), "JSON telemetry " + kind + ": " + error)
+
+
+func _receive_summary(summary: Dictionary) -> void:
+	var error: String = JsonContract.problem(summary)
+	_check(error.is_empty(), "JSON run_finished summary: " + error)
+	finishes.append(summary)
+
+
 func _run() -> void:
 	game = MainScene.instantiate()
 	root.add_child(game)
-	game.run_finished.connect(func(summary: Dictionary): finishes.append(summary))
+	game.telemetry_event.connect(_validate_telemetry)
+	game.run_finished.connect(_receive_summary)
 	await process_frame
 	_check(game.state == "title" and game.overlay.visible and not game.hud.visible, "standalone launches in title menu")
 	_check(not game.player.enabled and not game.boss.enabled, "title menu cannot advance combat")
@@ -149,6 +162,12 @@ func _run() -> void:
 	_check(game.state == "victory" and game.round_index == round_before and not game.overlay.visible, "host-controlled finish cannot retry from menu or Enter")
 	_check(finishes.size() == 4, "host-controlled completion emits exactly one summary")
 	# Free the complete real scene before engine teardown, including audio Resources.
+	# Headless frames can finish before the asynchronous mixer drains its stop
+	# commands. Allow it to release the final Ogg playbacks before shutdown.
+	for audio in game.audio_players:
+		audio.stop()
+		audio.stream = null
+	await create_timer(0.1).timeout
 	game.queue_free()
 	game = null
 	await process_frame

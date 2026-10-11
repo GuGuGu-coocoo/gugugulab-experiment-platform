@@ -324,7 +324,7 @@ func _toggle_pause() -> void:
 		state = "paused"
 		player.process_mode = Node.PROCESS_MODE_DISABLED
 		boss.process_mode = Node.PROCESS_MODE_DISABLED
-		statistics.pauses += 1
+		statistics["pauses"] += 1
 		_emit_event("pause", {"paused": true})
 		overlay_title.text = "TAKE A BREATH"
 		overlay_body.text = "The fight is paused.\n\nJ: quick slash    K: hold and release\nL / Shift: parry    E: dash\nSpace: jump over red ground pulses"
@@ -372,21 +372,21 @@ func _actor_event(actor: String, kind: String, payload: Dictionary) -> void:
 		return
 	var point: Vector2 = player.position + Vector2(0, -44) if actor == "player" else boss.position + Vector2(0, -55)
 	if kind.contains("parry_success"):
-		statistics.parries += 1
+		statistics["parries"] += 1
 		_sound("parry")
 		effects.burst(point, GOLD, 22, 400)
 		effects.floating_text(point + Vector2(-28, -26), "PARRY!", GOLD)
 		_feedback("Perfect parry — the Warden is open.", 1.3)
 		_shake(6)
 	elif kind == "light_attack":
-		statistics.light_attacks += 1
+		statistics["light_attacks"] += 1
 		_sound("light_attack")
 	elif kind in ["heavy_attack", "heavy_charged_attack"]:
-		statistics.heavy_attacks += 1
+		statistics["heavy_attacks"] += 1
 		_sound("heavy_attack")
 	elif kind in ["damage_taken", "boss_damage"]:
 		if actor == "player":
-			statistics.damage_taken += int(payload.get("damage", 1))
+			statistics["damage_taken"] += int(payload.get("damage", 1))
 			_sound("player_hit")
 			effects.burst(point, RED, 12)
 			_shake(5)
@@ -394,7 +394,7 @@ func _actor_event(actor: String, kind: String, payload: Dictionary) -> void:
 			_sound("boss_hit")
 			effects.burst(point, PALE, 9)
 	elif kind == "dash":
-		statistics.dodges += 1
+		statistics["dodges"] += 1
 	elif kind == "jump":
 		_sound("jump")
 	elif kind == "land":
@@ -405,8 +405,10 @@ func _actor_event(actor: String, kind: String, payload: Dictionary) -> void:
 		_feedback("UNBOUND — the Warden's rhythm has quickened.", 3.0)
 		_shake(4)
 	var data := payload.duplicate(true)
-	data.actor = actor
-	data.positions = {"player": {"x": player.position.x, "y": player.position.y}, "boss": {"x": boss.position.x, "y": boss.position.y}}
+	# Dictionary dot assignment creates StringName keys in Godot. The public
+	# signal promises JSON data, so always add fields with explicit String keys.
+	data["actor"] = actor
+	data["positions"] = {"player": {"x": player.position.x, "y": player.position.y}, "boss": {"x": boss.position.x, "y": boss.position.y}}
 	_emit_event(kind, data)
 
 func _emit_event(kind: String, data: Dictionary) -> void:

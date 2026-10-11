@@ -3,6 +3,7 @@ extends SceneTree
 
 const PlayerScript := preload("res://scripts/player.gd")
 const BossScript := preload("res://scripts/boss.gd")
+const JsonContract := preload("res://tests/json_contract.gd")
 var failures: Array[String] = []
 var checks := 0
 var player: CharacterBody2D
@@ -33,9 +34,14 @@ func _reset() -> void:
 	boss.facing = -1
 
 
+func _validate_action(kind: String, payload: Dictionary) -> void:
+	var error: String = JsonContract.problem(payload)
+	_check(error.is_empty(), "JSON actor action " + kind + ": " + error)
+
+
 func _run() -> void:
 	# The test runs directly, without the main scene that normally maps physical keys.
-	for action in ["move_left", "move_right", "jump", "dash", "light_attack", "heavy_attack", "parry"]:
+	for action in ["move_left", "move_right", "jump", "dash", "light_attack", "heavy_attack", "light_mouse", "heavy_mouse", "parry"]:
 		if not InputMap.has_action(action):
 			InputMap.add_action(action)
 	var arena := Node2D.new()
@@ -56,6 +62,8 @@ func _run() -> void:
 	arena.add_child(boss)
 	player.set_boss(boss)
 	boss.set_player(player)
+	player.action_event.connect(_validate_action)
+	boss.action_event.connect(_validate_action)
 	boss.defeated.connect(func(): deaths += 1)
 	player.defeated.connect(func(): player_deaths += 1)
 	_reset()
