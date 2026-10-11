@@ -1,6 +1,7 @@
-"""Prepare separate standalone game / optional GEC kit; optionally export both.
+"""Legacy preassembled Moss Duel integration reference; optionally export both.
 
-Developer tool only. The participant follows docs/moss_duel_gec.md in Godot GUI.
+Not the manual integration exercise. Use moss_duel_standalone.py for the clean
+game and build_gec_addon.py for the independent generic GEC download.
 Use a NEW --output directory: existing work is never overwritten. Dependencies
 come only from the exact official archives locked below; binaries stay ignored.
 """
@@ -128,7 +129,7 @@ def main():
     standalone = output / 'standalone'
     kit = output / 'kit'
     copy_sources(ROOT / 'examples/moss_duel', standalone, game_member)
-    kit_members = {'export_presets.cfg', 'gec_entry.gd', 'gec_entry.tscn', 'gec_descriptor.json', 'package_web.gd', 'package_native.gd'}
+    kit_members = {'README.md', 'export_presets.cfg', 'gec_entry.gd', 'gec_entry.tscn', 'gec_descriptor.json', 'package_web.gd', 'package_native.gd'}
     copy_sources(ROOT / 'integrations/moss_duel', kit, lambda p: p.as_posix() in kit_members or p.suffix == '.uid')
     copy_sources(ROOT / 'examples/synthetic_experiment/data', kit / 'data', lambda p: p.suffix in {'.gd', '.uid'})
     copy_sources(ROOT / 'examples/synthetic_experiment/addons/gec', kit / 'addons/gec', lambda p: p.suffix in {'.gd', '.uid'})
