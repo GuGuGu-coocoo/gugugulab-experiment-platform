@@ -204,6 +204,7 @@ func run() -> void:
 	check(shell_finish.message.text.contains("已完成") and not shell_finish.message.text.contains("试次"), "finish announcement is localized and not a trial")
 	shell_finish.set_locale("en")
 	check(shell_finish.t("start") == "Start participation" and shell_finish.t("trial", {"n": 2}).contains("Trial 2"), "english locale strings")
+	check(shell_finish.recover_button.text == "Recover" and shell_finish.permit_button.text == "Recover with permit", "real recovery buttons switch locale with the remaining surface")
 	shell_finish.set_locale("zh")
 	check(shell_finish.t("start") == "开始参与", "chinese locale strings")
 	shell_finish.queue_free()

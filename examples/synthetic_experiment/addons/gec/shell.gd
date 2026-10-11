@@ -309,6 +309,10 @@ func set_locale(code: String) -> void:
 		permit.placeholder_text = t("permit")
 	if advanced_toggle != null:
 		advanced_toggle.text = t("advanced")
+	if recover_button != null:
+		recover_button.text = t("recover")
+	if permit_button != null:
+		permit_button.text = t("recover_permit")
 	if start != null:
 		start.text = t("start")
 	if export_button != null:
