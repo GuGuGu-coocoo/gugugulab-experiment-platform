@@ -45,7 +45,7 @@
 {% csrf_token %}
 <input type="hidden" name="op" value="delete_study">
 <label>{{ui.deletion_password}} <input type="password" name="password" data-delete-password="1" autocomplete="current-password" required></label>
-<button type="submit" class="danger" data-delete-submit="1">{{ui.deletion_submit}}</button>
+<button type="submit" data-danger="1" data-delete-submit="1">{{ui.deletion_submit}}</button>
 </form>
 </section>
 {% endif %}

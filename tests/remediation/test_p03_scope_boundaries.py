@@ -161,3 +161,12 @@ def test_code_search_still_refuses_identity_mapping_oracles(world, module):
     for code in (' 001 ', ' ', '001'):
         response = client.get(f'/studies/{study.id}/{module}', {'code': code})
         assert response.status_code == 403
+
+
+def test_permanent_study_delete_uses_existing_danger_style(world):
+    body = world['client'].get(f'/studies/{world["study"].id}').content.decode()
+    assert re.search(r'<button\b[^>]*data-danger="1"[^>]*data-delete-submit="1"', body)
+    assert 'button[data-danger="1"]' in body
+    reader = get_user_model().objects.create_user('scope_no_delete')
+    AccountProfile.objects.create(user=reader, study_overrides={str(world['study'].id): ['study.view']})
+    assert 'data-delete-submit="1"' not in login(reader).get(f'/studies/{world["study"].id}').content.decode()
