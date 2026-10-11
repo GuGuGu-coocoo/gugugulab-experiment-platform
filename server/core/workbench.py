@@ -187,7 +187,8 @@ def sessions_module(request, study):
     rows_visible = allowed(request.user, study, 'session.view')
     mapping_visible = allowed(request.user, study, 'identity_mapping.read')
     recover_allowed = allowed(request.user, study, 'session.recover')
-    code = (request.GET.get('code') or '').strip()
+    # Roster codes are exact identities; legal surrounding whitespace is data.
+    code = request.GET.get('code') or ''
     session_raw = (request.GET.get('session') or '').strip()
     status = (request.GET.get('status') or '').strip()
     page_raw = request.GET.get('page')
@@ -263,7 +264,7 @@ def sessions_module(request, study):
 def participation_module(request, study):
     mapping_visible = allowed(request.user, study, 'identity_mapping.read')
     participants = Participant.objects.filter(study=study)
-    code = (request.GET.get('code') or '').strip()
+    code = request.GET.get('code') or ''
     page_raw = request.GET.get('page')
     if code or page_raw not in (None, ''):
         require(mapping_visible, 'forbidden', 403)

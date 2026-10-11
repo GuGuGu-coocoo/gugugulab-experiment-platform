@@ -115,3 +115,49 @@ def test_old_signed_native_preview_is_rejected_before_opening_any_archive(world)
                                     {'op': 'preview', 'build_id': str(missing.id)},
                                     HTTP_ACCEPT='application/json')
     assert response.status_code == 422 and response.json()['code'] == 'web_preview_only'
+
+
+@pytest.mark.parametrize('code', [' 001 ', 'leading ', ' trailing'])
+def test_exact_code_search_keeps_admitted_identity_in_roster_and_sessions(world, code):
+    study, client = world['study'], world['client']
+    exact = Participant.objects.create(study=study, code=code)
+    trimmed = Participant.objects.create(study=study, code=code.strip())
+    sessions = []
+    for participant in (exact, trimmed):
+        session, _ = admit(world['release'], {
+            'operation_id': str(uuid.uuid4()), 'proof': 'p' * 48,
+            'instance_id': str(world['instance'].instance_id), 'study_id': str(study.id),
+            'release_id': str(world['release'].id), 'build_id': str(world['web'].id),
+            'participant_code': participant.code,
+        })
+        sessions.append(session)
+    assert sessions[0].participant_id == exact.id
+    for module, marker, expected_id, other_id in (
+        ('participation', 'data-roster-row', exact.id, trimmed.id),
+        ('sessions', 'data-session-row', sessions[0].id, sessions[1].id),
+    ):
+        url = f'/studies/{study.id}/{module}'
+        response = client.get(url, {'code': code})
+        assert response.status_code == 200
+        body = response.content.decode()
+        assert f'{marker}="{expected_id}"' in body
+        assert f'{marker}="{other_id}"' not in body
+        assert f'name="code" value="{code}"' in body
+        # Searching the unspaced identity reaches exactly that separate subject.
+        other = client.get(url, {'code': code.strip()}).content.decode()
+        assert f'{marker}="{other_id}"' in other
+        assert f'{marker}="{expected_id}"' not in other
+        # An empty query continues to clear the filter rather than finding an ID.
+        all_rows = client.get(url, {'code': ''}).content.decode()
+        assert f'{marker}="{expected_id}"' in all_rows and f'{marker}="{other_id}"' in all_rows
+
+
+@pytest.mark.parametrize('module', ['participation', 'sessions'])
+def test_code_search_still_refuses_identity_mapping_oracles(world, module):
+    study = world['study']
+    reader = get_user_model().objects.create_user('scope_row_reader')
+    AccountProfile.objects.create(user=reader, study_overrides={str(study.id): ['study.view', 'session.view']})
+    client = login(reader)
+    for code in (' 001 ', ' ', '001'):
+        response = client.get(f'/studies/{study.id}/{module}', {'code': code})
+        assert response.status_code == 403
