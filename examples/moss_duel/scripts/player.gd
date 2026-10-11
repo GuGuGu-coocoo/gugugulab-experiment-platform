@@ -30,6 +30,7 @@ var dash_cooldown := 0.0
 var parry_cooldown := 0.0
 var invulnerability := 0.0
 var charge_time := 0.0
+var charge_action := "heavy_attack"
 var attack_damage := 1
 var attack_range := 105.0
 var attack_hit_time := 0.10
@@ -41,6 +42,8 @@ var flash_time := 0.0
 var feedback_time := 0.0
 var visual_time := 0.0
 var last_jump_time := 0.0
+var mouse_light_requested := false
+var mouse_heavy_requested := false
 
 
 func _ready() -> void:
@@ -66,6 +69,8 @@ func set_enabled(value: bool) -> void:
 	enabled = value
 	if not value:
 		velocity = Vector2.ZERO
+		mouse_light_requested = false
+		mouse_heavy_requested = false
 		if state != "dead":
 			state = "idle"
 
@@ -81,10 +86,13 @@ func reset_at(at: Vector2) -> void:
 	parry_cooldown = 0.0
 	invulnerability = 0.0
 	charge_time = 0.0
+	charge_action = "heavy_attack"
 	attack_resolved = false
 	air_dash_used = false
 	flash_time = 0.0
 	last_feedback = ""
+	mouse_light_requested = false
+	mouse_heavy_requested = false
 	facing = 1
 	health_changed.emit(health, max_health)
 	queue_redraw()
@@ -139,11 +147,26 @@ func _physics_process(delta: float) -> void:
 	queue_redraw()
 
 
+func _unhandled_input(event: InputEvent) -> void:
+	# GUI receives mouse events first. Only an unconsumed arena press can arm
+	# an attack; a Start/Resume button may disappear before the next physics tick.
+	if not enabled or state != "idle" or not event is InputEventMouseButton or not event.pressed:
+		return
+	if event.is_action_pressed("light_mouse"):
+		mouse_light_requested = true
+	elif event.is_action_pressed("heavy_mouse"):
+		mouse_heavy_requested = true
+
+
 func _handle_input() -> void:
+	var mouse_light := mouse_light_requested
+	var mouse_heavy := mouse_heavy_requested
+	mouse_light_requested = false
+	mouse_heavy_requested = false
 	if state == "charge":
 		# A key may be released while combat is paused. Check its current state,
 		# so the next physics frame still releases the charge after resuming.
-		if not Input.is_action_pressed("heavy_attack"):
+		if not Input.is_action_pressed(charge_action):
 			begin_heavy_attack(charge_time)
 		return
 	if state != "idle":
@@ -156,9 +179,12 @@ func _handle_input() -> void:
 		begin_dash()
 	elif Input.is_action_just_pressed("parry") and parry_cooldown <= 0.0:
 		begin_parry()
-	elif Input.is_action_just_pressed("light_attack"):
+	elif Input.is_action_just_pressed("light_attack") or mouse_light:
 		begin_light_attack()
-	elif Input.is_action_just_pressed("heavy_attack"):
+	elif Input.is_action_just_pressed("heavy_attack") or mouse_heavy:
+		# Once a mouse charge began in the arena, release it even over a menu.
+		# Keyboard attacks remain available while the pointer rests over the HUD.
+		charge_action = "heavy_attack" if Input.is_action_just_pressed("heavy_attack") else "heavy_mouse"
 		state = "charge"
 		state_time = 0.0
 		charge_time = 0.0

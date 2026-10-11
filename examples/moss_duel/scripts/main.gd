@@ -93,7 +93,15 @@ func _ensure_inputs() -> void:
 			event.physical_keycode = key
 			if not InputMap.action_has_event(action, event):
 				InputMap.action_add_event(action, event)
-	for pair in [["light_attack", MOUSE_BUTTON_LEFT], ["heavy_attack", MOUSE_BUTTON_RIGHT]]:
+	# GUI mouse clicks must never become gameplay attacks. Keep mouse actions
+	# separate, including when a project reuses an existing InputMap.
+	for action in ["light_attack", "heavy_attack"]:
+		for existing in InputMap.action_get_events(action):
+			if existing is InputEventMouseButton:
+				InputMap.action_erase_event(action, existing)
+	for pair in [["light_mouse", MOUSE_BUTTON_LEFT], ["heavy_mouse", MOUSE_BUTTON_RIGHT]]:
+		if not InputMap.has_action(pair[0]):
+			InputMap.add_action(pair[0])
 		var event := InputEventMouseButton.new()
 		event.button_index = pair[1]
 		if not InputMap.action_has_event(pair[0], event):
