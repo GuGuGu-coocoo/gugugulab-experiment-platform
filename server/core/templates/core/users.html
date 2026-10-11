@@ -1,6 +1,8 @@
 {% extends 'core/workbench.html' %}{% block content %}
 <h1>{{ui.users_title}}</h1>
-<p>{% if matrix.version == 2 %}{{ui.users_intro_v2}}{% else %}{{ui.users_intro}}{% endif %}</p>
+<p>{{ui.users_intro_short}}</p>
+<details data-account-rules><summary>{{ui.users_rules_summary}}</summary>
+<p>{% if matrix.version == 2 %}{{ui.users_intro_v2}}{% else %}{{ui.users_intro}}{% endif %}</p></details>
 <p><a href="/">{{ui.back_to_studies}}</a> · <a href="/account/password">{{ui.nav_password}}</a></p>
 {% if notice %}<div class="notice" tabindex="-1"{% if committed %} data-committed-kind="{{committed.kind}}"{% if committed.user_id %} data-committed-user="{{committed.user_id}}"{% endif %}{% if committed.study_id %} data-committed-study="{{committed.study_id}}"{% endif %}{% endif %}{% if deleted_principal %} data-deleted-principal="{{deleted_principal}}" data-deleted-username="{{deleted_username}}"{% endif %}>{{notice}}</div>{% endif %}
 {% if secret %}<div class="notice" data-one-time-secret="1">{{ui.users_secret_note}} {{secret_username}} <code>{{secret}}</code></div>{% endif %}
@@ -27,8 +29,8 @@
 <section data-accounts><h2>{{ui.users_accounts}}</h2>
 <p class="muted" data-accounts-total="{{matrix.total}}">{% if lang == 'en' %}{{ui.users_accounts_note}} {{matrix.total}} ({{ui.common_page}} {{matrix.page}} / {{matrix.pages}}){% else %}{{ui.users_accounts_note}} 共 {{matrix.total}} 个账号（{{matrix.page}} / {{matrix.pages}} {{ui.common_page}}）{% endif %}</p>
 <div class="table-wrap"><table><tr><th>{{ui.common_username}}</th><th>{{ui.common_role}}</th><th>{{ui.common_status}}</th><th>{{ui.common_password}}</th><th>{{ui.common_actions}}</th></tr>
-{% for row in rows %}<tr data-account-row="{{row.id}}" data-owner-row="{{row.is_owner|yesno:'1,0'}}" data-account-role="{{row.role}}">
-<td>{{row.username}}{% if row.is_owner %} <small>Owner</small>{% endif %}</td><td>{{row.role}}</td>
+{% for row in rows %}<tr data-account-row="{{row.id}}" data-owner-row="{{row.is_owner|yesno:'1,0'}}" data-account-role="{% if row.is_owner %}owner{% else %}{{row.role}}{% endif %}">
+<td>{{row.username}}{% if row.is_owner %} <small>Owner</small>{% endif %}</td><td>{% if row.is_owner %}{{ui.role_owner}}{% elif row.role == 'admin' %}{{ui.role_admin}}{% else %}{{ui.role_user}}{% endif %}</td>
 <td>{% if row.is_active %}{{ui.users_state_active}}{% else %}{{ui.users_state_disabled}}{% endif %}</td><td>{% if row.must_change_password %}{{ui.users_password_change}}{% else %}{{ui.users_password_normal}}{% endif %}</td>
 <td>{% if row.is_owner %}<small>{{ui.users_owner_readonly}}</small>{% else %}
 <form method="post">{% csrf_token %}<input type="hidden" name="op" value="reset_password"><input type="hidden" name="username" value="{{row.username}}"><input type="hidden" name="revision" value="{{revision}}"><input type="password" name="password" placeholder="{{ui.users_your_password}}" required><button>{{ui.users_reset_password}}</button></form>
@@ -54,7 +56,7 @@
 <div class="table-wrap matrix-wrap">
 <table class="matrix-table"><tr><th>{{ui.common_username}}</th><th>{{ui.common_role}}</th><th>{{ui.users_editable_scope}}</th><th>{{ui.common_actions}}</th></tr>
 {% for row in matrix.rows %}
-<tr data-matrix-user-row="{{row.id}}" data-owner-row="{{row.is_owner|yesno:'1,0'}}" data-account-role="{{row.role}}">
+<tr data-matrix-user-row="{{row.id}}" data-owner-row="{{row.is_owner|yesno:'1,0'}}" data-account-role="{% if row.is_owner %}owner{% else %}{{row.role}}{% endif %}">
 <th scope="row" data-matrix-account="{{row.id}}">{{row.username}} <small>{% if row.is_owner %}{{ui.users_badge_owner}}{% elif row.role == 'admin' %}{{ui.role_admin}}{% else %}{{ui.role_user}}{% endif %}</small></th>
 <td>{% if row.is_active %}{{ui.users_state_active}}{% else %}{{ui.users_state_disabled}}{% endif %}{% if row.must_change_password %} · {{ui.users_password_change}}{% endif %}</td>
 <td><small data-hidden-studies="{{row.hidden_studies}}">{% if row.hidden_studies %}{{ui.users_hidden_studies}} {{row.hidden_studies}} {{ui.users_hidden_studies_note}}{% else %}{{ui.users_no_hidden_studies}}{% endif %}</small>

@@ -24,6 +24,7 @@ STRINGS = {
     'app_note': {'zh': '仅合成研究 · 工程验证版', 'en': 'Synthetic studies only · engineering preview'},
     'nav_home': {'zh': '我的研究', 'en': 'My studies'},
     'nav_users': {'zh': '账号与权限', 'en': 'Accounts & permissions'},
+    'nav_menu': {'zh': '导航菜单', 'en': 'Navigation'},
     'nav_password': {'zh': '修改密码', 'en': 'Change password'},
     'nav_logout': {'zh': '退出登录', 'en': 'Sign out'},
     'nav_language': {'zh': '语言', 'en': 'Language'},
@@ -285,6 +286,9 @@ STRINGS = {
     'entry_native_unavailable': {'zh': '本研究的当前参与版本暂不可用（完整程序包缺失或校验失败），没有开放新参与。请联系研究者。', 'en': 'The current version is unavailable (missing or tampered complete package); new participation is closed. Contact the researcher.'},
     # Accounts page additions.
     'users_title': {'zh': '账号与实例治理', 'en': 'Accounts & instance governance'},
+    'users_intro_short': {'zh': '管理研究者账号与权限。更改权限需先预览，再用本人密码确认。',
+                          'en': 'Manage researcher accounts and permissions. Preview changes, then confirm with your password.'},
+    'users_rules_summary': {'zh': '权限规则说明', 'en': 'Permission rules'},
     'users_intro': {'zh': 'Owner 由实例指针唯一决定；Admin 由 Owner 任命或降级。Owner 行即使对 Owner 本人也受保护：账号管理不能修改 Owner 行，Owner 改密码请使用“修改我的密码”。普通 Admin 只能授予自己“有效且可委派”的动作，且目标账号必须在可支配范围内；角色任命与降级始终仅限 Owner。矩阵先显示研究可见性，再展开显式动作；取消可见性会同时清除子权限，服务端拒绝“不可见却保留子权限”的矛盾提交。所有授权变更都需要先预览，再用本人密码一次性确认。',
                    'en': 'The Owner comes from the instance pointer only; Admins are appointed or demoted by the Owner. The Owner row is protected even from the Owner: account management cannot change it, so the Owner changes the password under “Change password”. An ordinary Admin can only grant actions they hold as effective and delegable, and only within studies they dominate; appointing or demoting roles is Owner-only. The matrix shows study visibility first, then the explicit actions; clearing visibility also clears child permissions, and the server rejects the contradictory submission. Every authorization change is previewed first and confirmed once with your own password.'},
     'users_secret_note': {'zh': '一次性临时密码（只显示这一次，绝不写入审计或导出）。账号：', 'en': 'One-time temporary password (shown once; never written to the audit log or exports). Account:'},

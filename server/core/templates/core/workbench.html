@@ -2,6 +2,7 @@
 {% block body %}<div class="app">
 <nav class="side" data-nav="1" aria-label="{{ui.study_modules}}">
 {% if request.user.is_authenticated %}<p class="who" data-current-account="1"><strong>{{request.user.username}}</strong>{% if is_owner %}{{ui.role_owner}}{% elif account_role == 'admin' %}{{ui.role_admin}}{% else %}{{ui.role_user}}{% endif %}</p>{% endif %}
+<details class="side-menu" open><summary>{{ui.nav_menu}}</summary><div class="side-menu-content">
 <h2>{{ui.nav_home}}</h2>
 <ul><li><a href="/" data-nav-link="home" {% if nav_current == 'home' %}aria-current="page"{% endif %}>{{ui.nav_home}}</a></li></ul>
 {% if study %}<h2>{{ui.study_modules}}</h2>
@@ -12,6 +13,16 @@
 <li><a href="/account/password" data-nav-link="password" {% if nav_current == 'password' %}aria-current="page"{% endif %}>{{ui.nav_password}}</a></li>
 </ul>
 <form action="/logout" method="post">{% csrf_token %}<button class="secondary" data-nav-link="logout">{{ui.nav_logout}}</button></form>
+</div></details>
 </nav>
 <main id="main" class="main" {% if module %}data-module="{{module}}"{% endif %}>{% block content %}{% endblock %}</main>
-</div>{% endblock %}
+</div>
+<script>
+(() => {
+  const menu = document.querySelector('.side-menu');
+  const narrow = window.matchMedia('(max-width: 860px)');
+  const sync = () => { menu.open = !narrow.matches; };
+  sync();
+  narrow.addEventListener('change', sync);
+})();
+</script>{% endblock %}

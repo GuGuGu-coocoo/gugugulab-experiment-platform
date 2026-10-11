@@ -104,6 +104,10 @@ def row_of(body, user_id):
     return re.search(rf'<tr data-matrix-user-row="{user_id}".*?</tr>', body, re.S).group(0)
 
 
+def account_row_of(body, user_id):
+    return re.search(rf'<tr data-account-row="{user_id}".*?</tr>', body, re.S).group(0)
+
+
 def panel_of(body, user_id):
     return re.search(rf'<tr data-matrix-studies="{user_id}">.*?</tr>', body, re.S).group(0)
 
@@ -137,6 +141,33 @@ def world(db):
 
 
 # --- one row per account, badges, sources, no delegation ---------------------
+
+def test_accounts_intro_is_brief_and_owner_role_follows_instance_pointer(world):
+    owner = world['owner']
+    # The stored profile role is ordinary; the instance pointer alone makes
+    # this account the Owner and must control the role shown to readers.
+    assert AccountProfile.objects.get(user=owner).role == 'user'
+    client = signed_in(owner.username, OWNER_PASSWORD)
+    body = client.get('/users').content.decode()
+    assert re.search(r'<h1>账号与实例治理</h1>\s*<p>管理研究者账号与权限。更改权限需先预览，再用本人密码确认。</p>\s*<details data-account-rules>', body)
+    rules = re.search(r'<details data-account-rules([^>]*)>\s*<summary>权限规则说明</summary>(.*?)</details>', body, re.S)
+    assert rules and 'open' not in rules.group(1) and 'Owner 由实例指针唯一决定' in rules.group(2)
+    owner_row = account_row_of(body, owner.pk)
+    assert 'data-account-role="owner"' in owner_row
+    assert '</td><td>实例 Owner</td>' in owner_row
+    assert '</td><td>user</td>' not in owner_row
+    assert '</td><td>管理员</td>' in account_row_of(body, world['admin'].pk)
+    assert '</td><td>普通成员</td>' in account_row_of(body, world['ordinary'].pk)
+    assert 'data-account-role="owner"' in row_of(body, owner.pk)
+
+    client.cookies['gep_lang'] = 'en'
+    english = client.get('/users').content.decode()
+    assert '<p>Manage researcher accounts and permissions. Preview changes, then confirm with your password.</p>' in english
+    assert re.search(r'<details data-account-rules[^>]*>\s*<summary>Permission rules</summary>.*?The Owner comes from the instance pointer only', english, re.S)
+    assert '</td><td>Instance Owner</td>' in account_row_of(english, owner.pk)
+    assert '</td><td>Admin</td>' in account_row_of(english, world['admin'].pk)
+    assert '</td><td>Member</td>' in account_row_of(english, world['ordinary'].pk)
+
 
 def test_v2_matrix_one_row_per_account_badges_sources_and_no_delegation(world):
     owner = world['owner']

@@ -45,6 +45,7 @@ header.top .note{color:var(--muted);font-size:13px}
 .side .who{color:var(--muted);font-size:13px}
 .side .who strong{display:block;color:var(--ink);font-size:15px}
 .side form{margin:10px 0 0}
+.side-menu>summary{display:none}
 .main{padding:26px 4% 48px;min-width:0}
 .card,section,article.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:20px;margin:0 0 18px;box-shadow:var(--shadow)}
 h1,h2,h3{line-height:1.25;margin-top:0}
@@ -99,7 +100,10 @@ dialog .row{justify-content:flex-end}
 tr[data-matrix-studies] td{border-bottom:1px solid var(--line)}
 @media (max-width:860px){
   .app{grid-template-columns:minmax(0,1fr)}
-  .side{border-right:0;border-bottom:1px solid var(--line)}
+  .side{border-right:0;border-bottom:1px solid var(--line);padding:12px 5%}
+  .side .who{margin:0 0 8px}
+  .side-menu>summary{display:list-item;cursor:pointer;font-weight:600;padding:7px 0}
+  .side-menu[open]>summary{margin-bottom:8px}
   .side ul{flex-direction:row;flex-wrap:wrap}
   .main{padding:18px 5% 40px}
   h1{font-size:22px}
