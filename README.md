@@ -82,6 +82,8 @@ pnpm install --frozen-lockfile
 
 ## 使用指南
 
+想亲自测试“独立游戏 → 手动接入 GEC → GEP 发行”的流程，可以使用 [Moss Duel 单 Boss 小游戏](examples/moss_duel/README.md)。独立项目不带 GEC 或服务器配置，支持轻击、蓄力重击、弹反、冲刺和跳跃；原创画面配 Kenney CC0 音效。[接入指南](docs/moss_duel_gec.md)通过复制外置包、切换主场景和 Godot 图形导出完成接入，不修改战斗脚本。这是合成工程练习，人工接入体验与 Phase 03 人工测试仍待验。
+
 - [研究者](docs/researcher.md)：参与设置、名单、发行、招募与导出。
 - [实验开发者](docs/experiment_developer.md)：通用数据模块、GEC 接入及版本边界。
 - [维护者](docs/maintainer.md)：合成环境、服务地址与定向验证。
