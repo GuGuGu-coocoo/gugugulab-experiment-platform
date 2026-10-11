@@ -166,6 +166,22 @@ func run() -> void:
 	check(shell_data_only.state == "data_only", "confirmed finished candidate is data only")
 	shell_data_only.queue_free()
 
+	# Missing a task checkpoint also means data-only, even before completion.
+	var interrupted_backend := FakeBackend.new()
+	interrupted_backend.config = {"config_version": "1", "purpose": "synthetic", "mode": "id", "shell_capability": "gec-shell/v1"}
+	interrupted_backend.named_result = {"state": "confirm", "session_id": "local-interrupted", "token": "it", "can_resume": false, "task_finished": false}
+	var interrupted = build(interrupted_backend)
+	var lifecycle: Array = []
+	interrupted.session_started.connect(func(_checkpoint): lifecycle.append("task"))
+	interrupted.session_data_only.connect(func(): lifecycle.append("data"))
+	interrupted.code.text = "001"
+	await interrupted.submit_entry()
+	check(interrupted_backend.confirmed.is_empty(), "unfinished data-only candidate waits for confirmation")
+	await interrupted.confirm_session()
+	check(lifecycle == ["data"] and interrupted.state == "data_only", "unfinished no-checkpoint recovery emits only data lifecycle")
+	check(interrupted_backend.confirmed == [{"session_id": "local-interrupted", "token": "it", "can_resume": false}], "unfinished data-only recovery retains its authorized identity")
+	interrupted.queue_free()
+
 	# No matching candidate: the shell must not claim an uploaded/cleaned session.
 	var none_backend := FakeBackend.new()
 	none_backend.config = {"config_version": "1", "purpose": "synthetic", "mode": "password", "shell_capability": "gec-shell/v1"}
