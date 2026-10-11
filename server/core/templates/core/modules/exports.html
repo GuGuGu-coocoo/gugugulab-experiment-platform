@@ -1,18 +1,19 @@
 <section data-exports="1"><h2>{{ui.exports_title}}</h2><p class="muted">{{ui.exports_intro}}</p>
 <form id="export-form" data-exports-form="1">{% csrf_token %}
 <fieldset data-export-views="1"><legend>{{ui.exports_view_label}}</legend>
-{% for option in exports_options.views %}{% if option.allowed %}<label data-export-view-option="{{option.value}}"><input type="radio" name="view" value="{{option.value}}" data-export-view="{{option.value}}" {% if option.value == exports_options.default_view %}checked{% endif %}> {% if option.value == 'identified' %}{{ui.exports_view_identified}} <small data-export-recommended="1">{{ui.exports_view_recommended}}</small>{% else %}{{ui.exports_view_unmapped}}{% endif %} <span class="muted" data-export-view-counts="{{option.value}}">{% if option.value == 'identified' %}{{ui.exports_count_roster}}{% else %}{{ui.exports_count_participants}}{% endif %} {{option.counts.participants}} · {{ui.exports_count_sessions}} {{option.counts.sessions}} · {{ui.exports_count_events}} {{option.counts.events}}</span></label>
+{% for option in exports_options.views %}{% if option.allowed %}<label data-export-view-option="{{option.value}}"><input type="radio" name="view" value="{{option.value}}" data-export-view="{{option.value}}" {% if option.value == exports_options.default_view %}checked{% endif %}> {% if option.value == 'identified' %}{{ui.exports_view_identified}} <small data-export-recommended="1">{{ui.exports_view_recommended}}</small>{% else %}{{ui.exports_view_unmapped}}{% endif %} <span class="muted" data-export-view-counts="{{option.value}}">{% if option.value == 'identified' and study.mode != 'anonymous' %}{{ui.exports_count_roster}}{% else %}{{ui.exports_count_participants}}{% endif %} {{option.counts.participants}} · {{ui.exports_count_sessions}} {{option.counts.sessions}} · {{ui.exports_count_events}} {{option.counts.events}}</span></label>
 {% endif %}{% endfor %}</fieldset>
 {% if exports_options.unmapped_only %}<p class="muted" data-export-unmapped-note="1">{{ui.exports_view_unmapped_note}}</p>{% endif %}
 <label>{{ui.exports_language_label}} <select name="language" data-export-language="1"><option value="zh" selected>{{ui.exports_language_zh}}</option><option value="en">{{ui.exports_language_en}}</option></select></label>
 <button data-export-submit="1">{{ui.exports_create}}</button>
-<button class="muted" data-export-v1-submit="1">{{ui.exports_create_v1}}</button>
+<button class="secondary" data-export-v1-submit="1">{{ui.exports_create_v1}}</button>
 </form><p id="export-result" role="status" aria-live="polite"></p>
 <p class="muted" data-export-zip-note="1">{{ui.exports_zip_note}}</p>
 <h3>{{ui.exports_list}}</h3>
+<div id="export-new-snapshots" aria-live="polite"></div>
 {% if exports_rows %}<div class="table-wrap"><table><caption>{{ui.exports_list}}</caption><thead><tr><th scope="col">ID</th><th scope="col">{{ui.exports_col_created}}</th><th scope="col">{{ui.exports_col_formats}}</th></tr></thead><tbody>
 {% for row in exports_rows %}<tr data-export-row="{{row.id}}" data-export-version="{{row.format_version}}" data-export-row-view="{{row.view|default:''}}"><td><code>{{row.id}}</code></td><td data-local-time="{{row.created_local}}">{{row.created_local}}</td><td>
-{% if row.format_version == '2' %}<span data-export-meta="1">v2 · {{row.view}} · {{row.language}}{% if row.counts %} · {{ui.exports_count_roster}} {{row.counts.participants}} · {{ui.exports_count_sessions}} {{row.counts.sessions}} · {{ui.exports_count_events}} {{row.counts.events}}{% endif %}</span> {% if row.permitted %}<a href="/v1/admin/exports/{{row.id}}/download?format=zip" data-download="{{row.id}}" data-format="zip">{{ui.exports_zip_download}}</a> · <a href="/v1/admin/exports/{{row.id}}/download" data-download="{{row.id}}" data-format="jsonl">{{ui.exports_download}}</a> · <a href="/v1/admin/exports/{{row.id}}/download?format=metadata" data-format="metadata">metadata</a>{% else %}<small data-export-restricted="1">{{ui.exports_restricted}}</small>{% endif %}
+{% if row.format_version == '2' %}<span data-export-meta="1">v2 · {{row.view}} · {{row.language}}{% if row.counts %} · {% if row.view == 'identified' and study.mode != 'anonymous' %}{{ui.exports_count_roster}}{% else %}{{ui.exports_count_participants}}{% endif %} {{row.counts.participants}} · {{ui.exports_count_sessions}} {{row.counts.sessions}} · {{ui.exports_count_events}} {{row.counts.events}}{% endif %}</span> {% if row.permitted %}<a href="/v1/admin/exports/{{row.id}}/download?format=zip" data-download="{{row.id}}" data-format="zip">{{ui.exports_zip_download}}</a> · <a href="/v1/admin/exports/{{row.id}}/download" data-download="{{row.id}}" data-format="jsonl">{{ui.exports_download}}</a> · <a href="/v1/admin/exports/{{row.id}}/download?format=metadata" data-format="metadata">metadata</a>{% else %}<small data-export-restricted="1">{{ui.exports_restricted}}</small>{% endif %}
 {% else %}<span data-export-meta="1">{{ui.exports_v1}}</span> <a href="/v1/admin/exports/{{row.id}}/download" data-download="{{row.id}}" data-format="jsonl">{{ui.exports_download}}</a> · <a href="/v1/admin/exports/{{row.id}}/download?format=csv" data-format="csv">csv</a> · <a href="/v1/admin/exports/{{row.id}}/download?format=metadata" data-format="metadata">metadata</a>{% endif %}
 </td></tr>{% endfor %}
 </tbody></table></div>{% else %}<p data-exports-empty="1">{{ui.exports_empty}}</p>{% endif %}
@@ -31,7 +32,18 @@ const strings={
 function message(text){let status=out.querySelector('[data-export-status]');if(!status){status=document.createElement('span');status.setAttribute('data-export-status','1');out.prepend(status);}status.textContent=text;}
 function codeOf(status,data){return data&&data.code?data.code:String(status||'error');}
 async function post(body){const response=await fetch('/v1/admin/exports',{method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':form.querySelector('[name=csrfmiddlewaretoken]').value},body:JSON.stringify(body)});let data=null;try{data=await response.json();}catch(error){data=null;}return {ok:response.ok,status:response.status,data:data};}
-function link(exportId,fmt,label){const anchor=document.createElement('a');anchor.href='/v1/admin/exports/'+exportId+'/download'+(fmt?'?format='+fmt:'');anchor.textContent=' · '+label;anchor.setAttribute('data-created-format',fmt||'jsonl');out.append(anchor);return anchor;}
+function link(exportId,fmt,label,target=out){const anchor=document.createElement('a');anchor.href='/v1/admin/exports/'+exportId+'/download'+(fmt?'?format='+fmt:'');anchor.textContent=' · '+label;if(target===out)anchor.setAttribute('data-created-format',fmt||'jsonl');target.append(anchor);return anchor;}
+function showSnapshot(exportId,version,view,language){
+ const empty=document.querySelector('[data-exports-empty]');if(empty)empty.remove();
+ const item=document.createElement('p');item.setAttribute('data-export-row',exportId);
+ const id=document.createElement('code');id.textContent=exportId;item.append(id);
+ const meta=document.createElement('span');meta.textContent=' · '+version+(view?' · '+view+' · '+language:'');item.append(meta);
+ if(version==='v2')link(exportId,'zip',strings.zipDownload,item);
+ link(exportId,null,strings.download,item);
+ if(version==='v1')link(exportId,'csv','csv',item);
+ link(exportId,'metadata','metadata',item);
+ document.querySelector('#export-new-snapshots').prepend(item);
+}
 form.onsubmit=async e=>{
  e.preventDefault();
  out.textContent='';
@@ -40,12 +52,14 @@ form.onsubmit=async e=>{
   if(e.submitter&&e.submitter.hasAttribute('data-export-v1-submit')){
    const created=await post({study_id:'{{study.id}}'});
    if(!created.ok){message(strings.createFailed+codeOf(created.status,created.data));return;}
+   showSnapshot(created.data.export_id,'v1');
    message(strings.createdV1);link(created.data.export_id,null,strings.download);link(created.data.export_id,'csv','csv');link(created.data.export_id,'metadata','metadata');return;
   }
   if(!view){message(strings.viewRequired);return;}
   const created=await post({study_id:'{{study.id}}',format_version:'2',view:view.value,language:language?language.value:'zh'});
   if(!created.ok){message(strings.createFailed+codeOf(created.status,created.data));return;}
   const exportId=created.data.export_id;
+  showSnapshot(exportId,'v2',view.value,language?language.value:'zh');
   message(strings.created);
   const zipLink=link(exportId,'zip',strings.zipDownload);
   link(exportId,null,strings.download);

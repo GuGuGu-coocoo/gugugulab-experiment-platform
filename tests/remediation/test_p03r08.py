@@ -132,7 +132,8 @@ def world(db):
     AccountProfile.objects.create(user=owner, role='user', policy_version=2)
     # The literal newline in the title exercises the RFC 4180 quoted-field path
     # of the text columns; the JSON columns escape newlines by JSON rules.
-    study = Study.objects.create(title='Synthetic R08 study\n第二行', recruitment='open', max_sessions=10)
+    study = Study.objects.create(title='Synthetic R08 study\n第二行', mode='id',
+                                 recruitment='open', max_sessions=10)
     build = Build.objects.create(study=study, descriptor={'platform': 'synthetic', 'version': '1.0'}, digest='b' * 64)
     release = Release.objects.create(study=study, build=build, config={'purpose': 'synthetic'}, approved=True)
 

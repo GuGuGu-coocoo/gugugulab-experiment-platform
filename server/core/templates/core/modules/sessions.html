@@ -11,7 +11,7 @@
 {% if sessions_rows %}<div class="table-wrap"><table><caption>{{ui.sessions_title}}</caption><thead><tr><th scope="col">{{ui.sessions_col_session}}</th><th scope="col">{{ui.sessions_col_participant}}</th><th scope="col">{{ui.sessions_col_status}}</th><th scope="col">{{ui.sessions_col_created}}</th><th scope="col">{{ui.sessions_col_release}}</th><th scope="col">{{ui.sessions_col_recovery}}</th></tr></thead><tbody>
 {% for row in sessions_rows %}<tr data-session-row="{{row.id}}" data-status="{{row.state}}">
 <td><code>{{row.id}}</code></td>
-<td>{% if row.participant_visible %}<span data-participant="{{row.participant_code}}">{{row.participant_code}}</span>{% else %}<span class="muted" data-participant-hidden="1">{{ui.sessions_hidden}}</span>{% endif %}</td>
+<td>{% if not row.participant_visible %}<span class="muted" data-participant-hidden="1">{{ui.sessions_hidden}}</span>{% elif row.participant_code %}<span data-participant="{{row.participant_code}}">{{row.participant_code}}</span>{% else %}<span class="muted" data-participant-no-code="1">{{ui.sessions_no_code}}</span>{% endif %}</td>
 <td data-status-label="{{row.state}}">{{row.state_label}}</td>
 <td data-local-time="{{row.created_local}}">{{row.created_local}}</td>
 <td>{{row.release_label}}</td>

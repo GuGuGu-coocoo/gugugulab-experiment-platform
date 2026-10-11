@@ -250,7 +250,7 @@ def sessions_module(request, study):
                      'created_local': local_time(session.created_at),
                      'release_label': release_label(session.release),
                      'participant': session.participant,
-                     'participant_code': session.participant.code if mapping_visible and session.participant else '',
+                     'participant_code': (session.participant.code or '') if mapping_visible and session.participant else '',
                      'participant_visible': mapping_visible})
     context.update({'sessions_rows': rows, 'sessions_page': page, 'sessions_pages': pages,
                     'sessions_filtered_total': total,

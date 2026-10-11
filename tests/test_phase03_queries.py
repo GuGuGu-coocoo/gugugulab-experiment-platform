@@ -147,6 +147,27 @@ def test_dashboard_cards_stable_navigation_and_module_pages(setup):
     assert client.get(f'/studies/{study.id}/bogus').status_code == 404
 
 
+def test_anonymous_session_has_a_clear_participant_label(setup):
+    world = make_world(setup)
+    study, owner = world['study'], world['owner']
+    study.mode = 'anonymous'
+    study.save(update_fields=['mode'])
+    grant(owner, study, 'study.view', 'session.view', 'identity_mapping.read', 'data.export_raw')
+    participant = Participant.objects.create(study=study, code=None)
+    Session.objects.create(participant=participant, release=world['release'],
+                           operation=uuid.uuid4(), proof_hash='a' * 64, request={},
+                           token_hash='b' * 64, expires_at=timezone.now() + timedelta(days=1))
+
+    response = login_client('synthetic_owner').get(f'/studies/{study.id}/sessions')
+    body = response.content.decode()
+    assert response.status_code == 200
+    assert '参与者数：1' in body
+    assert 'data-participant-no-code="1">无人工 ID</span>' in body
+    assert 'data-participant="None"' not in body
+    export_body = login_client('synthetic_owner').get(f'/studies/{study.id}/exports').content.decode()
+    assert 'data-export-view-counts="identified">参与人 1' in export_body
+
+
 def test_sessions_exact_code_search_status_filter_timezone_and_pagination(setup):
     world = make_world(setup)
     study, owner = world['study'], world['owner']
