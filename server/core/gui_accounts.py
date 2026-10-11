@@ -29,7 +29,7 @@ MESSAGES = {
     'admin_appointment_owner_only': '只有 Owner 可以任命或降级 Admin。',
     'owner_only': '只有 Owner 可以执行此操作。',
     'self_target': '不能对自己的账号执行此操作；请使用修改密码。',
-    'higher_privilege_target': '目标账号拥有操作者无法支配的研究权限（含不可委派权限），不能重置密码、停用、启用、调整其权限或永久删除。',
+    'higher_privilege_target': '目标账号拥有操作者无法支配的平台或研究权限，不能重置密码、停用、启用、调整其权限或永久删除。',
     'password_change_required': '必须先修改临时密码，才能执行账号治理操作。',
     'password_reused': '新密码不能与当前密码相同。',
     'role': '角色不合法。',
@@ -57,7 +57,7 @@ MESSAGES = {
     'preview_stale': '预览后相关账号、研究或权限已变化，请重新预览；未执行任何更改。',
     'preview_errors': '预览仍有逐行错误，整批未执行；请修正后重新上传。',
     'visibility_children_contradiction': '取消研究可见性时不能保留子权限；本次未执行任何更改。',
-    'delegation_forbidden': '包含当前账号没有有效且可委派的权限，或目标研究超出授权范围；未执行任何更改。',
+    'delegation_forbidden': '包含当前账号无权管理的权限，或目标研究超出授权范围；未执行任何更改。',
     'file_required': '请选择要上传的 XLSX 文件。',
     'file_too_large': '文件超过 2 MiB 压缩上限，未导入任何行。',
     'expanded_too_large': '文件展开后超过 10 MiB 上限，未导入任何行。',
@@ -236,9 +236,16 @@ def _users_context(request):
     else:
         # Ordinary Admins cannot reconcile conflicts, so the page never loads them.
         conflicts = {'rows': [], 'total': 0, 'page': 1, 'pages': 1, 'page_links': []}
+    invitations = list(AccountInvitation.objects.filter(consumed=False, revoked=False,
+                       expires_at__gt=timezone.now()).order_by('username'))
+    for invitation in invitations:
+        invitation.can_revoke = all(allowed_platform(request.user, action) for action in
+            accounts.lifecycle_platform_actions('revoke_admin' if invitation.role == 'admin' else 'revoke_user'))
     return {'rows': matrix['rows'], 'owner_username': Instance.objects.values_list('owner__username', flat=True).get(pk=1),
             'is_owner': owned,
-            'invitations': AccountInvitation.objects.filter(consumed=False, revoked=False, expires_at__gt=timezone.now()).order_by('username'),
+            'invitations': invitations,
+            'can_create_user': allowed_platform(request.user, 'accounts.create_user'),
+            'can_invite_admin': allowed_platform(request.user, 'accounts.create_admin'),
             'conflicts': conflicts, 'revision': accounts.instance_revision(),
             'matrix': matrix, 'action_labels': ACTION_LABELS,
             # Bounded account-lifecycle audit view: a deleted actor is rendered
@@ -246,8 +253,7 @@ def _users_context(request):
             'account_audit': accounts.recent_account_audits(),
             # Owner-only, read-only v1 -> v2 enablement difference (nothing is
             # written here); an ordinary Admin never sees or can trigger it.
-            'migration': governance_migration.page_state() if owned else None,
-            'study_choice': permissions.configure_studies_page(request.user, request.GET.get('study_q', ''))}
+            'migration': governance_migration.page_state() if owned else None}
 
 
 @endpoint

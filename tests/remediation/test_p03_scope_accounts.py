@@ -44,10 +44,66 @@ def row(page, actor):
     return next(item for item in page.context['rows'] if item['id'] == actor.pk)
 
 
+def test_admin_actions_follow_owner_granted_capabilities_and_whole_account_scope(world):
+    owner, instance, admin, target, study = world
+    client = signed_in(admin)
+    page = client.get('/users')
+    assert page.status_code == 200
+    assert row(page, target)['can_manage']
+    assert not row(page, admin)['can_manage']
+    assert not row(page, owner)['can_manage']
+    assert not row(page, target)['role_options']
+    assert not page.context['can_invite_admin']
+    profile = AccountProfile.objects.get(user=admin)
+    profile.platform_overrides = {'accounts.create_admin': True}
+    profile.save()
+    page = client.get('/users')
+    assert page.context['can_invite_admin']
+    assert row(page, target)['role_options'] == ['admin']
+    # The UI capability is not authorization: the same real service checks it
+    # again and refuses when the Owner withdraws the capability.
+    profile.platform_overrides = {'accounts.create_admin': False}
+    profile.save()
+    response = client.post('/users', {'op': 'set_role', 'username': target.username,
+        'role': 'admin', 'password': PASSWORD, 'revision': instance.governance_revision})
+    assert response.status_code == 403
+    assert AccountProfile.objects.get(user=target).role == 'user'
 
 
+def test_restricted_admin_cannot_reset_or_promote_an_out_of_scope_account(world):
+    owner, instance, admin, target, study = world
+    profile = AccountProfile.objects.get(user=admin)
+    profile.study_overrides = {str(study.pk): ['study.view']}
+    profile.platform_overrides = {'accounts.create_admin': True}
+    profile.save()
+    target_profile = AccountProfile.objects.get(user=target)
+    target_profile.study_overrides = {str(study.pk): ['study.view', 'data.export_raw']}
+    target_profile.save()
+    client = signed_in(admin)
+    page = client.get('/users')
+    assert not row(page, target)['can_manage']
+    assert not row(page, target)['role_options']
+    before = target.password
+    response = client.post('/users', {'op': 'reset_password', 'username': target.username,
+        'password': PASSWORD, 'revision': instance.governance_revision})
+    assert response.status_code == 403
+    target.refresh_from_db()
+    assert target.password == before
 
 
+def test_v2_account_controls_use_one_dialog_and_no_roster_templates(world):
+    owner, _, _, _, _ = world
+    page = signed_in(owner).get('/users')
+    body = page.content.decode()
+    assert '/users/templates/roster?' not in body
+    assert 'data-study-search' not in body
+    # Only the one confirmation dialog asks for an operator password on v2.
+    assert body.count('type="password"') == 1
+    assert 'data-confirm-dialog="1"' in body
+    for operation in ('reset_password', 'set_role', 'disable', 'invite_account', 'create_temp'):
+        pattern = r'<form[^>]*data-confirm="password"[^>]*>[^<]*.*?name="op" value="' + operation + '"'
+        assert re.search(pattern, body, re.S), operation
+    assert '委派标记变化' not in body
 
 
 @pytest.mark.parametrize('failure', ['password_weak', 'password_mismatch'])

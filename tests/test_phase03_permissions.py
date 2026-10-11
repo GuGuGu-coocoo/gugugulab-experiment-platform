@@ -150,7 +150,7 @@ def test_admin_matrix_cannot_exceed_effective_and_delegable_authority(setup):
 
     # Forged request for an action the Admin does not hold: refused as a whole.
     response = preview_matrix(admin_client, target.pk, setup['study'].pk, True, ['data.export_raw', 'build.upload'])
-    assert response.status_code == 403 and '没有有效且可委派' in response.content.decode()
+    assert response.status_code == 403 and '无权管理' in response.content.decode()
     assert grants_of(target, setup['study']) == ['data.export_raw', 'study.view']
 
     # A study where the Admin has no delegable authority is out of scope.

@@ -550,6 +550,7 @@ def _matrix_page_v2(actor, search='', page=1, lang='zh'):
         # for this page, so the hint adds no query. The server re-checks
         # everything on submission.
         can_delete = False
+        role_options = []
         if not (is_owner_row or own_row) and target_policy is not None:
             required = accounts.lifecycle_platform_actions(
                 'delete', profile.role if profile is not None else 'user')
@@ -558,6 +559,14 @@ def _matrix_page_v2(actor, search='', page=1, lang='zh'):
                 and access.takeover_allowed_from(actor_policy, target_policy,
                                                  accounts.deletion_after_policy(target_policy),
                                                  sorted(all_keys)))
+            next_role = 'user' if target_policy.role == 'admin' else 'admin'
+            required_role = accounts.lifecycle_platform_actions(
+                'demote' if next_role == 'user' else 'promote')
+            if (all(action in access.platform_actions_of(actor_policy) for action in required_role)
+                    and access.takeover_allowed_from(actor_policy, target_policy,
+                                                    access.project_policy(target_policy, role=next_role),
+                                                    sorted(all_keys))):
+                role_options = [next_role]
         rows.append({'id': user.pk, 'username': user.username, 'is_owner': is_owner_row,
                      'role': profile.role if profile is not None else 'user',
                      'is_active': user.is_active,
@@ -572,6 +581,7 @@ def _matrix_page_v2(actor, search='', page=1, lang='zh'):
                                            'checked': action in platform_effective}
                                           for action in sorted(access.PLATFORM_V2_ACTIONS)],
                      'platform_editable': platform_editable,
+                     'can_manage': dominated, 'role_options': role_options,
                      'can_delete': can_delete})
     # Browser-session drafts are keyed by this stable scope (instance identity
     # plus the actor's stable subject), never by revision alone: another account
@@ -683,6 +693,8 @@ def _matrix_page_v1(actor, search='', page=1, lang='zh'):
         # The v1 hint reuses the page's own grant rows and the actor's delegable
         # scope (already loaded), so it adds no query; the write path re-checks.
         can_delete = False
+        can_manage = False
+        role_options = []
         if not (is_owner_row or own_row):
             actor_profile = profiles.get(actor.pk) or AccountProfile.objects.filter(user_id=actor.pk).first()
             actor_role = actor_profile.role if actor_profile is not None else 'user'
@@ -697,11 +709,17 @@ def _matrix_page_v1(actor, search='', page=1, lang='zh'):
                                for study_id, actions in manageable_by_study.items()
                                for action in actions}
             can_delete = platform_ok and (owner or actor_authority >= target_privileges)
+            can_manage = (owner or (actor_role == 'admin' and set(accounts.lifecycle_platform_actions(
+                'manage', profile.role if profile else 'user')) <= access.LEGACY_PLATFORM_ADMIN)) and (
+                    owner or actor_authority >= target_privileges)
+            if owner:
+                role_options = ['user' if profile and profile.role == 'admin' else 'admin']
         rows.append({'id': user.pk, 'username': user.username, 'is_owner': is_owner_row,
                      'role': profile.role if profile is not None else 'user',
                      'is_active': user.is_active,
                      'must_change_password': bool(profile.must_change_password) if profile is not None else False,
-                     'studies': entries, 'can_delete': can_delete})
+                     'studies': entries, 'can_delete': can_delete,
+                     'can_manage': can_manage, 'role_options': role_options})
     return {'rows': rows, 'search': search, 'page': page, 'pages': pages, 'total': total,
             'page_links': _pager_links('page', page, pages, {'q': search}), 'owner_scope': owner,
             'version': 1}

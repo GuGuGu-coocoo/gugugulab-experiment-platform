@@ -270,9 +270,12 @@ def test_admin_overview_and_selector_hide_the_explicitly_hidden_study(world, evi
     assert f'data-matrix-row="{target.pk}-{default.pk}"' in body
     # The study selector is bounded by the same kernel result: only the study
     # with both view and configure is offered.
-    assert 'data-configure-total="1"' in body
-    assert f'/users/templates/roster?study={override.pk}' not in body
-    assert f'/users/templates/roster?study={default.pk}' in body
+    # Participant templates moved to study pages (current_requirements §4).
+    # Keep the same kernel scope assertion on the catalog helper and preserve
+    # the hidden-study non-disclosure checks above and below.
+    choice = permissions.configure_studies_page(actor)
+    assert choice['total'] == 1 and choice['studies'][0].pk == default.pk
+    assert '/users/templates/roster?study=' not in body
     home = client.get('/').content.decode('utf-8')
     assert f'data-study-card="{override.pk}"' not in home and override.title not in home
     assert f'data-study-card="{default.pk}"' in home
@@ -682,7 +685,7 @@ def test_actual_chrome_hidden_study_creation_and_revocation_journey(
     assert observations['admin_home_hidden_absent'] is True
     assert observations['admin_home_open_present'] is True
     assert observations['admin_selector_hidden_absent'] is True
-    assert observations['admin_selector_total'] == 1
+    assert observations['admin_roster_entries_absent'] is True
     assert observations['restricted_created_and_entered'] is True
     assert observations['revoked_direct_request'] == 403
     assert observations['revoked_home_absent'] is True
@@ -748,8 +751,8 @@ try {
   await admin.goto(base+'/users');
   const adminUsers=(await admin.content());
   observations.admin_selector_hidden_absent = !adminUsers.includes('P03R02CR chrome hidden study');
-  observations.admin_selector_total =
-    Number(await admin.locator('[data-configure-total]').first().getAttribute('data-configure-total'));
+  observations.admin_roster_entries_absent =
+    await admin.locator('a[href^="/users/templates/roster?"]').count() === 0;
 
   // The restricted Admin creates its own study and enters it normally.
   const restricted=await signIn('p03r02cr_chrome_restricted_admin');

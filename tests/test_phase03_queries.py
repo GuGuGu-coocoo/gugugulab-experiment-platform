@@ -705,8 +705,8 @@ def test_actual_users_page_bounded_and_admin_readonly_without_access(setup):
 
 
 def test_users_page_conflicts_and_study_choice_bounded_and_searchable(setup):
-    """The actual /users request bounds conflicts and the configurable-study
-    choice: the conflict count comes from the database, only one page of groups
+    """The actual /users request bounds conflicts; the retained catalog helper
+    bounds study choices: the conflict count comes from the database, only one page of groups
     and their actions is loaded even though the account search keeps the whole
     conflict set out of the matrix page, and a large study catalog is capped with
     an explicit notice while every study stays reachable by search. The
@@ -741,14 +741,17 @@ def test_users_page_conflicts_and_study_choice_bounded_and_searchable(setup):
     third = client.get('/users?q=synthetic_owner&cpage=9').content.decode()
     assert len(re.findall(r'data-conflict-row="', third)) == conflicts_total - 2 * permissions.CONFLICT_PAGE_SIZE
 
-    # The Owner's configurable-study choice is capped with a count and an
-    # explicit notice; studies beyond the cap stay reachable through the search.
-    assert f'data-configure-total="{len(studies) + 1}"' in body
-    assert body.count('/users/templates/roster?study=') == permissions.STUDY_CHOICE_LIMIT
-    assert 'data-configure-more="1"' in body
-    searched = client.get('/users?q=synthetic_owner&study_q=Choice+study+059').content.decode()
-    assert 'data-configure-total="1"' in searched
-    assert 'Choice study 059' in searched and 'data-configure-more' not in searched
+    # U07 / current_requirements §4: roster templates are only on study pages.
+    # Keep the catalog helper's bounded/searchable contract separately; /users
+    # no longer loads that catalog or renders participant-template entries.
+    assert '/users/templates/roster?study=' not in body
+    assert 'data-study-search' not in body
+    choice = permissions.configure_studies_page(owner)
+    assert choice['total'] == len(studies) + 1
+    assert len(choice['studies']) == permissions.STUDY_CHOICE_LIMIT and choice['more']
+    searched = permissions.configure_studies_page(owner, 'Choice study 059')
+    assert searched['total'] == 1 and not searched['more']
+    assert searched['studies'][0].title == 'Choice study 059'
 
     # Reconciliation is still previewed over the entire conflict set: the next
     # page is presentation only.

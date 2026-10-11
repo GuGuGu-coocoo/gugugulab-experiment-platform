@@ -104,6 +104,22 @@
     return changed;
   }
 
+  function syncVisibility(form) {
+    var visibility = form.querySelector('[name=visibility]');
+    var visible = !!(visibility && visibility.checked);
+    var children = Array.prototype.slice.call(form.querySelectorAll('input[data-child="1"]'));
+    children.forEach(function (box) {
+      if (!visible) { box.checked = false; }
+      box.disabled = !visible;
+    });
+    var selectAll = form.querySelector('[data-select-all-study]');
+    if (selectAll) {
+      selectAll.disabled = !visible || children.length === 0;
+      selectAll.checked = visible && children.length > 0 && children.every(function (box) { return box.checked; });
+      selectAll.indeterminate = visible && !selectAll.checked && children.some(function (box) { return box.checked; });
+    }
+  }
+
   function editableChildBoxes(accountId) {
     var boxes = [];
     formsFor(accountId).forEach(function (form) {
@@ -121,6 +137,7 @@
     if (!matrix) { return; }
     var drafts = readDrafts();
     each(document.querySelectorAll('form[data-matrix-entry]'), function (form) {
+      syncVisibility(form);
       var key = form.dataset.matrixEntry;
       var changed = changedFields(form);
       var out = document.querySelector('[data-entry-state="' + key + '"] [data-change-count]');
@@ -130,7 +147,8 @@
         // An entry keeps the revision its draft was written at unless the user
         // edited this entry in the current view; a stale draft is never
         // silently upgraded to the current revision.
-        var base = (editedKey === key || !drafts[key]) ? revision : (drafts[key].revision || revision);
+        var edited = editedKey === key || (Array.isArray(editedKey) && editedKey.indexOf(key) !== -1);
+        var base = (edited || !drafts[key]) ? revision : (drafts[key].revision || revision);
         drafts[key] = {visibility: value.visibility, actions: value.actions, revision: base};
         form.setAttribute('data-draft', '1');
         if (base !== revision) { form.setAttribute('data-draft-stale', '1'); }
@@ -150,7 +168,15 @@
       var selectAll = document.querySelector('[data-select-all-user="' + id + '"]');
       if (selectAll) {
         var boxes = editableChildBoxes(id);
+        var scopeStudies = {};
+        boxes.forEach(function (box) { scopeStudies[box.form.dataset.matrixEntry] = true; });
+        var studyCount = document.querySelector('[data-scope-study-count="' + id + '"]');
+        var actionCount = document.querySelector('[data-scope-action-count="' + id + '"]');
+        if (studyCount) { studyCount.textContent = String(Object.keys(scopeStudies).length); }
+        if (actionCount) { actionCount.textContent = String(boxes.length); }
+        selectAll.disabled = boxes.length === 0;
         selectAll.checked = boxes.length > 0 && boxes.every(function (box) { return box.checked; });
+        selectAll.indeterminate = !selectAll.checked && boxes.some(function (box) { return box.checked; });
       }
     });
     var banner = document.querySelector('[data-draft-banner]');
@@ -245,16 +271,17 @@
           box.checked = control.checked;
         });
       }
-      refreshCounts();
+      refreshCounts(form ? form.dataset.matrixEntry : null);
     });
   });
 
   each(document.querySelectorAll('[data-select-all-user]'), function (control) {
     control.addEventListener('change', function () {
-      editableChildBoxes(control.dataset.selectAllUser).forEach(function (box) {
+      var boxes = editableChildBoxes(control.dataset.selectAllUser);
+      boxes.forEach(function (box) {
         box.checked = control.checked;
       });
-      refreshCounts();
+      refreshCounts(boxes.map(function (box) { return box.form.dataset.matrixEntry; }));
     });
   });
 
@@ -315,6 +342,7 @@
   var refreshButton = dialog.querySelector('[data-confirm-refresh]');
   var password = dialog.querySelector('[name=password]');
   var confirmUsername = dialog.querySelector('[name=confirm_username]');
+  var originFields = null;
   var lastTrigger = null;
   // The in-flight lock belongs to the request, not to the dialog being open:
   // Escape, a close or a re-open can never unlock a submit that is still in
@@ -353,6 +381,17 @@
     setState('', 'muted');
     if (password) { password.value = ''; }
     if (confirmUsername) { confirmUsername.value = ''; }
+    // The source form is captured once, before confirmation. Only these
+    // non-secret lifecycle fields belong to it; passwords and file uploads
+    // never enter the snapshot or browser-session drafts.
+    originFields = new FormData();
+    if (origin) {
+      var source = new FormData(origin);
+      ['op', 'username', 'revision', 'preview_id', 'role', 'invitation_id'].forEach(function (name) {
+        var value = source.get(name);
+        if (typeof value === 'string') { originFields.set(name, value); }
+      });
+    }
     var op = origin ? originField(origin, 'op') : (trigger.dataset.confirmOp || '');
     var username = origin ? originField(origin, 'username') : (trigger.dataset.confirmUsername || '');
     var revisionValue = origin ? originField(origin, 'revision') : (trigger.dataset.revision || '');
@@ -363,8 +402,11 @@
     form.querySelector('[name=preview_id]').value = previewId;
     var deleting = op === 'delete';
     if (impact) {
-      impact.hidden = !deleting;
-      impact.textContent = deleting ? label('deleteImpact') : '';
+      var action = trigger ? (trigger.dataset.confirmTitle || trigger.textContent.trim()) : '';
+      var role = originFields.get('role') || '';
+      var summary = [action, username, role].filter(function (part) { return part; }).join(' · ');
+      impact.hidden = !summary && !deleting;
+      impact.textContent = summary + (deleting ? '\n' + label('deleteImpact') : '');
     }
     if (usernameRow) { usernameRow.hidden = !deleting; }
     if (confirmUsername) { confirmUsername.required = deleting; }
@@ -381,11 +423,13 @@
     // An in-flight submit owns the dialog: closing must not unlock it.
     if (inFlight) { return; }
     if (dialog.open && typeof dialog.close === 'function') { dialog.close(); }
+    if (password) { password.value = ''; }
     setBusy(false);
     if (lastTrigger && lastTrigger.nodeType === 1 && document.contains(lastTrigger)) {
       try { lastTrigger.focus(); } catch (error) { /* focus is best effort */ }
     }
     lastTrigger = null;
+    originFields = null;
   }
 
   each(document.querySelectorAll('[data-confirm-open]'), function (trigger) {
@@ -403,7 +447,13 @@
     refreshButton.addEventListener('click', function () { window.location.reload(); });
   }
 
-  function requestPayload() { return new FormData(form); }
+  function requestPayload() {
+    var payload = new FormData(form);
+    if (originFields) {
+      originFields.forEach(function (value, name) { payload.set(name, value); });
+    }
+    return payload;
+  }
 
   function confirmAtServer(previewId) {
     return fetch('/users?preview_status=' + encodeURIComponent(previewId),
@@ -512,12 +562,9 @@
   // focus to that exact control. The v1 page never renders this dialog and keeps
   // its inline password confirmation.
   each(document.querySelectorAll('form[data-confirm="password"]'), function (origin) {
-    // The dialog owns the re-authentication: don't let native constraint
-    // validation swallow the submit event before the dialog can open. The
-    // server-side password check is unchanged.
-    origin.noValidate = true;
     origin.addEventListener('submit', function (event) {
       event.preventDefault();
+      if (!origin.reportValidity()) { return; }
       openDialog(origin.querySelector('button[type="submit"]') || origin.querySelector('button'), origin);
     });
   });
