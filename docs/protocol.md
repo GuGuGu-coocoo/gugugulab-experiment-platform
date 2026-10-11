@@ -1,5 +1,7 @@
 # GEP/1 synthetic implementation protocol
 
+账号治理局部更新：v2 权限矩阵和账号 XLSX `update` 均只写指定研究的完整合法选择，要求目标角色管理能力及该研究的可配置动作范围；其他研究不变。整账号重置、启用、角色变更与删除仍要求覆盖目标操作前后的平台和全部研究权限。预览绑定、本人密码、revision、提交时重新授权与原子审计继续适用。
+
 The server accepts bounded JSON (256 KiB, 64 events per batch, 10,000 events per session, depth 16). The admin export application route has its own bounded 1 MiB envelope described below; every other route keeps these participant protocol bounds. JSON duplicate keys, nonfinite values, negative zero and numbers outside the JavaScript safe integer magnitude are rejected. Object order is irrelevant; arrays preserve order; booleans differ from numbers; null differs from absence. JSON Schema 2020-12 payload definitions are frozen with builds. No remote references are permitted by the build registration contract.
 
 Records have immutable UUID event/session/segment identities and positive segment sequence numbers. Retries preserve all record fields. A batch commits atomically or fails completely. ACK accepted/duplicate lists must exactly cover the request. An HTTP status alone is never an ACK.

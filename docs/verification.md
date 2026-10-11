@@ -1,6 +1,34 @@
 # 合成工程验收记录
 
-更新：2026-10-11。全部使用隔离合成数据。Phase 01、02 的有限工程门槛通过；2026-09-21 的非开发者人工测试形成修复反馈。**此前冻结包的本机完整回归、Windows x64 原生与 Excel 实机工程门槛通过；补充复核仍发现待修的界面/流程缺口，新一轮人工测试未运行，Phase 03 未完成。**真实研究尚未启用。
+更新：2026-10-11。全部使用隔离合成数据。Phase 01、02 的有限工程门槛通过；2026-09-21 的非开发者人工测试形成修复反馈。**此前冻结包的本机完整回归、Windows x64 原生与 Excel 实机工程门槛通过；补充复核发现的界面/流程缺口已修复并通过下述定向回归，新一轮人工测试未运行，Phase 03 未完成。**真实研究尚未启用。
+
+## 2026-10-11 账号权限与后台交互补修
+
+八组补充缺口已修复：原生构建的 Web 预览限制、矩阵可见性与全选联动、精确名单码查询、账号操作授权显示、邀请密码重试、研究删除危险样式、提示语和名单入口集中管理。另修正了矩阵与 XLSX `update` 误用整账号接管规则的问题：合法 A/B 局部编辑保留 C 的权限、会话、事件及导出；重置、启用、改角色和删除的全范围保护仍有效。
+
+最终一次受影响集成回归 **152 passed，0 failed，0 skipped，165.29 秒**，包含真实 Chrome、实际 XLSX、数据库事务、撤权/revision、重放及审计失败回滚：
+
+```sh
+GEP_T17_BROWSER=1 .venv/bin/pytest -q \
+  tests/remediation/test_p03_scope_accounts.py \
+  tests/remediation/test_p03_scope_boundaries.py \
+  tests/remediation/test_p03_partial_matrix_scope.py \
+  tests/remediation/test_p03_partial_import_scope.py \
+  tests/remediation/test_p03_matrix_visibility.py \
+  tests/remediation/test_p03r02c.py tests/remediation/test_p03r02cr.py \
+  tests/remediation/test_p03r03b.py tests/remediation/test_p03r05.py \
+  tests/remediation/test_p03r05r.py tests/test_phase03_accounts.py \
+  tests/test_phase03_permissions.py tests/test_phase03_queries.py \
+  tests/test_phase03_excel.py
+```
+
+另在 Windows Python 3.12.13 / Django 5.2.17 的新隔离合成实例上，由 Mac Chrome 经 Tailscale SSH 回环转发实际点击：受限 Admin 的合法局部预览、隐藏/重新显示权限、草稿放弃、邀请/改角色/停用确认及取消、Escape 与焦点返回、390px 窄屏、中英文与系统/暗色主题。弹窗显示实际目标账号和研究，源表单的空用户名由浏览器校验拦截。取消后数据库保持 3 个测试账号、3 个合成研究、0 邀请、0 管理审计、0 会话/事件；目标权限保持不变。服务端 77 个源码成员逐一核对 SHA-256，整体源码集合摘要 `47e913ab8fd9ff333f724269c3e60b6592bed1342e77e6f1d851f3653fde0a79`。既有数据库和失败现场未清理。
+
+初轮暴露的旧文案断言与账号激活重构中的同名保护遗漏均已处理，并由上述最终回归复验；局部编辑的旧拒绝预期按已确认的单研究契约替换，生命周期负向保护未删减。Windows 非终端启动退出通过持久终端运行修正，属于测试启动环境问题。
+
+人工测试准备另建了采用同一源码的新空白 Windows v2 实例：1 Owner、0 研究/会话/事件/邀请，WSGI 绑定、成员哈希及 Mac Chrome 登录页和空门户核对通过。旧冻结包的连接配置不能自动改绑新实例，须在新实例用原始上传包自行登记与批准。
+
+本批只改服务端与后台界面；没有改变 SDK、冻结程序、事件原值或科学逻辑，也未把历史 Godot/原生工程证据算作本批新运行。开发者走查和自动 Chrome 均不是人工 T17。手动接入游戏、图形文件选择、下载落盘与人的体验仍待验；**Phase 03 未完成，Phase 04 未启用。**
 
 ## 2026-10-11 通用 GEC 下载与从零手动接线
 
