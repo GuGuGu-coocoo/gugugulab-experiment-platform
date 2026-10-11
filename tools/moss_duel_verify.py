@@ -3,7 +3,8 @@
 Run: .venv/bin/python tools/moss_duel_verify.py --build build/<delivery-directory>
 No existing database, browser profile, game package or protected port is used.
 The explicit build must contain integrated_verification_copy exported by
-moss_duel_delivery.py. Evidence and synthetic secrets stay ignored in local_data/.
+verify_moss_manual_recipe.py (--manual-recipe), or the historical preassembled
+delivery. Evidence and synthetic secrets stay ignored in local_data/.
 """
 from __future__ import annotations
 import argparse
@@ -198,7 +199,14 @@ def verify_native(evidence, project, job, report, summary, retry=False):
                 assert source.read_bytes() == (native_source / relative).read_bytes(), f'Delivery source changed: {relative}'
     import_retried = import_native_source(native_source, evidence, retry)
     suffix = '_retry_' + secrets.token_hex(3) if retry else ''
-    native_script = evidence / ('native_runtime' + suffix + '.gd'); native_script.write_text(NATIVE_SCRIPT)
+    native_script = evidence / ('native_runtime' + suffix + '.gd')
+    source = NATIVE_SCRIPT
+    if job.get('manual_recipe'):
+        # The published host glue owns a generic GEC node. Keep automation in
+        # this external harness; never add test hooks to the user's script.
+        for field in ('shell', 'backend', 'data', 'finished', 'stopped'):
+            source = source.replace('entry.' + field, 'entry.gec.' + field)
+    native_script.write_text(source)
     storage = evidence / ('native_storage' + suffix); storage.mkdir()
     run(['godot', '--headless', '--path', str(native_source), '--script', str(native_script)],
         env={**os.environ, 'GEP_SYNTHETIC_STORAGE': str(storage), 'MOSS_EVIDENCE': str(evidence)},
@@ -267,6 +275,7 @@ def main():
     parser.add_argument('--build', type=Path, required=True)
     parser.add_argument('--resume-native', type=Path, help='Resume only native verification after a preserved pre-admission tooling failure')
     parser.add_argument('--native-only', action='store_true', help='Fresh native regression; do not repeat unchanged Web verification')
+    parser.add_argument('--manual-recipe', action='store_true', help='Verify the guide-created wrapper with its generic GEC node')
     args = parser.parse_args()
     build = args.build.resolve()
     if ROOT / 'build' not in build.parents or not build.is_dir():
@@ -274,6 +283,10 @@ def main():
     if args.resume_native:
         return resume_native(args.resume_native, build)
     project = build / 'integrated_verification_copy'
+    if args.manual_recipe:
+        recipe = json.loads((build / 'recipe_evidence.json').read_text())
+        assert recipe['human_manual_acceptance'] == 'NOT_RUN'
+        assert recipe['copied_script_sha256'] == hashlib.sha256((project / 'gec_entry.gd').read_bytes()).hexdigest()
     for path in (project / 'exports/web/index.html', project / 'exports/native/moss_duel.zip'):
         if not path.is_file(): raise ValueError('Missing fresh exported game: ' + str(path.relative_to(ROOT)))
     evidence = ROOT / 'local_data' / ('moss_duel_verify_' + time.strftime('%Y%m%dT%H%M%SZ', time.gmtime()) + '_' + secrets.token_hex(3))
@@ -306,11 +319,12 @@ AccountProfile.objects.create(user=owner,role='user',policy_version=2,must_chang
     job = {'evidence_dir': str(evidence), 'admin': f'http://admin.localhost:{port}',
            'credentials': {'username': 'moss_engineering_owner', 'password': password},
            'web_zip': packages['web']['path'], 'native_zip': packages['native']['archive'],
-           'native_descriptor': packages['native']['descriptor']}
+           'native_descriptor': packages['native']['descriptor'], 'manual_recipe': args.manual_recipe}
     job_file = evidence / 'private_job.json'; private_json(job_file, job)
     summary = {'verdict': 'FAILED', 'evidence': str(evidence.relative_to(ROOT)),
                'build': str(build.relative_to(ROOT)), 'human_manual_integration': 'NOT_RUN',
-               'native_only': args.native_only, 'web_verification': 'NOT_RUN' if args.native_only else 'requested'}
+               'native_only': args.native_only, 'manual_recipe': args.manual_recipe,
+               'web_verification': 'NOT_RUN' if args.native_only else 'requested'}
     log = (evidence / 'server.log').open('w')
     server = subprocess.Popen([str(ROOT / '.venv/bin/gunicorn'), 'gep.wsgi:application', '--bind', f'127.0.0.1:{port}',
                                '--workers', '1', '--threads', '4', '--timeout', '300', '--access-logfile', '/dev/null'],

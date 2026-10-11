@@ -33,6 +33,8 @@ pnpm install --frozen-lockfile
 
 2026-10-11 本轮工程门槛重新冻结并通过：修复回归 275 项、受影响旧回归 439 项，Windows WN01–WN06 与 Excel 实机检查均通过。Windows 隔离合成服务到 Mac Chrome 的匿名 Web 闭环完成 1 会话、4 条唯一事件，并经授权导出对账。Windows 人工包已复制并核对哈希，下一步按[人工测试指南](docs/researcher_acceptance.md)执行新一轮 T17；**T17 未运行，Phase 03 未完成**。Chrome 文件选择器操作与下载文件最终落盘仍待独立核实。
 
+随后的补充复核发现账号管理入口、权限矩阵联动、精确名单搜索及原生预览入口仍有待修问题；此前门槛不覆盖这些新发现的缺口，修复与对应回归完成后再安排完整人工验收。
+
 本轮账号权限修复已通过定向工程回归（含真实 Chrome）：研究列表与单对象授权统一，显式隐藏不会被默认权限重新覆盖，研究创建授权与写入在同一事务内完成，未知权限版本拒绝处理。新合成实例使用 v2；旧实例保留 v1，需先在合成副本演练，再由 Owner 预览差异并确认切换。详见[维护者说明](docs/maintainer.md)；这些检查不代表 Phase 03 人工验收完成。
 
 | 阶段 | 范围 | 当前状态 |
@@ -82,7 +84,7 @@ pnpm install --frozen-lockfile
 
 ## 使用指南
 
-想亲自测试“独立游戏 → 手动接入 GEC → GEP 发行”的流程，可以使用 [Moss Duel 单 Boss 小游戏](examples/moss_duel/README.md)。独立项目不带 GEC 或服务器配置，支持轻击、蓄力重击、弹反、冲刺和跳跃；原创画面配 Kenney CC0 音效。[接入指南](docs/moss_duel_gec.md)通过复制外置包、切换主场景和 Godot 图形导出完成接入，不修改战斗脚本。这是合成工程练习，人工接入体验与 Phase 03 人工测试仍待验。
+想亲自测试“已有游戏 → 下载通用 GEC → 手动接入 → GEP 发行”，可以使用 [Moss Duel 单 Boss 小游戏](examples/moss_duel/README.md)。独立项目不带 GEC 或服务器配置，支持轻击、蓄力重击、弹反、冲刺和跳跃；原创画面配 Kenney CC0 音效。[通用 GEC 包](docs/gec_godot.md)不含游戏接线或导出预设；按[手动接入指南](docs/moss_duel_gec.md)亲手新建入口场景、粘贴脚本及描述，再用 Godot 图形导出。原游戏脚本保持原样。这是合成工程练习，人工接入体验与 Phase 03 人工测试仍待验。
 
 - [研究者](docs/researcher.md)：参与设置、名单、发行、招募与导出。
 - [实验开发者](docs/experiment_developer.md)：通用数据模块、GEC 接入及版本边界。
