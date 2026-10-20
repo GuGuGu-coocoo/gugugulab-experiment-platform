@@ -10,3 +10,5 @@
 !third_party/godot_sqlite_license.md
 server/**/__pycache__/
 server/**/*.pyc
+**/._*
+**/.DS_Store

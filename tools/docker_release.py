@@ -39,7 +39,9 @@ def main():
                  'gec_godot.md', 'gec_godot_en.md', 'protocol.md', 'security.md'):
         guide = ROOT / 'docs' / name
         shutil.copy2(guide, output / 'docs' / guide.name)
-    shutil.copytree(ROOT / 'third_party', output / 'third_party')
+    (output / 'third_party').mkdir()
+    shutil.copy2(ROOT / 'third_party' / 'godot_sqlite_license.md',
+                 output / 'third_party' / 'godot_sqlite_license.md')
     # Keep packaged guides readable offline. Links to source-only examples
     # point back to the corresponding release tag, not nonexistent ZIP paths.
     for guide in [output / 'README.md', output / 'README_ZH.md', *(output / 'docs').glob('*.md')]:
