@@ -11,6 +11,7 @@ import shutil
 from pathlib import Path
 
 from moss_duel_delivery import copy_sources, digest, engine_notice, game_member, zip_tree
+from moss_duel_examples import rewrite_readme_links
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -27,6 +28,7 @@ def prepare(output: Path):
     copy_sources(ROOT / 'examples/moss_duel', project, game_member)
     shutil.copy2(ROOT / 'LICENSE', project / 'LICENSE')
     (project / 'GODOT_NOTICES.txt').write_text(engine_notice())
+    rewrite_readme_links(project, ROOT / 'examples/moss_duel')
     archive = output / 'moss_duel_standalone.zip'
     zip_tree(project, archive)
     manifest = {archive.name: {'size': archive.stat().st_size, 'sha256': digest(archive)}}

@@ -32,7 +32,7 @@ for(const finished of [false,true]) test('native authorized data-only recovery u
  const permit_form=page.locator('form[data-recover-uuid-form="1"]');
  await permit_form.locator('[name=session_id]').fill(saved.id);await permit_form.getByRole('button',{name:'签发一次性恢复许可'}).click();
  const permit=(await page.locator('.notice').textContent()).split('许可：')[1].trim(),fixture=path.join(dir,'recovery.json');fs.writeFileSync(fixture,JSON.stringify({recovery_session:saved.id,permit}),{mode:0o600});
- const proc=spawn('godot',['--headless','--path','examples/synthetic_experiment','--script',path.resolve('tests/native/recovery_policy_harness.gd')],{env:{...process.env,GEP_SYNTHETIC_STORAGE:dir,GEP_TEST_CONFIG:CONNECTION,GEP_TEST_RECOVERY:fixture},stdio:['ignore','pipe','pipe']});
+ const proc=spawn('godot',['--headless','--path','tests/fixtures/synthetic_experiment','--script',path.resolve('tests/native/recovery_policy_harness.gd')],{env:{...process.env,GEP_SYNTHETIC_STORAGE:dir,GEP_TEST_CONFIG:CONNECTION,GEP_TEST_RECOVERY:fixture},stdio:['ignore','pipe','pipe']});
  let out='';proc.stdout.on('data',b=>out+=b);proc.stderr.on('data',b=>out+=b);
  try{await expect.poll(()=>out,{timeout:30000}).toContain('NATIVE_DATA_ONLY_RECOVERY_VERIFIED');}finally{proc.kill('SIGTERM');}
  const after=snapshot();expect(after.id).toBe(saved.id);if(finished) expect(after.kind).toBe('cleaned');else{expect(after.records).toEqual(saved.records);expect(after.segments).toEqual(saved.segments);expect(after.pending).toEqual([]);}

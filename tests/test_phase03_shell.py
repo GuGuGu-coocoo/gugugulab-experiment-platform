@@ -337,7 +337,7 @@ def test_verify_init_derives_every_path_from_the_resolved_root(tmp_path, monkeyp
 
 def test_headless_shell_contract_harness():
     """The real Control-based shell is driven through its own fields and buttons."""
-    result = subprocess.run([_godot(), '--headless', '--path', str(ROOT / 'examples' / 'synthetic_experiment'),
+    result = subprocess.run([_godot(), '--headless', '--path', str(ROOT / 'tests' / 'fixtures' / 'synthetic_experiment'),
                              '--script', str(ROOT / 'tests' / 'native' / 'shell_harness.gd')],
                             cwd=ROOT, capture_output=True, text=True, timeout=180)
     assert 'SHELL_UNIT_VERIFIED' in result.stdout, result.stdout + result.stderr
@@ -345,19 +345,19 @@ def test_headless_shell_contract_harness():
 
 
 def test_bootstrap_is_assembly_only_and_scientific_task_unchanged():
-    bootstrap = (ROOT / 'examples' / 'synthetic_experiment' / 'bootstrap.gd').read_text()
+    bootstrap = (ROOT / 'tests' / 'fixtures' / 'synthetic_experiment' / 'bootstrap.gd').read_text()
     assert 'shell.gd' in bootstrap and 'Shell.new()' in bootstrap
     assert 'LineEdit.new' not in bootstrap and 'placeholder_text' not in bootstrap
     assert 'permit.text' not in bootstrap and 'password.text' not in bootstrap and 'short_code.text' not in bootstrap
     assert 'data.prepare' not in bootstrap and 'backend.prepare' not in bootstrap
     assert 'task.response' in bootstrap and 'shell.auto_submit' in bootstrap
-    task = (ROOT / 'examples' / 'synthetic_experiment' / 'task.gd').read_bytes()
+    task = (ROOT / 'tests' / 'fixtures' / 'synthetic_experiment' / 'task.gd').read_bytes()
     recorded = (ROOT / 'tests' / 'fixtures' / 'scientific_task.sha256').read_text().strip()
     assert hashlib.sha256(task).hexdigest() == recorded, 'the scientific task source changed; that requires an explicit task decision'
 
 
 def test_shell_module_and_web_companion_contract():
-    shell = (ROOT / 'examples' / 'synthetic_experiment' / 'addons' / 'gec' / 'shell.gd').read_text()
+    shell = (ROOT / 'tests' / 'fixtures' / 'synthetic_experiment' / 'addons' / 'gec' / 'shell.gd').read_text()
     assert 'gec-shell/v1' in shell and 'SHELL_CAPABILITY' in shell
     assert 'confirm_session' in shell and 'confirm_new_session' in shell
     assert 'announce_finished' in shell
@@ -387,7 +387,7 @@ def test_native_recovery_export_entry_writes_the_gui_document_without_secrets(tm
     storage.mkdir()
     environment = {**__import__('os').environ, 'GEP_SYNTHETIC_STORAGE': str(storage)}
     result = subprocess.run(
-        [_godot(), '--headless', '--path', str(ROOT / 'examples' / 'synthetic_experiment'),
+        [_godot(), '--headless', '--path', str(ROOT / 'tests' / 'fixtures' / 'synthetic_experiment'),
          '--script', str(ROOT / 'tests' / 'native' / 'recovery_export_harness.gd')],
         cwd=ROOT, capture_output=True, text=True, timeout=180, env=environment)
     assert 'NATIVE_RECOVERY_EXPORT_VERIFIED' in result.stdout, result.stdout + result.stderr

@@ -18,8 +18,8 @@ def test_generic_session_queue_retry_finish_and_data_recovery(tmp_path):
     addons = project / "addons/gec"
     addons.mkdir(parents=True)
     for name in ("shell.gd", "native_backend.gd", "web_backend.gd"):
-        shutil.copy2(ROOT / "examples/synthetic_experiment/addons/gec" / name, addons / name)
-    shutil.copy2(ROOT / "examples/synthetic_experiment/data/experiment_data.gd", addons / "experiment_data.gd")
+        shutil.copy2(ROOT / "packages/gec_godot/runtime/addons/gec" / name, addons / name)
+    shutil.copy2(ROOT / "packages/gec_godot/runtime/data/experiment_data.gd", addons / "experiment_data.gd")
     shutil.copy2(ROOT / "packages/gec_godot/session.gd", addons / "session.gd")
     (project / "project.godot").write_text('config_version=5\n[application]\nconfig/name="Generic session harness"\n[rendering]\nrenderer/rendering_method="gl_compatibility"\n')
     result = subprocess.run(

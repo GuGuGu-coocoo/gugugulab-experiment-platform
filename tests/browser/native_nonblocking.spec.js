@@ -10,7 +10,7 @@ test('native records and checkpoints continue while real upload ACK is held',asy
  let release,held=false;const gate=new Promise(r=>release=r);
  const proxy=http.createServer((request,response)=>{const upstream=http.request({hostname:'127.0.0.1',port:upstreamPort,path:request.url,method:request.method,headers:request.headers},res=>{const chunks=[];res.on('data',b=>chunks.push(b));res.on('end',async()=>{if(request.url.endsWith('/event-batches')&&!held){held=true;await gate;}response.writeHead(res.statusCode,res.headers);response.end(Buffer.concat(chunks));})});upstream.on('error',()=>response.destroy());request.pipe(upstream);});
  await new Promise(r=>proxy.listen(0,'127.0.0.1',r));const port=proxy.address().port;const configPath=path.join(dir,'connection.json');fs.writeFileSync(configPath,JSON.stringify({...config,api_url:'http://127.0.0.1:'+port}));
- const proc=spawn('godot',['--headless','--path','examples/synthetic_experiment','--script',path.resolve('tests/native/nonblocking_harness.gd')],{env:{...process.env,GEP_SYNTHETIC_STORAGE:dir,GEP_TEST_CONFIG:configPath},stdio:['ignore','pipe','pipe']});
+ const proc=spawn('godot',['--headless','--path','tests/fixtures/synthetic_experiment','--script',path.resolve('tests/native/nonblocking_harness.gd')],{env:{...process.env,GEP_SYNTHETIC_STORAGE:dir,GEP_TEST_CONFIG:configPath},stdio:['ignore','pipe','pipe']});
  let output='';proc.stdout.on('data',b=>output+=b);proc.stderr.on('data',b=>output+=b);const exited=new Promise(r=>proc.once('exit',r));
  try{
   await expect.poll(()=>fs.existsSync(path.join(dir,'saved_while_upload_pending')),{timeout:10000}).toBe(true);expect(held).toBe(true);

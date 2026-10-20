@@ -39,7 +39,10 @@ node_modules/
 .DS_Store
 
 # Verified native dependency runtime, installed by tools/install_sqlite.py.
-/examples/synthetic_experiment/addons/godot-sqlite/bin/
+/tests/fixtures/synthetic_experiment/addons/godot-sqlite/bin/
+/examples/moss_duel_gec/addons/godot-sqlite/bin/
+/examples/moss_duel/exports/
+/examples/moss_duel_gec/exports/
 /test-results/
 /playwright-report/
 

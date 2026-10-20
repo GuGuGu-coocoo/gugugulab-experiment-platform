@@ -56,7 +56,7 @@ def main():
     assert archive_path.is_file(), f'Archive not found: {archive_path}'
     digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
     assert digest == ARCHIVE_SHA256, 'Archive digest mismatch'
-    root = Path(__file__).resolve().parents[1] / 'examples/synthetic_experiment/addons/godot-sqlite'
+    root = Path(__file__).resolve().parents[1] / 'tests/fixtures/synthetic_experiment/addons/godot-sqlite'
     installed = []
     with zipfile.ZipFile(archive_path) as archive:
         names = archive.namelist()

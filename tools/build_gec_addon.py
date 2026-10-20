@@ -30,7 +30,7 @@ SQLITE_MEMBERS = (
     'addons/godot-sqlite/bin/libgdsqlite.macos.template_release.framework/Resources/Info.plist',
     'addons/godot-sqlite/bin/libgdsqlite.macos.template_release.framework/libgdsqlite.macos.template_release',
 )
-DOC_LINKS = ('gec_godot.md', 'gec_godot_en.md', 'moss_duel_gec.md', 'experiment_developer.md', 'protocol.md',
+DOC_LINKS = ('gec_godot.md', 'gec_godot_en.md', 'moss_duel_gec.md', 'moss_duel_gec_en.md', 'experiment_developer.md', 'protocol.md',
              'researcher.md', 'researcher_en.md', 'maintainer.md', 'deployment.md', 'deployment_en.md')
 
 
@@ -49,11 +49,11 @@ def read_source(path: Path) -> bytes:
 
 def source_members() -> dict[str, bytes]:
     sources = {
-        'addons/gec/experiment_data.gd': 'examples/synthetic_experiment/data/experiment_data.gd',
-        'addons/gec/local_backend.gd': 'examples/synthetic_experiment/data/local_backend.gd',
+        'addons/gec/experiment_data.gd': 'packages/gec_godot/runtime/data/experiment_data.gd',
+        'addons/gec/local_backend.gd': 'packages/gec_godot/runtime/data/local_backend.gd',
         'addons/gec/session.gd': 'packages/gec_godot/session.gd',
         'addons/godot-sqlite/gdsqlite.gdextension':
-            'examples/synthetic_experiment/addons/godot-sqlite/gdsqlite.gdextension',
+            'packages/gec_godot/runtime/addons/godot-sqlite/gdsqlite.gdextension',
         'package_web.gd': 'packages/gec_godot/package_web.gd',
         'package_native.gd': 'packages/gec_godot/package_native.gd',
         'gec_descriptor.example.json': 'packages/gec_godot/gec_descriptor.example.json',
@@ -61,7 +61,7 @@ def source_members() -> dict[str, bytes]:
         'SQLITE_LICENSE.md': 'third_party/godot_sqlite_license.md',
     }
     for name in ('native_backend', 'web_backend', 'shell'):
-        sources[f'addons/gec/{name}.gd'] = f'examples/synthetic_experiment/addons/gec/{name}.gd'
+        sources[f'addons/gec/{name}.gd'] = f'packages/gec_godot/runtime/addons/gec/{name}.gd'
     for name in ('sdk', 'bridge', 'inputs', 'shell'):
         sources[f'gec_web/{name}.js'] = f'packages/gec_web/{name}.js'
     payloads = {destination: read_source(ROOT / source) for destination, source in sources.items()}

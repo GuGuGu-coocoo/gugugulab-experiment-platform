@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-PROJECT = ROOT / 'examples' / 'synthetic_experiment'
+PROJECT = ROOT / 'tests' / 'fixtures' / 'synthetic_experiment'
 SPEC = 'tests/browser/remediation_finish_guards.spec.js'
 
 

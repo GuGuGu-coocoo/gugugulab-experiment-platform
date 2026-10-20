@@ -1,0 +1,25 @@
+config_version=5
+
+[application]
+config/name="Moss Duel + GEC"
+config/version="1.0.0"
+run/main_scene="res://gec_entry.tscn"
+config/features=PackedStringArray("4.7", "GL Compatibility")
+config/description="Moss Duel with GEC participation and data collection."
+
+[display]
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/size/window_width_override=1280
+window/size/window_height_override=720
+window/stretch/mode="canvas_items"
+
+[rendering]
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+environment/defaults/default_clear_color=Color(0.026, 0.048, 0.063, 1)
+textures/default_filters/use_nearest_mipmap_filter=false
+textures/vram_compression/import_etc2_astc=true
+
+[audio]
+driver/enable_input=false

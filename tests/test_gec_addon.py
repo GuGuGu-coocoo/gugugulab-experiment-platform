@@ -22,18 +22,18 @@ spec.loader.exec_module(addon)
 def prepared(tmp_path, monkeypatch):
     root = tmp_path / 'repo'
     sources = {
-        'examples/synthetic_experiment/data/experiment_data.gd': 'extends RefCounted\n',
-        'examples/synthetic_experiment/data/local_backend.gd': 'extends Node\n',
+        'packages/gec_godot/runtime/data/experiment_data.gd': 'extends RefCounted\n',
+        'packages/gec_godot/runtime/data/local_backend.gd': 'extends Node\n',
         'packages/gec_godot/session.gd': 'extends Node\n# generic fixture\n',
         'packages/gec_godot/package_web.gd': '@tool\nextends EditorScript\n',
         'packages/gec_godot/package_native.gd': '@tool\nextends EditorScript\n',
         'packages/gec_godot/gec_descriptor.example.json': '{"version":"example-1"}\n',
-        'examples/synthetic_experiment/addons/godot-sqlite/gdsqlite.gdextension': '[configuration]\n',
+        'packages/gec_godot/runtime/addons/godot-sqlite/gdsqlite.gdextension': '[configuration]\n',
         'LICENSE': (REPO / 'LICENSE').read_text(),
         'third_party/godot_sqlite_license.md': (REPO / 'third_party/godot_sqlite_license.md').read_text(),
         'docs/gec_godot.md': 'Generic guide [Host example](moss_duel_gec.md). [Protocol](protocol.md)\n',
     }
-    sources.update({f'examples/synthetic_experiment/addons/gec/{name}.gd': 'extends Node\n'
+    sources.update({f'packages/gec_godot/runtime/addons/gec/{name}.gd': 'extends Node\n'
                     for name in ('native_backend', 'web_backend', 'shell')})
     sources.update({f'packages/gec_web/{name}.js': '// generic dependency\n'
                     for name in ('sdk', 'bridge', 'inputs', 'shell')})

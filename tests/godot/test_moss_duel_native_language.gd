@@ -1,7 +1,7 @@
 extends SceneTree
 ## Real shell UI with controlled queue setup failures. No database or remote
 ## admission is involved; storage/API evidence is collected separately.
-const Entry = preload("res://../../integrations/moss_duel/gec_entry.gd")
+const Entry = preload("res://../moss_duel_legacy_adapter/gec_entry.gd")
 const Shell = preload("res://addons/gec/shell.gd")
 var checks := 0
 var failures := 0
@@ -51,8 +51,8 @@ func run_checks() -> void:
 			check(shell.state == ("ready" if failure.is_empty() else "error"), "queue failure retains its error state")
 		check(shell.locale == "en" and shell.last_announcement == expected and shell.message.text == expected,
 			"actual announcement remains readable and truthful: " + failure)
-		check(shell.recover_button.text == "Recover" and shell.permit_button.text == "Recover with permit",
-			"visible recovery controls use English: " + failure)
+		check(shell.recover_button == null and shell.permit_button == null,
+			"recovery controls remain unexposed in the current UI: " + failure)
 		check(JSON.stringify(backend.config) == frozen and JSON.stringify(shell.config) == frozen,
 			"frozen backend and shell config preserved: " + failure)
 		entry.free()

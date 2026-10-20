@@ -1,19 +1,23 @@
 # 从独立 Moss Duel 手动接入 GEC
 
+[English](moss_duel_gec_en.md) · 中文
+
+仓库只保留同一游戏的[干净独立版](../examples/moss_duel/README.md)和[已接入 GEC 版](../examples/moss_duel_gec/README.md)。本教程从**干净独立版**开始；已接入版用于直接运行或对照，不是本教程的起点。
+
 这次模拟研究者**已经有一个能独立运行的游戏**，然后下载通用 GEC、自己手动接入。原游戏没有 GEC 或服务器配置；GEC 下载包没有 Moss Duel 的入口场景、接线脚本或导出预设。下面新增的文件由你亲手创建。
 
 操作只在游戏副本中进行，用合成事件测试 GEP，不连接真实研究。接入后每次参与打一局，游戏仍负责移动、攻击、弹反、Boss、伤害和胜负。GEC 负责开始参与、名单/密码、本地保存、上传与收尾。
 
 ## 1. 先玩独立游戏
 
-1. 解压 `moss_duel_standalone.zip`。
+1. 打开仓库的 `examples/moss_duel/`，或解压维护者提供的 `moss_duel_standalone.zip`。
 2. 用 **Godot 4.7.2 标准版**导入其中的 `project.godot`，运行项目。
 3. 点击 **Enter the arena**。J 轻击、按住 K 再松开为重击、L/Shift 弹反、E 冲刺、空格跳跃、Esc 暂停。原游戏可以反复开局，不需要网络或 GEP。
 4. 关闭项目，复制整个游戏文件夹，命名为 `moss_duel_gec`。下面只修改这份副本。
 
 ## 2. 下载并安装通用 GEC
 
-解压单独的 `gec_godot_0_1_0.zip`，按[通用安装指南](gec_godot.md#安装到现有项目的副本)第 2–4 步复制依赖与许可。它和这个游戏无关，也可安装到其他 Godot 项目。不要使用早先的 `moss_duel_gec_kit.zip`；那个包已替你接好游戏，只保留作历史工程参考。
+解压单独的 `gec_godot_0_1_0.zip`，按[通用安装指南](gec_godot.md#安装到现有项目的副本)复制依赖与许可。它和这个游戏无关，也可安装到其他 Godot 项目。不要把已接入版的入口脚本提前复制过来；下面会亲手创建。
 
 完成后，项目根目录应有原来的 `project.godot`、`main.tscn`、`scripts/`、`assets/`，以及新增的 `addons/`、`gec_web/`、`package_web.gd`、`package_native.gd`。此时直接运行项目仍是原游戏，**尚未接入**。
 
@@ -42,7 +46,7 @@ func _ready() -> void:
 	gec.configure_defaults({"event_type": "game.duel", "schema": {"id": "duel_event", "version": "1"}})
 	game.telemetry_event.connect(_record)
 	game.run_finished.connect(_finished)
-	gec.prepare("moss-duel-1", game, _start, _retire)
+	gec.prepare("moss-duel-3", game, _start, _retire)
 
 func _start() -> void:
 	game.process_mode = Node.PROCESS_MODE_INHERIT
@@ -81,7 +85,7 @@ func _retire() -> void:
 
 ```json
 {
-  "version": "moss-duel-1",
+  "version": "moss-duel-3",
   "platform": "godot_web",
   "host_version": "4.7.2",
   "sdk_version": "0.1.0",
@@ -120,8 +124,8 @@ func _retire() -> void:
 2. 导出到 **exports/web/index.html**，取消“导出调试”。运行项目根目录 **package_web.gd**，在弹窗选择刚导出的 `index.html`。
 3. 成功弹窗给出本次 **gep_web.zip** 路径；同名存在时结果带 `_2` 等后缀，旧文件不覆盖。
 4. 登录准备好的**合成实例**，创建新研究“小游戏接入练习”。在“参与与名单”确认“无需 ID”，不使用真实名单。
-5. “实验上传与发布”上传本次 ZIP。验证后打开“隔离预览”，应先显示 GEC 入口；点击开始才进入游戏。打一局自然胜利或死亡，看到“本地测试完成”。预览只本地保存，不会显示服务器收齐。
-6. 返回后台发布测试版本。在“招募与门户”选择该发行，点击“设为当前版本”，再将“招募状态”改为“开放新参与”（立即保存）。通过分享入口测试可保持研究私有。
+5. “实验上传与发布”上传本次 ZIP。验证后点击“预览（不上传数据）”，应先显示 GEC 入口；点击开始才进入游戏。打一局自然胜利或死亡，核对本地保存状态。预览只本地保存，不会显示服务器收齐。
+6. 返回后台点击“发布版本”。在“招募与门户”选择该版本，点击“设为当前版本”，再将“招募状态”改为“开放新参与”（立即保存）。通过分享入口测试可保持研究私有。
 7. 打开分享入口，再打一局。结束后等到 GEC 显示数据上传并确认。
 8. 在“导出”页点击“下载数据（概览 + 明细）”，再点本次快照的“下载 JSONL”。v2 JSONL 的 `event_type` 为 `game.duel`，动作在 `record.payload.kind`，最后只有一条 `round_summary`。记录数量随操作变化。
 
@@ -133,7 +137,7 @@ func _retire() -> void:
 2. macOS 导出到 **exports/native/moss_duel.zip**；Windows 导出到 **exports/windows/Moss Duel/Moss Duel.exe**。程序名称只是这次练习的选择，通用 GEC 支持自己的名字。
 3. 在脚本编辑器运行 **package_native.gd**，选择导出的 ZIP 或 EXE。弹窗提供程序 ZIP 与配套 `_descriptor.json` 的准确路径。
 4. 创建另一项新合成研究。在“实验上传与发布”粘贴配套描述文件的**整个 JSON**登记构建，再上传对应程序 ZIP。
-5. 批准后设为当前版本、开放新参与，然后下载 **完整发行包**。
+5. 发布后设为当前版本、开放新参与，然后下载 **完整实验包**。
 6. 解压下载包，运行其中的 `.app` 或 EXE。同级公开 `connection.json` 由 GEP 提供，不要使用 Godot 原始导出目录的程序代替完整下载包。
 7. 打一局，核对收尾与后台 JSONL。GEC 既有原生支持 macOS arm64 / Windows x64；本次新接线的可见原生 GUI 与 Windows 实机完整闭环仍待测试，详见[验收记录](verification.md)。其他系统未验。
 

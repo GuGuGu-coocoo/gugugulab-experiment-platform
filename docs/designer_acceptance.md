@@ -41,7 +41,7 @@ Windows 设计者使用下面按平台交付的整体目录。
 
 2026-09-21 已将已批准的设计者冻结包**按 Windows 平台选取**复制到设计者 Windows 机器的 GEP 专用目录，形成整体
 交付目录：Windows x64 完整包、Web 上传样例与 `connection.json`、平台 sidecar 原始字节与许可证、冻结的中文自导
-清单/结果模板、`examples/synthetic_experiment/windows_native/` 的中文自导指南与模板、构建描述样例与冻结
+清单/结果模板、`tests/fixtures/synthetic_experiment/windows_native/` 的中文自导指南与模板、构建描述样例与冻结
 schema/codebook，以及两个双击入口（`OPEN-ADMIN-WINDOWS.cmd` 打开后台；`RUN-DESIGNER-WINDOWS.cmd` 先校验交付包
 摘要与包内清单逐成员，再把交付的 Windows 完整包解压到独立目录，用本轮独立的本地存储启动真实原生程序，绑定包内
 冻结实例/研究/发行/模式，无需安装 Godot 或输入命令，不使用工程自检 kit，也不移动或覆盖旧用户存储）。交付清单

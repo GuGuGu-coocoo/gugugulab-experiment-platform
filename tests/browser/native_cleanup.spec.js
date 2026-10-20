@@ -44,7 +44,7 @@ function advanceRetry(dir){
  execFileSync('.venv/bin/python',['-c','import json,sqlite3,sys\nc=sqlite3.connect(sys.argv[1])\nfor sid,value in c.execute("select id,value from sessions").fetchall():\n s=json.loads(value)\n if "retry_at" in s:\n  s["retry_at"]=0\n  c.execute("update sessions set value=? where id=?",[json.dumps(s),sid])\nc.commit()',path.join(dir,'queue.sqlite')]);
 }
 function launch(dir,args){
- const proc=spawn('godot',['--headless','--path','examples/synthetic_experiment','--script',path.resolve('tests/native/cleanup_harness.gd'),'--',...args],{env:{...process.env,GEP_SYNTHETIC_STORAGE:dir,GEP_TEST_CONFIG:CONNECTION},stdio:['ignore','pipe','pipe']});
+ const proc=spawn('godot',['--headless','--path','tests/fixtures/synthetic_experiment','--script',path.resolve('tests/native/cleanup_harness.gd'),'--',...args],{env:{...process.env,GEP_SYNTHETIC_STORAGE:dir,GEP_TEST_CONFIG:CONNECTION},stdio:['ignore','pipe','pipe']});
  let output='';proc.stdout.on('data',b=>output+=b);proc.stderr.on('data',b=>output+=b);
  const exited=new Promise(resolve=>proc.once('exit',resolve));
  return {proc,exited,output:()=>output};

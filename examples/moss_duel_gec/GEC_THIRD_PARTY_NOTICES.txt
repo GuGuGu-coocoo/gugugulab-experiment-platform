@@ -1,0 +1,6 @@
+Optional GEC Godot SDK: third-party notices
+
+godot-sqlite v4.7 (https://github.com/2shady4u/godot-sqlite/releases/tag/v4.7) is MIT licensed; its original notice is SQLITE_LICENSE.md.
+SQLite is in the public domain; see SQLITE_NOTICE.txt.
+The pinned engine notices for exported Godot 4.7.2 programs are GEC_GODOT_NOTICES.txt.
+GEC project code is covered by GEC_LICENSE.txt. These files do not change the host project or asset licenses.

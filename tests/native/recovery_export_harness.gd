@@ -10,7 +10,7 @@ extends SceneTree
 ##
 ## Run:
 ##   GEP_SYNTHETIC_STORAGE=<fresh dir> godot --headless \
-##     --path examples/synthetic_experiment --script tests/native/recovery_export_harness.gd
+##     --path tests/fixtures/synthetic_experiment --script tests/native/recovery_export_harness.gd
 
 const Shell = preload("res://addons/gec/shell.gd")
 const Backend = preload("res://addons/gec/native_backend.gd")

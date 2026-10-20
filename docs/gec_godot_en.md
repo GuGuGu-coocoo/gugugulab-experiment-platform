@@ -77,7 +77,7 @@ func _on_gec_failed(result: Dictionary) -> void:
     push_error(str(result))
 ```
 
-After admission, GEC hides the entry form and calls `_start_task`. At the end, use `_retire_task` to retire your own displays and input, including CanvasLayers that do not inherit ordinary node visibility. GEC then displays completion and upload state. See the [Moss Duel walkthrough](moss_duel_gec.md) for a complete integration example in Chinese.
+After admission, GEC hides the entry form and calls `_start_task`. At the end, use `_retire_task` to retire your own displays and input, including CanvasLayers that do not inherit ordinary node visibility. GEC then displays completion and upload state. See the [Moss Duel walkthrough](moss_duel_gec_en.md) for a complete integration example.
 
 `record()` copies input synchronously and queues it. `queued` is not a durable-save acknowledgement. The helper serializes later recording and commits. `local_saved` signals a local commit; `completed` signals a local completion declaration, not server receipt. Handle errors and pause as appropriate: an error return is not a saved record, and logging an error alone is not a reason to continue collecting unchecked data.
 

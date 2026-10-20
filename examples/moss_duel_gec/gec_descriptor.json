@@ -1,0 +1,30 @@
+{
+  "version": "moss-duel-3",
+  "platform": "godot_web",
+  "host_version": "4.7.2",
+  "sdk_version": "0.1.0",
+  "protocol_version": "gep/1",
+  "program_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "schemas": {
+    "game.duel": {
+      "id": "duel_event",
+      "version": "1",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "kind": {"type": "string", "minLength": 1},
+          "data": {"type": "object"}
+        },
+        "required": ["kind", "data"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "codebook": {
+    "purpose": "Synthetic game integration exercise.",
+    "kind": "Explicit game signal name; round_summary is the game's end summary.",
+    "data": "Unchanged explicit game payload; no implicit scene or credential collection.",
+    "elapsed_ms": {"unit": "ms", "source": "game-owned clock", "meaning": "Game elapsed time, not a validated reaction time."},
+    "recovery": "Saved-data upload only; no battle checkpoint or replay."
+  }
+}

@@ -23,7 +23,7 @@ from pathlib import Path
 from windows_template import TemplateError, find_windows_template, verify_windows_template
 
 ROOT = Path(__file__).resolve().parents[1]
-PROJECT = ROOT / 'examples/synthetic_experiment'
+PROJECT = ROOT / 'tests/fixtures/synthetic_experiment'
 TEMPLATES = PROJECT / '.godot' / 'templates'
 WINDOWS_TEMPLATE = 'windows_release_x86_64.exe'
 TARGETS = {

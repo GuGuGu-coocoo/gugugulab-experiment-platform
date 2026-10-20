@@ -39,9 +39,9 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-PROJECT = ROOT / 'examples' / 'synthetic_experiment'
+PROJECT = ROOT / 'tests' / 'fixtures' / 'synthetic_experiment'
 HARNESS = ROOT / 'tests' / 'native' / 'remediation_defaults_harness.gd'
-DEMO = ROOT / 'examples' / 'data_defaults_demo' / 'demo.gd'
+DEMO = ROOT / 'tests' / 'fixtures' / 'data_defaults_demo' / 'demo.gd'
 SPEC = 'tests/browser/remediation_defaults.spec.js'
 BUILD_BASE = ROOT / 'build' / 'phase03_remediation_20260923'
 DESCRIPTOR = PROJECT / 'descriptor.json'
@@ -234,7 +234,7 @@ def test_developer_demo_is_executable(evidence_root, evidence):
     results = work / 'results'
     storage.mkdir(parents=True)
     results.mkdir(parents=True)
-    result = _run([_godot(), '--headless', '--path', 'examples/synthetic_experiment',
+    result = _run([_godot(), '--headless', '--path', 'tests/fixtures/synthetic_experiment',
                    '--script', '../data_defaults_demo/demo.gd'], timeout=300,
                   env={'GEP_SYNTHETIC_STORAGE': str(storage), 'GEP_SYNTHETIC_RESULTS': str(results)})
     evidence('demo_stdout.txt', {'stdout': result.stdout[-4000:], 'stderr': result.stderr[-2000:],

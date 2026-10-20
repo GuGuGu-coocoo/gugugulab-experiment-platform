@@ -1,7 +1,7 @@
 extends SceneTree
 ## Fault harness for the optional assembly layer. It exercises the real adapter
 ## in Godot with controllable interface fakes; it is not storage/API evidence.
-const Entry = preload("res://../../integrations/moss_duel/gec_entry.gd")
+const Entry = preload("res://../moss_duel_legacy_adapter/gec_entry.gd")
 var checks := 0
 var failures := 0
 

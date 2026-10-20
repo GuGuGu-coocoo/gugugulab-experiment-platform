@@ -15,7 +15,7 @@ def test_adapter_commit_retry_finish_and_data_only(tmp_path):
     if not godot:
         pytest.skip("Godot 4.7.2 is required for the adapter harness")
     result = subprocess.run(
-        [godot, "--headless", "--log-file", str(tmp_path / "adapter.log"), "--path", str(ROOT / "examples/synthetic_experiment"),
+        [godot, "--headless", "--log-file", str(tmp_path / "adapter.log"), "--path", str(ROOT / "tests/fixtures/synthetic_experiment"),
          "--script", str(ROOT / "tests/godot/test_moss_duel_adapter.gd")],
         capture_output=True, text=True, timeout=40,
     )
@@ -34,7 +34,7 @@ def test_native_setup_errors_are_english_without_changing_state_or_config(tmp_pa
     if not godot:
         pytest.skip("Godot 4.7.2 is required for the native language harness")
     result = subprocess.run(
-        [godot, "--headless", "--log-file", str(tmp_path / "language.log"), "--path", str(ROOT / "examples/synthetic_experiment"),
+        [godot, "--headless", "--log-file", str(tmp_path / "language.log"), "--path", str(ROOT / "tests/fixtures/synthetic_experiment"),
          "--script", str(ROOT / "tests/godot/test_moss_duel_native_language.gd")],
         capture_output=True, text=True, timeout=40,
     )

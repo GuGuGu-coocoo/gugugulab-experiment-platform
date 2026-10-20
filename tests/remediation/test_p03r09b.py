@@ -29,7 +29,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-PROJECT = ROOT / 'examples' / 'synthetic_experiment'
+PROJECT = ROOT / 'tests' / 'fixtures' / 'synthetic_experiment'
 FAULT_APP = ROOT / 'tests' / 'remediation' / 'delivery_fault_app.py'
 HARNESS = ROOT / 'tests' / 'native' / 'remediation_delivery_harness.gd'
 SPEC = 'tests/browser/remediation_delivery.spec.js'

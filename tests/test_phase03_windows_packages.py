@@ -92,7 +92,7 @@ def archive_bytes(members, root=True):
 
 
 def descriptor_document():
-    return json.loads(Path('examples/synthetic_experiment/descriptor.json').read_text())
+    return json.loads(Path('tests/fixtures/synthetic_experiment/descriptor.json').read_text())
 
 
 def descriptor_for(raw, **overrides):

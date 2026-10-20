@@ -316,8 +316,8 @@ def test_program_source_binding_includes_web_sdk_and_packager_inputs(tmp_path, e
     (copy / 'examples').mkdir(parents=True)
     (copy / 'tools').mkdir()
     (copy / 'packages').mkdir()
-    shutil.copytree(ROOT / 'examples' / 'synthetic_experiment',
-                    copy / 'examples' / 'synthetic_experiment',
+    shutil.copytree(ROOT / 'tests' / 'fixtures' / 'synthetic_experiment',
+                    copy / 'tests' / 'fixtures' / 'synthetic_experiment',
                     ignore=shutil.ignore_patterns('.godot', '__pycache__'))
     shutil.copytree(ROOT / 'packages' / 'gec_web', copy / 'packages' / 'gec_web')
     for name in ('tools/build.py', 'tools/package_build.py', 'tools/windows_template.py'):
@@ -332,7 +332,7 @@ def test_program_source_binding_includes_web_sdk_and_packager_inputs(tmp_path, e
     assert web_changed != baseline, 'a Web SDK change must invalidate the source digest'
 
     sdk.write_bytes(sdk_baseline)
-    project = copy / 'examples' / 'synthetic_experiment' / 'project.godot'
+    project = copy / 'tests' / 'fixtures' / 'synthetic_experiment' / 'project.godot'
     project.write_bytes(project.read_bytes() + b'\n; synthetic project change\n')
     assert windows.program_source_digest(copy) != baseline, 'a Godot project change must invalidate the digest'
 

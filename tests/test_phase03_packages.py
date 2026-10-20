@@ -39,7 +39,7 @@ SIGNATURE = f'{APP}/Contents/_CodeSignature/CodeResources'
 
 
 def descriptor_document():
-    return json.loads(Path('examples/synthetic_experiment/descriptor.json').read_text())
+    return json.loads(Path('tests/fixtures/synthetic_experiment/descriptor.json').read_text())
 
 
 def member(name, mode, data):

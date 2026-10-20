@@ -37,7 +37,7 @@ def verified(path, expected):
 
 def game_member(path):
     name = path.as_posix()
-    return (name in {'project.godot', 'main.tscn', 'export_presets.cfg', 'README.md', 'THIRD_PARTY_NOTICES.md', 'assets/asset_manifest.json'}
+    return (name in {'project.godot', 'main.tscn', 'export_presets.cfg', 'README.md', 'readme_en.md', 'THIRD_PARTY_NOTICES.md', 'assets/asset_manifest.json'}
             or path.parts[0] in {'scripts', 'tests'} and path.suffix in {'.gd', '.uid'}
             or path.parent.as_posix() == 'assets/audio' and (name.endswith('.ogg') or name.endswith('.ogg.import'))
             or name in {'assets/licenses/kenney_rpg_audio_license.txt', 'assets/licenses/kenney_impact_sounds_license.txt'})
@@ -130,11 +130,11 @@ def main():
     kit = output / 'kit'
     copy_sources(ROOT / 'examples/moss_duel', standalone, game_member)
     kit_members = {'README.md', 'export_presets.cfg', 'gec_entry.gd', 'gec_entry.tscn', 'gec_descriptor.json', 'package_web.gd', 'package_native.gd'}
-    copy_sources(ROOT / 'integrations/moss_duel', kit, lambda p: p.as_posix() in kit_members or p.suffix == '.uid')
-    copy_sources(ROOT / 'examples/synthetic_experiment/data', kit / 'data', lambda p: p.suffix in {'.gd', '.uid'})
-    copy_sources(ROOT / 'examples/synthetic_experiment/addons/gec', kit / 'addons/gec', lambda p: p.suffix in {'.gd', '.uid'})
+    copy_sources(ROOT / 'tests/fixtures/moss_duel_legacy_adapter', kit, lambda p: p.as_posix() in kit_members or p.suffix == '.uid')
+    copy_sources(ROOT / 'tests/fixtures/synthetic_experiment/data', kit / 'data', lambda p: p.suffix in {'.gd', '.uid'})
+    copy_sources(ROOT / 'tests/fixtures/synthetic_experiment/addons/gec', kit / 'addons/gec', lambda p: p.suffix in {'.gd', '.uid'})
     (kit / 'addons/godot-sqlite').mkdir(parents=True, exist_ok=True)
-    shutil.copy2(ROOT / 'examples/synthetic_experiment/addons/godot-sqlite/gdsqlite.gdextension', kit / 'addons/godot-sqlite/gdsqlite.gdextension')
+    shutil.copy2(ROOT / 'tests/fixtures/synthetic_experiment/addons/godot-sqlite/gdsqlite.gdextension', kit / 'addons/godot-sqlite/gdsqlite.gdextension')
     for name, content in runtime.items():
         path = kit / name
         path.parent.mkdir(parents=True, exist_ok=True)

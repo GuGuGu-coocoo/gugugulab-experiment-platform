@@ -23,7 +23,7 @@ WINDOWS_FILES = (
     'libgdsqlite.windows.template_release.x86_64.dll',
 )
 WINDOWS_EXTENSION = ('addons/godot-sqlite/gdsqlite.gdextension',
-                     ROOT / 'examples/synthetic_experiment/addons/godot-sqlite/gdsqlite.gdextension')
+                     ROOT / 'tests/fixtures/synthetic_experiment/addons/godot-sqlite/gdsqlite.gdextension')
 WINDOWS_ARCHIVE = ROOT / 'build' / 'windows' / 'synthetic_windows.zip'
 WINDOWS_DESCRIPTOR = ROOT / 'build' / 'windows' / 'descriptor.json'
 
@@ -58,7 +58,7 @@ def package_windows(document):
 
 
 def main():
-    document = json.loads((ROOT / 'examples/synthetic_experiment/descriptor.json').read_text())
+    document = json.loads((ROOT / 'tests/fixtures/synthetic_experiment/descriptor.json').read_text())
     target = sys.argv[1]
     if target == 'windows':
         package_windows(document)

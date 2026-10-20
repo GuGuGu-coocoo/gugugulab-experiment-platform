@@ -13,7 +13,7 @@ from core.protocol import Rejected
 def package(extra=None):
     target=io.BytesIO()
     with zipfile.ZipFile(target,'w') as z:
-        descriptor=json.loads(Path('examples/synthetic_experiment/descriptor.json').read_text())
+        descriptor=json.loads(Path('tests/fixtures/synthetic_experiment/descriptor.json').read_text())
         descriptor['program_sha256']=hashlib.sha256(b'web/index.html<html>synthetic</html>').hexdigest()
         z.writestr('manifest.json',json.dumps(descriptor))
         z.writestr('web/index.html','<html>synthetic</html>')

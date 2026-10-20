@@ -7,7 +7,7 @@ extends SceneTree
 ## task, the server or the network.
 ##
 ## Run from the repository root:
-##   godot --headless --path examples/synthetic_experiment --script ../data_defaults_demo/demo.gd
+##   godot --headless --path tests/fixtures/synthetic_experiment --script ../data_defaults_demo/demo.gd
 ##
 ## Environment (optional):
 ##   GEP_SYNTHETIC_STORAGE  local store directory (default user://data_defaults_demo)

@@ -47,7 +47,7 @@ INVITEE_PASSWORD = 'Synthetic-p03r01-invitee-2026!'
 LINK_RE = re.compile(r'data-invitation-link="([^"]+)"')
 RELATIVE_LINK_RE = re.compile(r'<code>/activate-account\?token=')
 TOKEN_PARAM_RE = re.compile(r'token=[A-Za-z0-9_\-]+')
-DESCRIPTOR = json.loads((REPO_ROOT / 'examples' / 'synthetic_experiment' / 'descriptor.json').read_text())
+DESCRIPTOR = json.loads((REPO_ROOT / 'tests' / 'fixtures' / 'synthetic_experiment' / 'descriptor.json').read_text())
 
 
 def link_of(response):

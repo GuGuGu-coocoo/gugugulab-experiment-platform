@@ -139,7 +139,7 @@ def program_source_digest():
     The strict gate recomputes it from the current working tree, so evidence
     produced against older program sources is refused as stale.
     """
-    project = ROOT / "examples" / "synthetic_experiment"
+    project = ROOT / "tests" / "fixtures" / "synthetic_experiment"
     digest = hashlib.sha256()
     files = []
     for path in sorted(project.rglob("*")):

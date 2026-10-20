@@ -40,7 +40,7 @@ except ImportError:  # pragma: no cover - the Windows host never runs this probe
     resource = None
 
 ROOT = Path(__file__).resolve().parents[2]
-PROJECT = ROOT / 'examples' / 'synthetic_experiment'
+PROJECT = ROOT / 'tests' / 'fixtures' / 'synthetic_experiment'
 HARNESS = ROOT / 'tests' / 'native' / 'remediation_shell_harness.gd'
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(ROOT / 'tools'))

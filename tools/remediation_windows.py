@@ -87,7 +87,7 @@ ROUND_SELECTION_FORMAT = 'gep-windows-round-selection/v1'
 ROUND_SELECTION_ENV = 'GEP_WINDOWS_ROUND_SELECTION'
 ROUND_SELECTION_PATH = ROOT / 'local_data' / 'phase03_remediation_20260923' / 'p03r11w' / 'round_selection.json'
 BUILD_BASE = ROOT / 'build' / 'phase03_remediation_20260923'
-PROJECT = ROOT / 'examples' / 'synthetic_experiment'
+PROJECT = ROOT / 'tests' / 'fixtures' / 'synthetic_experiment'
 PROJECT_DESCRIPTOR = PROJECT / 'descriptor.json'
 PROGRAM_ROOT = 'GEP Synthetic Experiment'
 PROGRAM_FILES = ('GEP Synthetic Experiment.exe', 'GEP Synthetic Experiment.pck',
@@ -661,7 +661,7 @@ def program_source_paths(root=None):
     isolated source copy instead of editing the real sources.
     """
     root = ROOT if root is None else Path(root)
-    project = root / 'examples' / 'synthetic_experiment'
+    project = root / 'tests' / 'fixtures' / 'synthetic_experiment'
     files = []
     for path in sorted(project.rglob('*')):
         if not path.is_file():

@@ -47,7 +47,8 @@ def main():
     # Only current user guides: no internal documents or local evidence.
     (output / 'docs').mkdir()
     for name in ('deployment.md', 'deployment_en.md', 'researcher.md', 'researcher_en.md',
-                 'gec_godot.md', 'gec_godot_en.md', 'protocol.md', 'security.md'):
+                 'gec_godot.md', 'gec_godot_en.md', 'moss_duel_gec.md', 'moss_duel_gec_en.md',
+                 'protocol.md', 'security.md'):
         guide = ROOT / 'docs' / name
         shutil.copy2(guide, output / 'docs' / guide.name)
     copy_guide_images(output)
@@ -55,7 +56,8 @@ def main():
     shutil.copy2(ROOT / 'third_party' / 'godot_sqlite_license.md',
                  output / 'third_party' / 'godot_sqlite_license.md')
     # Keep packaged guides readable offline. Links to source-only examples
-    # point back to the corresponding release tag, not nonexistent ZIP paths.
+    # point back to the current source, not nonexistent ZIP paths or old tags
+    # that predate the connected example.
     for guide in [output / 'README.md', output / 'README_ZH.md', *(output / 'docs').glob('*.md')]:
         def link(match):
             label, target = match.groups()
@@ -68,7 +70,7 @@ def main():
             relative = local.relative_to(output).as_posix()
             kind = 'tree' if (ROOT / relative).is_dir() else 'blob'
             suffix = '#' + parsed.fragment if parsed.fragment else ''
-            return f'[{label}](https://github.com/GuGuGu-coocoo/gugugulab-experiment-platform/{kind}/v0.1.0/{quote(relative)}{suffix})'
+            return f'[{label}](https://github.com/GuGuGu-coocoo/gugugulab-experiment-platform/{kind}/main/{quote(relative)}{suffix})'
         guide.write_text(re.sub(r'\[([^\]]+)\]\(([^)]+)\)', link, guide.read_text(encoding='utf-8')), encoding='utf-8')
     subprocess.run(['docker', 'image', 'save', '--output', str(output / 'gep-image.tar'), args.image], check=True)
     (output / 'docker-release.json').write_text(json.dumps({

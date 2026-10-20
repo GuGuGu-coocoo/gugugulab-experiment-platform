@@ -1,0 +1,103 @@
+{
+  "license": "CC0-1.0",
+  "downloaded_utc_date": "2026-10-11",
+  "packs": {
+    "rpg_audio": {
+      "version": "1.0",
+      "source": "https://kenney.nl/assets/rpg-audio",
+      "archive_url": "https://kenney.nl/media/pages/assets/rpg-audio/8e99002d76-1677590336/kenney_rpg-audio.zip",
+      "archive_sha256": "6dbeaf8544da958d8f2adcb4a4a4b76c1ade34a05f8ab9edccd327da7375f38b",
+      "license_path": "assets/licenses/kenney_rpg_audio_license.txt"
+    },
+    "impact_sounds": {
+      "version": "1.0",
+      "source": "https://kenney.nl/assets/impact-sounds",
+      "archive_url": "https://kenney.nl/media/pages/assets/impact-sounds/87b4ddecda-1677589768/kenney_impact-sounds.zip",
+      "archive_sha256": "029d734af1582474edf3a694d1b0cebc97c1c152f2f39fa34d4c2bafc5de77f8",
+      "license_path": "assets/licenses/kenney_impact_sounds_license.txt"
+    }
+  },
+  "files": [
+    {
+      "path": "assets/audio/light_attack.ogg",
+      "pack": "rpg_audio",
+      "original_path": "Audio/knifeSlice.ogg",
+      "suggested_use": "light attack",
+      "bytes": 15532,
+      "sha256": "4cd96dc630bed9840c15f1dd2306da2cc56a4da26a5d3f1a03c5a7265ac5e54f",
+      "modified": false
+    },
+    {
+      "path": "assets/audio/heavy_attack.ogg",
+      "pack": "rpg_audio",
+      "original_path": "Audio/knifeSlice2.ogg",
+      "suggested_use": "heavy attack",
+      "bytes": 15099,
+      "sha256": "6c2064d0ef988d1ec3d56868e823ea8823a5cac00f2742560052633529407def",
+      "modified": false
+    },
+    {
+      "path": "assets/audio/parry.ogg",
+      "pack": "impact_sounds",
+      "original_path": "Audio/impactMetal_medium_000.ogg",
+      "suggested_use": "successful parry",
+      "bytes": 7117,
+      "sha256": "a96f879fec0864a8938e0c745b6996a6c5679c16a234ce31a01cc995e8401003",
+      "modified": false
+    },
+    {
+      "path": "assets/audio/player_hit.ogg",
+      "pack": "impact_sounds",
+      "original_path": "Audio/impactPunch_medium_000.ogg",
+      "suggested_use": "player damage",
+      "bytes": 8800,
+      "sha256": "486988aa2d6440ffc4c62a0e8ccf3c23673ba84424bd4723378d451b7255eb5c",
+      "modified": false
+    },
+    {
+      "path": "assets/audio/boss_hit.ogg",
+      "pack": "impact_sounds",
+      "original_path": "Audio/impactPunch_heavy_000.ogg",
+      "suggested_use": "boss damage",
+      "bytes": 11617,
+      "sha256": "b33a8f14068aec24ec69ba85e5e87fdc41228975f6a1a3e44a6e7d6fc3d9f8d8",
+      "modified": false
+    },
+    {
+      "path": "assets/audio/jump.ogg",
+      "pack": "rpg_audio",
+      "original_path": "Audio/cloth1.ogg",
+      "suggested_use": "jump or dash",
+      "bytes": 16508,
+      "sha256": "ddb93a3671233f95da0e0b10367f082f7eb42fa6caaddcf776410aa8833c747d",
+      "modified": false
+    },
+    {
+      "path": "assets/audio/land.ogg",
+      "pack": "impact_sounds",
+      "original_path": "Audio/footstep_grass_000.ogg",
+      "suggested_use": "landing",
+      "bytes": 8290,
+      "sha256": "9d49497777405d78d7cf7f2888e28277f3a23192300cfd1d79d54876b20f479f",
+      "modified": false
+    },
+    {
+      "path": "assets/audio/victory.ogg",
+      "pack": "impact_sounds",
+      "original_path": "Audio/impactBell_heavy_001.ogg",
+      "suggested_use": "victory or phase bell",
+      "bytes": 15577,
+      "sha256": "9df61e3ae9a83dc65e5a1fd3ed19d480876f3b22b963a1b9ef6fa293592dcec4",
+      "modified": false
+    },
+    {
+      "path": "assets/audio/boss_attack.ogg",
+      "pack": "impact_sounds",
+      "original_path": "Audio/impactMining_000.ogg",
+      "suggested_use": "boss attack",
+      "bytes": 12035,
+      "sha256": "36b4ea107222d073c67ca64dde26944975609202d5090b2f2021213c1a7e35cd",
+      "modified": false
+    }
+  ]
+}

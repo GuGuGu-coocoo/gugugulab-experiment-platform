@@ -754,7 +754,7 @@ def build_current_artifacts(build_root, runner):
     if version.returncode != 0 or not toolchain.startswith('4.7.2.stable.'):
         raise GateError(f'the pinned Godot 4.7.2 toolchain is unavailable: {toolchain or version.stderr.strip()}')
     build_root = Path(build_root)
-    project = ROOT / 'examples' / 'synthetic_experiment'
+    project = ROOT / 'tests' / 'fixtures' / 'synthetic_experiment'
 
     web_root = build_root / 'web'
     (web_root / 'gec').mkdir(parents=True, exist_ok=False)

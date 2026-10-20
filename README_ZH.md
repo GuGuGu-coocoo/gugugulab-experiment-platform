@@ -34,7 +34,11 @@ GEP 和 GEC 界面支持中文和英文。0.1.0 暂不公开恢复入口；已�
 | 研究者 | [GEP 图文使用教程](docs/researcher.md) |
 | Godot 开发者 | [GEC 接入、事件记录与打包](docs/gec_godot.md) |
 
-另有[协议](docs/protocol.md)、[安全说明](docs/security.md)、[工程验证记录](docs/verification.md)和 [Moss Duel 接入示例](docs/moss_duel_gec.md)。
+## 游戏示例
+
+Moss Duel 分为[干净独立版](examples/moss_duel/README.md)和[已接入 GEC 版](examples/moss_duel_gec/README.md)。想从零练习，请复制独立版并按[手动接入指南](docs/moss_duel_gec.md)操作；想先试 GEP 完整流程或对照接线，可用已接入版。两份工程的游戏脚本和素材相同，详见[示例总览](examples/readme_zh.md)。
+
+另有[协议](docs/protocol.md)、[安全说明](docs/security.md)和[工程验证记录](docs/verification.md)。
 
 ## 使用范围
 

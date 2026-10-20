@@ -61,8 +61,8 @@ ROOT_NAME = "GEP Synthetic Experiment"
 EXTENSION_TEXT = ("[configuration]\nentry_symbol = \"sqlite_library_init\"\ncompatibility_minimum = \"4.5\"\n"
                   "[libraries]\nwindows.release.x86_64 = "
                   "\"res://addons/godot-sqlite/bin/libgdsqlite.windows.template_release.x86_64.dll\"\n")
-GUIDE = ROOT / "examples" / "synthetic_experiment" / "windows_native" / "WINDOWS_NATIVE_GUIDE.zh-CN.md"
-TEMPLATE = ROOT / "examples" / "synthetic_experiment" / "windows_native" / "WINDOWS_NATIVE_RESULT_TEMPLATE.md"
+GUIDE = ROOT / "tests" / "fixtures" / "synthetic_experiment" / "windows_native" / "WINDOWS_NATIVE_GUIDE.zh-CN.md"
+TEMPLATE = ROOT / "tests" / "fixtures" / "synthetic_experiment" / "windows_native" / "WINDOWS_NATIVE_RESULT_TEMPLATE.md"
 HARNESS = ROOT / "tools" / "windows_native_harness.py"
 
 

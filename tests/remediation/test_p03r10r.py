@@ -41,9 +41,9 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-PROJECT = ROOT / 'examples' / 'synthetic_experiment'
+PROJECT = ROOT / 'tests' / 'fixtures' / 'synthetic_experiment'
 HARNESS = ROOT / 'tests' / 'native' / 'remediation_defaults_harness.gd'
-DEMO_BOOTSTRAP = ROOT / 'examples' / 'data_defaults_demo' / 'web_demo_bootstrap.gd'
+DEMO_BOOTSTRAP = ROOT / 'tests' / 'fixtures' / 'data_defaults_demo' / 'web_demo_bootstrap.gd'
 SPEC = 'tests/browser/remediation_defaults.spec.js'
 PACKAGES = ROOT / 'packages' / 'gec_web'
 BUILD_BASE = ROOT / 'build' / 'phase03_remediation_20260923'

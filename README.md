@@ -34,7 +34,11 @@ GEP and GEC interfaces support Chinese and English. Recovery controls are not ex
 | Researcher | [Illustrated GEP user guide](docs/researcher_en.md) |
 | Godot developer | [GEC integration, events and packaging](docs/gec_godot_en.md) |
 
-See also the [protocol](docs/protocol.md), [security notes](docs/security.md), [engineering verification](docs/verification.md) and [Moss Duel integration example](docs/moss_duel_gec.md).
+## Game example
+
+Moss Duel is available as a [clean standalone game](examples/moss_duel/readme_en.md) and a [GEC-connected project](examples/moss_duel_gec/readme_en.md). To practise adding GEC from scratch, copy the clean game and follow the [manual integration guide](docs/moss_duel_gec_en.md); use the connected version to compare or try the GEP workflow. Both share the same game scripts and assets. See the [example overview](examples/README.md) for the two projects.
+
+See also the [protocol](docs/protocol.md), [security notes](docs/security.md) and [engineering verification](docs/verification.md).
 
 ## Scope
 

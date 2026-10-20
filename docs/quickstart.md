@@ -1,5 +1,7 @@
 # 合成环境启动与演示
 
+本页供维护者运行历史合成回归，不是当前读者的游戏示例入口。游戏只保留[干净独立版与已接入版](../examples/readme_zh.md)；部署及日常使用分别见[部署教程](deployment.md)与[使用教程](researcher.md)。
+
 本版只允许合成工程验证。已实测 macOS 26.6.2 arm64、Chrome 152.0.7977.77、Godot 4.7.2；macOS 原生包为 universal（实际运行架构 arm64），Windows x64 已有真实实机工程运行（Windows 11 Pro 26200／AMD64，WN01–WN06 一次运行 236 项检查 0 失败）。Windows 实体 LAN 基础场景已实测；Docker、完整 LAN 故障矩阵、独立人类或真实研究验收尚未完成，详见 [验收记录](verification.md)。
 
 ## 服务端
@@ -73,7 +75,7 @@ Web 上传上限 128 MiB、解压上限 256 MiB、最多 256 个文件。原生�
 
 浏览器验收会先通过 GUI 登记新的合成发行，再运行实际 Chrome、独立原生程序和原生 SQLite 故障场景。完整包验收使用独立数据目录、数据库与端口：真实 GUI 上传实际 `.app` 归档并批准发行、下载完整包两次与 sidecar、邀请并撤销成员下载权限，把下载包解包后用包内默认配置启动真实程序，最后对账本地 SQLite、服务器数据库与授权 JSONL，并验证篡改包在创建会话前被拒绝。`phase03_verify_windows_package.py --verify` 用固定的本机 Godot 4.7.2 与官方 Windows 模板交叉导出真实 Windows x64 程序，先按固定官方 SHA-256 校验模板再复制，要求导出与引擎声明子进程真实退出 0（冷缓存首次编辑器进程在写出导入缓存后于关闭阶段崩溃时只保留其证据，受支持的 `--import` 预热重试必须退出 0，导出失败时最多再重试一次完整导出），独立检查 PE x86-64 入口/依赖、PCK 引擎版本与 GDExtension 声明，再走真实 GUI/数据库完整包闭环（上传、批准冻结、两次下载与 sidecar、门户平台呈现、篡改与恢复）。它**不执行** Windows 程序：交叉编译不冒充实机通过；真实 Windows 主机上的执行由 kit 内 harness 单独产生（2026-09-21 已完成 WN01–WN06 236 项检查 0 失败，见下），并以显式选择的运行/准备对作为集成门槛。
 
-Windows 原生实机准备（03F）：`.venv/bin/python tools/phase03_verify_windows_native.py --verify-preparation --probe-device` 校验固定工具链、真实 Windows 程序归档与描述（PE32+ x86-64、PCK 4.7.2、ZIP 路径规则），并**用真实平台生命周期**组装交付 kit：独立合成实例、三个独立冻结研究/发行（无需 ID、名单 ID、ID+密码，共用同一不可变 Windows 构建，批准后模式不可改）、真实名单账号与经邀请流程创建的受限成员、真实登录与 HTTP 准入、经授权下载端点取得的完整包与 sidecar，以及平台侧 WN06 契约（篡改、权限、错平台、缺依赖）；`integrity.json` 只是成员哈希清单（不是签名），私有可用账号单独存放（0600，不在 kit 内）。报告把 `preparation_status` 与 `runtime_status` 分开，探测成功不改变 `NOT_RUN`。真实 Windows 主机上用 kit 内准备好的启动器（无需输入命令）运行 `tools/windows_native_harness.py --run`：自有 PID 的交互启动与窗口/路径/架构证据、三种模式、错误凭据/绑定、断网本地提交、重连补传、丢 ACK 去重、进程终止与重开、检查点恢复与短码+原设备证明、重放/过期拒绝、共享写锁、清理与仅数据恢复、无秘密失败导出、本地 SQLite/API/授权 JSONL 逐 ID 逐值对账、旧发行兼容；缺前置条件即 `BLOCKED`/`NOT_RUN`，不静默跳过、不冒充通过。界面体验按 `examples/synthetic_experiment/windows_native/WINDOWS_NATIVE_GUIDE.zh-CN.md` 自导执行，结果写入同目录 `WINDOWS_NATIVE_RESULT_TEMPLATE.md`。准备通过不等于实机通过，也不替代原设计者自主体验与独立 T17。严格集成门槛用
+Windows 原生实机准备（03F）：`.venv/bin/python tools/phase03_verify_windows_native.py --verify-preparation --probe-device` 校验固定工具链、真实 Windows 程序归档与描述（PE32+ x86-64、PCK 4.7.2、ZIP 路径规则），并**用真实平台生命周期**组装交付 kit：独立合成实例、三个独立冻结研究/发行（无需 ID、名单 ID、ID+密码，共用同一不可变 Windows 构建，批准后模式不可改）、真实名单账号与经邀请流程创建的受限成员、真实登录与 HTTP 准入、经授权下载端点取得的完整包与 sidecar，以及平台侧 WN06 契约（篡改、权限、错平台、缺依赖）；`integrity.json` 只是成员哈希清单（不是签名），私有可用账号单独存放（0600，不在 kit 内）。报告把 `preparation_status` 与 `runtime_status` 分开，探测成功不改变 `NOT_RUN`。真实 Windows 主机上用 kit 内准备好的启动器（无需输入命令）运行 `tools/windows_native_harness.py --run`：自有 PID 的交互启动与窗口/路径/架构证据、三种模式、错误凭据/绑定、断网本地提交、重连补传、丢 ACK 去重、进程终止与重开、检查点恢复与短码+原设备证明、重放/过期拒绝、共享写锁、清理与仅数据恢复、无秘密失败导出、本地 SQLite/API/授权 JSONL 逐 ID 逐值对账、旧发行兼容；缺前置条件即 `BLOCKED`/`NOT_RUN`，不静默跳过、不冒充通过。界面体验按 `tests/fixtures/synthetic_experiment/windows_native/WINDOWS_NATIVE_GUIDE.zh-CN.md` 自导执行，结果写入同目录 `WINDOWS_NATIVE_RESULT_TEMPLATE.md`。准备通过不等于实机通过，也不替代原设计者自主体验与独立 T17。严格集成门槛用
 `.venv/bin/python tools/phase03_verify_windows_native.py --gate --gate-run <运行目录> --gate-prep <准备目录>`：只校验**显式选择**的运行目录，重算当前源码/构建/描述/harness 摘要、绑定 kit 字节与隔离实例数据库，并独立复核 WN01–WN06 的原始证据文件；只有真实设备全部通过且证据仍绑定当前构建才输出 `RUNTIME_PASS`，否则输出 `EVIDENCE_INVALID`/`RUNTIME_INCOMPLETE`/`EVIDENCE_ABSENT`/`SELECTION_REQUIRED` 并非 0 退出，不允许把准备、doctor 或裸 `PASS` 当阶段通过。2026-09-21：同一冻结 kit 已在真实 Windows 11 Pro 26200（AMD64，交互控制台会话）上完成 `--run`：**236 项检查 0 失败**、WN01–WN06 全 PASS，同批本机受影响套件 423 项通过。集成验收用 `.venv/bin/python tools/phase03_acceptance.py --verify --windows-run <运行目录> --windows-prep <准备目录>`（或对应环境变量）显式选择运行/准备对；未选择、证据无效或与所选准备不匹配时整体非 0 且不得用本机准备替代；原设计者自主体验与独立 T17 始终 `NOT_RUN`。运行前置条件是准备者提供的作用域 SSH 隧道（`operator/tunnel.cmd`）；缺它时运行项保持 `BLOCKED`，不修改防火墙、DNS 或证书信任。
 
 所有账号和数据都是合成的；每次运行增加独立测试对象，不清空数据库。测试不代表独立研究人员验收。
@@ -81,18 +83,12 @@ Windows 原生实机准备（03F）：`.venv/bin/python tools/phase03_verify_win
 单独验证独立本地后端（`--local` 使用 `data/local_backend.gd`，不是原生队列的 local_only 分支）：
 
 ```sh
-godot --headless --path examples/synthetic_experiment -- --local --synthetic-auto
+godot --headless --path tests/fixtures/synthetic_experiment -- --local --synthetic-auto
 ```
 
 记录提交与完成集合都写入独立 SQLite 后才返回 `finished_saved` 与 `remote_status: unsupported`，界面显示“本地测试完成”，不连接服务器、不伪造上传回执；任一写入失败立即报 `storage_error` 并保留本机记录。结果 JSONL 只在明确点击“保存结果 JSONL（本地测试）”时写入：先在所选目录写同目录临时文件、核对完整内容后原子替换旧目标，打开后写入/flush 失败报 `results_export_unavailable`，旧文件与本机记录保持不变；保存提示独立于完成状态，未完成时只显示“结果已保存”与实际最终文件路径，目录反馈和“打开结果目录”指向该实际父目录（默认目录为 `GEP_SYNTHETIC_RESULTS`，未设置时为 `user://local_results`）。Web 隔离预览由参与者点击“下载结果 JSONL（本地测试）”下载同一结构，且 SDK 只允许导出本机当前未锁定的本地测试会话：缺失/已清理/已锁定/远端会话一律拒绝且不产生下载。普通运行去掉自动输入参数。
 
-薄封装默认字段演示（独立示例，不修改科学任务；真实本地后端、真实 SQLite、零网络）：
-
-```sh
-godot --headless --path examples/synthetic_experiment --script ../data_defaults_demo/demo.gd
-```
-
-成功时打印一行 `DATA_DEFAULTS_DEMO {...}` 并按明确路径保存结果 JSONL；一次声明默认事件类型/schema/显式字段或 snapshot_provider 后的短 `record()`、显式覆盖与错误码见[实验开发者说明](experiment_developer.md)。会被复制的值在复制前后端调用前先做有界检查：直接/间接/混合循环与超过公开 `MAX_VALUE_DEPTH = 64` 的嵌套都报 `invalid_value`，合法共享但无环的结构不受影响；形状校验不代表服务端已登记该 schema，未登记的远端批次会被服务端整批拒绝且不进入 RAW，本机记录与待传数据保留。
+默认字段和显式覆盖的回归脚本已移入 `tests/fixtures/data_defaults_demo/`，不再作为独立开发者示例。接口、错误码与数据边界见[实验开发者说明](experiment_developer.md)；从零接入请使用 [Moss Duel 教程](moss_duel_gec.md)。
 
 ## 最小 Compose（隔离合成环境已实测）
 

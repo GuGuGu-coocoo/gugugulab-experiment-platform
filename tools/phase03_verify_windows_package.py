@@ -7,7 +7,7 @@ installed Godot and the official 4.7.2 Windows x86_64 export templates, then
 drives the real researcher GUI and API through the complete distribution
 artifact:
 
-* export the actual Windows x64 program from ``examples/synthetic_experiment``
+* export the actual Windows x64 program from ``tests/fixtures/synthetic_experiment``
   (the scientific ``task.gd`` is never changed), package it with
   ``tools/package_build.py windows`` and inspect the produced bytes
   independently: PE32+ x86-64 machine for the entry and for the bundled
@@ -77,7 +77,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PHASE_ROOT = ROOT / "local_data" / "phase03_20260920"
 VENV_PYTHON = ROOT / ".venv" / "bin" / "python"
 GUNICORN = ROOT / ".venv" / "bin" / "gunicorn"
-PROJECT = ROOT / "examples" / "synthetic_experiment"
+PROJECT = ROOT / "tests" / "fixtures" / "synthetic_experiment"
 TEMPLATES = PROJECT / ".godot" / "templates"
 WINDOWS_TEMPLATE = "windows_release_x86_64.exe"
 PROGRAM_ROOT = ROOT / "build" / "windows" / "GEP Synthetic Experiment"
@@ -380,7 +380,7 @@ class Verify:
         self.require(digest == descriptor["program_sha256"], "程序归档摘要等于描述中的程序摘要", digest)
         self.require(not (PROGRAM_ROOT / "connection.json").exists(),
                      "程序归档不含连接配置（冻结时才写入）")
-        self.require((ROOT / "examples/synthetic_experiment/task.gd").is_file(),
+        self.require((ROOT / "tests/fixtures/synthetic_experiment/task.gd").is_file(),
                      "科学任务文件仍为同一工程文件")
         self.artifacts["build"] = {"godot": version, "entry_bytes": output.stat().st_size,
                                    "dependency_bytes": (PROGRAM_ROOT / DEPENDENCY).stat().st_size,
