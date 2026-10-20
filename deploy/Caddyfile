@@ -1,0 +1,5 @@
+admin.{$GEP_BASE_DOMAIN}, experiment.{$GEP_BASE_DOMAIN} {
+    reverse_proxy gep:8000 {
+        header_up X-Forwarded-Proto https
+    }
+}

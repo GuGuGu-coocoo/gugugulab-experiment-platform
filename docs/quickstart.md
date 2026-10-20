@@ -4,6 +4,8 @@
 
 ## 服务端
 
+Windows Docker 交付无需安装下面的源码开发依赖。双击交付包 `deploy/start_windows.cmd`，打开 `http://admin.localhost:8080/login`，按首次设置页自行填写 Owner 账号与密码；域名留空即可本地使用。填写域名只保存待启用配置，不修改 DNS 或启用公网。已有实例直接登录，账号与数据不重建，详见[部署说明](../deploy/README.md)。以下命令仅用于源码合成开发。
+
 需要 Python 3.12、uv、Node 24、pnpm。依赖版本和发行摘要分别锁在 `uv.lock`、`pnpm-lock.yaml` 和模板安装脚本中。
 
 ```sh

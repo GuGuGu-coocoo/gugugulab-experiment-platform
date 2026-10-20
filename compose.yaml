@@ -1,23 +1,42 @@
+name: ${GEP_PROJECT_NAME:-gep}
 services:
   gep:
-    build:
-      context: .
-      dockerfile: deploy/Dockerfile
+    image: ${GEP_IMAGE:-gep:0.1.0}
     environment:
-      GEP_EXPECTED_INSTANCE: ${GEP_EXPECTED_INSTANCE:?Set the initialized instance UUID}
+      GEP_EXPECTED_INSTANCE: ${GEP_EXPECTED_INSTANCE:-}
       GEP_DATA_DIR: /data
+      GEP_SETUP_ENABLED: ${GEP_SETUP_ENABLED:-0}
+      GEP_LOCAL_PORT: ${GEP_PORT:-8080}
+      GEP_ADMIN_HOST: ${GEP_ADMIN_HOST:-admin.localhost}
+      GEP_EXPERIMENT_HOST: ${GEP_EXPERIMENT_HOST:-experiment.localhost}
+      GEP_WWW_HOST: ${GEP_WWW_HOST:-www.localhost}
+      GEP_PUBLIC_API: ${GEP_PUBLIC_API:-http://experiment.localhost:8080}
+      GEP_ADMIN_ORIGIN: ${GEP_ADMIN_ORIGIN:-http://admin.localhost:8080}
+      GEP_HTTPS: ${GEP_HTTPS:-0}
+      GEP_TRUST_PROXY: 0
     volumes:
       - gep_data:/data
     ports:
-      - "127.0.0.1:8000:8000"
+      - "${GEP_BIND_ADDRESS:-127.0.0.1}:${GEP_PORT:-8080}:8000"
+    restart: unless-stopped
     read_only: true
     tmpfs:
-      - /tmp
+      - /tmp:size=64m,mode=1777
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,urllib.request; r=urllib.request.Request('http://127.0.0.1:8000/login',headers={'Host':os.environ['GEP_ADMIN_HOST']}); urllib.request.urlopen(r,timeout=3).close()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 volumes:
   gep_data:
-    external: true
-    name: ${GEP_VOLUME:?Set an explicitly initialized synthetic volume}
+    name: ${GEP_VOLUME:?Set a persistent GEP volume name}

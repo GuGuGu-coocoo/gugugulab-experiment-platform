@@ -19,7 +19,7 @@ WWW_HOST = os.environ.get('GEP_WWW_HOST', 'www.localhost')
 ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'admin.localhost', 'experiment.localhost', 'testserver', EXPERIMENT_HOST, ADMIN_HOST, WWW_HOST]
 ROOT_URLCONF = 'gep.urls'
 INSTALLED_APPS = ['django.contrib.auth', 'django.contrib.contenttypes', 'django.contrib.sessions', 'core']
-MIDDLEWARE = ['core.limits.RequestLimits', 'django.middleware.security.SecurityMiddleware', 'django.contrib.sessions.middleware.SessionMiddleware', 'django.middleware.csrf.CsrfViewMiddleware', 'django.contrib.auth.middleware.AuthenticationMiddleware', 'core.middleware.AccountGate']
+MIDDLEWARE = ['core.middleware.ResponseSecurity', 'django.middleware.security.SecurityMiddleware', 'core.limits.RequestLimits', 'django.contrib.sessions.middleware.SessionMiddleware', 'django.middleware.csrf.CsrfViewMiddleware', 'django.contrib.auth.middleware.AuthenticationMiddleware', 'core.middleware.AccountGate']
 DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': DATA_DIR / 'gep.sqlite3', 'OPTIONS': {'timeout': 20, 'transaction_mode': 'IMMEDIATE'}}}
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 USE_TZ = True
@@ -32,5 +32,10 @@ SESSION_COOKIE_SECURE = os.environ.get('GEP_HTTPS') == '1'
 SESSION_COOKIE_DOMAIN = None
 CSRF_COOKIE_DOMAIN = None
 CSRF_COOKIE_SECURE = SESSION_COOKIE_SECURE
+CSRF_COOKIE_SAMESITE = 'Strict'
+# Only the unpublished application service in the supplied HTTPS deployment
+# trusts this header. Caddy overwrites it; local deployments keep it disabled.
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https') if (
+    os.environ.get('GEP_TRUST_PROXY') == '1' and SESSION_COOKIE_SECURE) else None
 DATA_UPLOAD_MAX_MEMORY_SIZE = 268435456
 TEMPLATES = [{'BACKEND': 'django.template.backends.django.DjangoTemplates', 'APP_DIRS': True, 'OPTIONS': {'context_processors': ['django.template.context_processors.request', 'core.ui.context']}}]

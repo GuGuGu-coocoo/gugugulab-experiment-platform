@@ -1,0 +1,61 @@
+# Alternative complete configuration, not an override. Initialize locally first.
+name: ${GEP_PROJECT_NAME:?Keep the original project name}
+services:
+  gep:
+    image: ${GEP_IMAGE:-gep:0.1.0}
+    environment:
+      GEP_EXPECTED_INSTANCE: ${GEP_EXPECTED_INSTANCE:?Keep the initialized instance UUID}
+      GEP_DATA_DIR: /data
+      GEP_SETUP_ENABLED: 0
+      GEP_LOCAL_PORT: ${GEP_PORT:-8080}
+      GEP_ADMIN_HOST: admin.${GEP_BASE_DOMAIN:?Set the base domain after DNS is ready}
+      GEP_EXPERIMENT_HOST: experiment.${GEP_BASE_DOMAIN:?Set the base domain after DNS is ready}
+      GEP_WWW_HOST: www.localhost
+      GEP_ADMIN_ORIGIN: https://admin.${GEP_BASE_DOMAIN}
+      GEP_PUBLIC_API: https://experiment.${GEP_BASE_DOMAIN}
+      GEP_HTTPS: 1
+      GEP_TRUST_PROXY: 1
+    volumes:
+      - gep_data:/data
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,urllib.request; r=urllib.request.Request('http://127.0.0.1:8000/login',headers={'Host':os.environ['GEP_ADMIN_HOST']}); urllib.request.urlopen(r,timeout=3).close()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+  caddy:
+    image: caddy:2.11.7
+    environment:
+      GEP_BASE_DOMAIN: ${GEP_BASE_DOMAIN:?Set the base domain after DNS is ready}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+volumes:
+  gep_data:
+    name: ${GEP_VOLUME:?Keep the initialized data volume}
+  caddy_data:
+  caddy_config:

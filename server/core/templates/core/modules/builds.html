@@ -12,7 +12,7 @@
 {% if can_configure %} · <a href="/releases/{{release.id}}/config">{{ui.builds_config_link}}</a>{% endif %}
 {% if release.approved and release.platform == "godot_web" and release.build.package_path %} · <a href="{{public_api_url}}/run/{{release.id}}/web/index.html" target="_blank" rel="noopener noreferrer">{{ui.builds_open_entry}}</a>{% endif %}
 </p>{% empty %}<p data-releases-empty="1">{{ui.builds_releases_empty}}</p>{% endfor %}</section>
-<script>
+<script nonce="{{request.csp_nonce}}">
 document.querySelectorAll('form[data-package-upload]').forEach(form=>{
  form.addEventListener('submit',event=>{
   event.preventDefault();

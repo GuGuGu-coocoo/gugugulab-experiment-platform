@@ -17,12 +17,15 @@
 </nav>
 <main id="main" class="main" {% if module %}data-module="{{module}}"{% endif %}>{% block content %}{% endblock %}</main>
 </div>
-<script>
+<script nonce="{{request.csp_nonce}}">
 (() => {
   const menu = document.querySelector('.side-menu');
   const narrow = window.matchMedia('(max-width: 860px)');
   const sync = () => { menu.open = !narrow.matches; };
   sync();
   narrow.addEventListener('change', sync);
+  document.querySelectorAll('[data-submit-on-change]').forEach(select => {
+    select.addEventListener('change', () => select.form.requestSubmit());
+  });
 })();
 </script>{% endblock %}

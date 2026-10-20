@@ -1,0 +1,29 @@
+<!doctype html><html lang="zh" data-theme="light"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>首次设置 · GEP</title><style>$css
+.login-page .login-card{width:min(500px,100%)}.setup-preview{font-size:14px;overflow-wrap:anywhere}.setup-error:empty{display:none}
+</style><body><main class="main login-page"><section class="login-card">
+<h1>首次设置</h1><p>创建 Owner 账号</p>
+<p class="error setup-error" role="alert">$message</p>
+<form method="post" action="/setup"><input type="hidden" name="csrf" value="$csrf">
+<label>用户名<input name="username" value="$username" autocomplete="username" maxlength="150" required></label>
+<label>密码<input name="password" type="password" autocomplete="new-password" minlength="6" maxlength="4096" required aria-describedby="password-hint"></label>
+<p id="password-hint" class="muted">至少 6 位，包含大写字母、小写字母、数字和符号。</p>
+<label>确认密码<input name="password_confirm" type="password" autocomplete="new-password" maxlength="4096" required></label>
+<label>域名（选填）<input name="domain" value="$domain" placeholder="example.com" autocomplete="off" maxlength="253" aria-describedby="domain-hint"></label>
+<p id="domain-hint" class="muted">留空即本地使用。填写后仅保存配置，不修改 DNS、不启用公网。</p>
+<p class="setup-preview" aria-live="polite" id="domain-preview">本地使用</p>
+<button type="submit">完成设置</button></form>
+</section></main>
+<script nonce="$nonce">
+const domainInput=document.querySelector('[name="domain"]');
+const preview=document.getElementById('domain-preview');
+function updatePreview(){
+ let domain=domainInput.value.trim().toLowerCase();if(domain.endsWith('.'))domain=domain.slice(0,-1);
+ preview.textContent=domain?'管理后台：https://admin.'+domain+'\n参与门户：https://experiment.'+domain:'本地使用';
+ preview.style.whiteSpace='pre-line';
+}
+domainInput.addEventListener('input',updatePreview);updatePreview();
+document.querySelector('form').addEventListener('submit',()=>{
+ const button=document.querySelector('button[type="submit"]');button.disabled=true;button.textContent='正在设置…';
+});
+</script></body></html>

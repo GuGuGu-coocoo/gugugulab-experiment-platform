@@ -1,5 +1,7 @@
 # 维护者说明
 
+0.1.0 之后增加应用层安全补修：后台／门户的脚本 nonce、框架嵌入限制、早期错误安全头、严格的 CSRF Cookie，以及登录来源总限速；Django 同系列更新至 5.2.18。更新依赖并重启更新后的服务才生效，不修改已冻结包或 v0.1.0 标签。具体兼容边界、Gunicorn 上游维护状态和部署要求见[安全边界](security.md)；不要将本轮检查当作公网部署通过。
+
 2026-10-11 交互补修边界：v2 的矩阵与 XLSX `update` 使用相同的单研究授权，并在预览和最终事务中重查；目标其他研究的权限与数据不变。账号生命周期仍保留全范围检查。邀请密码重试共用激活时的当前签发权限及 Admin 范围校验，最终激活仍在事务中重新核对。原生 Web 预览的表单请求和已签名资源入口均拒绝，不以隐藏按钮代替鉴权；精确名单查询保留原始空白。此次只更新服务端与后台界面，不改变冻结程序、SDK、事件或科学任务。
 
 Moss Duel 独立源码与[通用 GEC](gec_godot.md)分别发放；研究者按[接入指南](moss_duel_gec.md)自己新建场景、粘贴接线。维护者用 `tools/moss_duel_standalone.py --output build/<新游戏目录>` 准备无 GEC 游戏 ZIP，用 `tools/build_gec_addon.py --output build/<新依赖目录> --sqlite-archive <官方v4.7 demo.zip>` 准备通用 GEC ZIP。通用包没有游戏/研究绑定，不提供替换项目的导出预设或 LICENSE。旧 `integrations/moss_duel/` 与 `tools/moss_duel_delivery.py` 是预接线历史参考，不用于这次人工演练。
@@ -46,6 +48,8 @@ R11W 的正式 Windows 工程验证使用 `.venv/bin/python tools/remediation_wi
 
 旧包 403 暂停来源与冻结包哈希位置（R11 客户端验证依据，本轮不冒充已跑新旧实机）：旧 Web 壳在 `packages/gec_web/sdk.js` 对 401/403/409/422 置 `paused`（并受 32 次上限），旧原生后端在 `examples/synthetic_experiment/addons/gec/native_backend.gd` 对 `http_401`/`http_403`/`http_409`/`http_422` 或 32 次上限置 `s.paused`，因此新的 `study_deleted` 403 会让旧包停止自动重试（旧包可能只显示通用错误，但绝不会当作成功）；服务器不重写冻结旧包。旧独立验收冻结包的哈希清单在 `build/independent_acceptance_20260912/sha256.json`（`native_program.zip`、`web_experiment.zip` 等），后续设计者 kit 冻结清单在 `build/phase03_20260920/<stamp>/manifest.json` 的 `packages` 段；这些字节保持原样，R11 才负责旧/新客户端与三平台实机联测。
 # 当前界面迭代（2026-10-20）
+
+Windows Docker 新部署使用首次设置页创建 Owner，由使用者自行填写账号和密码；预期实例 UUID 在首次启动前固定到部署 `.env`，只有专用空卷可进入设置。密码通过进程标准输入传给初始化器，不经命令行／环境变量，不保存明文凭据；已有合成初始化路径及账号保持兼容。可选域名只写入卷内公开部署描述及 `.pending` 文件，不修改 DNS、不申请证书、不接管个人网站。更新必须保留原卷与 `.env`，不通过重建卷来展示向导。详见[部署说明](../deploy/README.md)。
 
 本轮服务器变更无需数据库迁移。参与次数输入及服务端接受范围均为 1–1000；权限页新增整批“提交权限修改”，复用现有鉴权、密码确认和事务保存。完成状态是对现有状态的显示分组，不回写历史记录。恢复入口暂不公开，保留现有数据、队列和内部兼容处理；不清理浏览器存储或撤销历史许可来隐藏现场。
 

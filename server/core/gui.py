@@ -93,7 +93,7 @@ ACTION_LABELS = {
     'study.configure': '编辑研究设置与名单',
     'build.upload': '上传实验',
     'build.preview': '预览实验',
-    'release.approve_pilot': '发布测试版本',
+    'release.approve_pilot': '发布版本',
     'recruitment.manage': '管理招募',
     'data.export_raw': '导出原始数据',
     'session.recover': '恢复参与记录',
@@ -109,7 +109,7 @@ ACTION_LABELS_EN = {
     'study.configure': 'Configure study: change participation settings and roster',
     'build.upload': 'Upload build: register experiment resources',
     'build.preview': 'Preview build: open the isolated trial run',
-    'release.approve_pilot': 'Approve synthetic release: allow this version for synthetic participation',
+    'release.approve_pilot': 'Publish version: make this experiment version available for participation',
     'recruitment.manage': 'Recruitment: open, pause or close new participation',
     'data.export_raw': 'Raw data export: download raw study records; grant with care',
     'session.recover': 'Session recovery: issue same-device recovery permits',
@@ -383,7 +383,18 @@ def signin(request):
     message=''
     if request.method=='POST':
         from .throttle import check
-        check('login:'+request.META.get('REMOTE_ADDR','')+':'+request.POST.get('username',''))
+        client=request.META.get('REMOTE_ADDR','')
+        try:
+            # Bound password spraying even when every request changes username.
+            # Never trust caller-provided forwarded IP headers here.
+            check('login-client:'+client,limit=120)
+            check('login:'+client+':'+request.POST.get('username',''))
+        except Rejected as error:
+            if error.code!='rate_limited':
+                raise
+            response=render(request,'core/login.html',{'message':ui.tr(ui.lang_of(request),'error_rate_limited')},status=429)
+            response['Retry-After']='60'
+            return response
         user=authenticate(request,username=request.POST.get('username'),password=request.POST.get('password'))
         if user:
             login(request,user)

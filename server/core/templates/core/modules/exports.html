@@ -17,7 +17,7 @@
 </td></tr>{% endfor %}
 </tbody></table></div>{% else %}<p data-exports-empty="1">{{ui.exports_empty}}</p>{% endif %}
 </section>
-<script>
+<script nonce="{{request.csp_nonce}}">
 (()=>{
 const form=document.querySelector('#export-form');
 if(!form)return;

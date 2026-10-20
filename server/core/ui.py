@@ -21,7 +21,7 @@ COOKIE_MAX_AGE = 365 * 24 * 3600
 STRINGS = {
     # Shell / navigation.
     'app_title': {'zh': 'GEP · 研究工作台', 'en': 'GEP · Research Workbench'},
-    'app_note': {'zh': '仅合成研究 · 工程验证版', 'en': 'Synthetic studies only · engineering preview'},
+    'app_note': {'zh': 'GEP 0.1.0', 'en': 'GEP 0.1.0'},
     'nav_home': {'zh': '我的研究', 'en': 'My studies'},
     'nav_users': {'zh': '账号与权限', 'en': 'Accounts & permissions'},
     'nav_menu': {'zh': '导航菜单', 'en': 'Navigation'},
@@ -155,7 +155,7 @@ STRINGS = {
     'builds_verifying': {'zh': '上传完成，正在验证包…', 'en': 'Upload complete, verifying package…'},
     'builds_upload_failed': {'zh': '上传或验证失败，旧发行未改变。请检查文件后重试。', 'en': 'Upload or verification failed; no release changed. Check the file and retry.'},
     'builds_network_failed': {'zh': '网络中断，可重新上传；旧发行未改变。', 'en': 'Network interrupted; retry the upload. No release changed.'},
-    'builds_approve': {'zh': '发布测试版本', 'en': 'Publish test version'},
+    'builds_approve': {'zh': '发布版本', 'en': 'Publish version'},
     'builds_preview': {'zh': '预览（不上传数据）', 'en': 'Preview (no data upload)'},
     'builds_registered_only': {'zh': '描述登记（外部分发，无平台完整包下载）', 'en': 'Descriptor only (external distribution, no complete platform package)'},
     'builds_bound_package': {'zh': '已绑定程序包', 'en': 'Bound program archive'},

@@ -1,15 +1,20 @@
-# 版本记录
+# Changelog / 版本记录
 
 ## 0.1.0 — 2026-10-20
 
-首个版本快照，限合成数据测试。用户确认本轮人工体验通过。
+GEP server delivery uses a Linux amd64 Docker image, with Windows and Linux launchers. This release includes the study workbench, participant portal and GEC integration.
 
-- 研究后台、参与门户、三种参与方式，以及实验上传、预览、发布与招募。
-- Owner、Admin 与普通账号，研究可见性、权限管理、邀请及 Excel 批量导入。
-- 参与记录、完成状态、固定数据快照与授权导出。
-- 通用 GEC 接入及 Moss Duel 示例；Web 与原生本地保存和上传。
-- GEC 默认中文、支持 English，居中显示；结束页高级工具默认折叠。
-- 参与次数上限 1000，优化权限表格、提交确认与登录页布局。
-- 恢复入口暂不公开；底层历史数据和补传能力保留。
+- First-run Owner setup with a user-chosen username/password and optional base domain. Local use needs no domain; entering one saves pending configuration without changing DNS.
+- Local Compose and an explicitly enabled Caddy HTTPS configuration for an initialized instance. Application ports are not published in HTTPS mode.
+- Study settings, three participation modes, spreadsheet rosters, experiment upload, isolated preview, publication and one current version per study.
+- Owner/Admin/member accounts, study visibility, detailed permissions, password confirmation and bulk imports.
+- Participation/completion records, fixed data snapshots, CSV overview/events ZIP, JSONL and metadata downloads.
+- Chinese/English GEP and GEC interfaces; Chinese/English README, server deployment, user and Godot developer guides.
+- Script nonces, response security headers, stricter CSRF cookies, login rate limits, Django 5.2.18 and Gunicorn 25.3.
+- Recovery controls remain hidden; existing local records and pending uploads are retained. Existing experiment packages, data formats and database records are not rewritten.
 
-工程检查与人工结论分开记录，详见[验收记录](docs/verification.md)。本版本不代表生产部署、真实研究、科学时序或所有平台均已验收。
+The former source-only `v0.1.0` snapshot is retained as `v0.1.0-source-snapshot-20261020`; the release tag is updated with the owner's confirmation. GitHub's automatic source archives are source references, not separate server installers. The attached deployment artifact is Docker-only.
+
+中文：本版改用 Docker 交付，加入首次 Owner 设置、Linux／Windows 启动脚本、可选 HTTPS 配置和中英教程。后台“发布测试版本”等日常文案改为“发布版本”，不更改旧协议字段或已保存数据。旧源码快照保留单独标签，工程与人工结果分别记录于[验证说明](docs/verification.md)。
+
+Publishing the software does not establish study approval, arbitrary workload capacity or scientific timing accuracy; review the [security notes](docs/security.md) and deployment conditions.

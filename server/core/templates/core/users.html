@@ -157,7 +157,7 @@
 <form method="post">{% csrf_token %}<input type="hidden" name="op" value="reconcile_preview">
 <label>{{ui.users_choice}} <select name="choice"><option value="grant_view">{{ui.users_choice_grant_view}}</option><option value="remove_conflicting">{{ui.users_choice_remove_conflicting}}</option></select></label><button>{{ui.users_preview_reconcile}}</button></form>
 {% else %}<p>{{ui.users_conflicts_empty}}</p>{% endif %}</section>{% endif %}
-{% if matrix.version != 2 %}<script>
+{% if matrix.version != 2 %}<script nonce="{{request.csp_nonce}}">
 document.querySelectorAll('[data-visibility-form]').forEach(form=>{const box=form.querySelector('[name=visibility]');if(!box)return;box.addEventListener('change',()=>{if(!box.checked){form.querySelectorAll('[data-child]').forEach(child=>{child.checked=false})}})});
 </script>{% endif %}
 {% if matrix.version == 2 %}

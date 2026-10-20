@@ -5,5 +5,8 @@
 !server/**
 !deploy/
 !deploy/Dockerfile
+!LICENSE
+!third_party/
+!third_party/godot_sqlite_license.md
 server/**/__pycache__/
 server/**/*.pyc

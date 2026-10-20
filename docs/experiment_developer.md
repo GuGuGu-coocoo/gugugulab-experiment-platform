@@ -1,69 +1,55 @@
-# 实验开发者说明
+# GEC 接口参考
 
-构建预览范围：GEP 的浏览器隔离预览仅用于 Web 构建，原生构建不能生成或访问该预览；原生请运行独立程序的本地测试，再在合成研究中核对上传。已有冻结程序和会话绑定不因后台界面更新而改变。
+首次接入请读[中文开发者教程](gec_godot.md)或 [English developer guide](gec_godot_en.md)。这里补充数据接口的边界，不重复安装和导出步骤。协议细节见 [gep/1](protocol.md)。
 
-已有项目安装依赖见[通用 GEC 指南](gec_godot.md)。下载包不包含游戏接线或导出预设；[Moss Duel 演练](moss_duel_gec.md)让研究者亲手新建入口场景并粘贴接线，原游戏只发普通事件和结束信号，脚本保持原样。可选 `session.gd` 负责串行本地提交与完成声明，入队返回不是保存确认；默认仅恢复旧数据补传，任务 checkpoint 仍按低层协议另行实现。
+## 便利层与低层
 
-2026-10-11 参与壳文案修订：冻结配置为 `id` 时只显示“名单 ID”，不再暗示可以留空匿名；兼容旧模式保留旧提示。`admission_denied` 依参与模式给出对应提示，`not_ready` 与 `writer_busy` 指向窗口准备或同设备单写入者问题。科学任务、事件、checkpoint 与持久协议未因这些提示改动；本轮已从当前源码重新冻结并通过完整合成工程门槛，旧冻结包不能验证新文案。人工 T17 未运行。
+`addons/gec/session.gd` 通过 `configure_defaults`、`prepare`、`record`、`finish`、`status` 管理排队和串行本地提交。`record()` 返回入队状态；`local_saved` 和 `completed` 分别是本地提交与本地完成信号，不是远端 ACK。
 
-实验科学逻辑继续通过通用数据模块记录事件/checkpoint并结束任务，固定release/session和本地待上传数据不随新配置重新绑定。本轮后台修复不改变事件协议、原生存储格式或科学任务；Windows x64 目标只是同一场景的导出平台，`task.gd` 与事件/检查点语义不变。
+低层 `addons/gec/experiment_data.gd` 保留 `prepare`、`record`、`commit`、`checkpoint`、`finish` 和 `status`。只有需要自行控制事务／checkpoint 时才直接使用；不要让它与未排空的便利层并发写同一会话。
 
-Web托管与预览统一使用维护者配置的GEP_PUBLIC_API（含非默认端口）；原生的connection.json仍是描述登记／兼容路径。GEC 统一准入/恢复/收尾壳已提供：同一 Web/macOS 构建按冻结配置里的 `mode`（`anonymous`/`id`/`password`）动态渲染入口，公开配置另带 `shell_capability`（未知能力直接失败关闭，旧配置走兼容字段集）。原生完整下载套件已按有界上传实现：登记原生描述后上传实际的 `.app` ZIP，批准发行时服务端冻结公开配置/schema/codebook/许可证与 `THIRD_PARTY_NOTICES.txt` 依赖声明并组装带成员哈希的清单，外层摘要只存数据库；发行列表提供完整包与 sidecar 下载，包内 `connection.json` 与 `.app` 同级即可直接启动。当前发行按平台呈现：只有真实 Web 产物才给浏览器入口，完整原生当前发行只显示受控分发说明，不生成无效 Web 路径。Windows x64 完整包沿用同一数据层与参与壳：描述显式声明程序根、入口、依赖与 GDExtension 清单，服务端校验真实 PE32+ x86-64 映像、PCK 引擎版本与 Windows ZIP 路径规则（盘符/UNC、反斜杠、大小写/Unicode 归一化重名、设备名、结尾点/空格、ADS、链接与脚本），冻结包内 `connection.json` 与 EXE 同级，程序按既有可执行文件同级查找逻辑读取；未知平台失败关闭，不回退 Web 或旧分支。
-
-当前接入及构建见[启动指南](quickstart.md)与[协议](protocol.md)。不开发通用Runner；刺激、随机化、试次与科学时序由实验负责。
-
-复用参与壳时，在 `setup()` 前设置 `shell.program_version = "你的构建版本"`，它必须与构建描述的 `version` 一致。旧宿主默认保留 `synthetic-1`。准入后可调用 `shell.set_overlay_visible(false)`，让原生控件与 Web DOM 面板一起隐藏并释放输入焦点；收尾调用 `shell.announce_finished(result)` 会重新显示面板。隐藏只控制显示，不改变会话、队列、准入或已退役入口的状态；保存失败不能传入成功结果。
-
-参与壳的准入与本地测试契约：准入成功（含仅数据恢复）后前置表单（名单/密码/恢复字段与开始按钮）立即隐藏并禁用、焦点与回调移除，不能重复准入或遮挡科学刺激；保存失败或取消确认不会提前锁死入口，但已退役的入口即使后来进入错误状态也不能重新提交。本地测试（原生 `--local` 的独立 `data/local_backend.gd`，以及 Web 隔离预览 `preview:true`）只有记录提交与完成集合两笔都持久化后才显示“本地测试完成”，任一写入失败报 `storage_error` 并保留本机记录；保存结果与完成状态独立，未完成时只提示结果已保存。结果 JSONL 只由明确点击保存/下载：原生先在所选目录写同目录临时文件、核对完整内容后原子替换旧目标，打开后写入/flush 失败报 `results_export_unavailable` 且保留旧文件与本机记录，反馈与打开目录指向最终文件的父目录；Web 下载在 SDK 内校验，只导出本机当前未锁定的本地测试会话，缺失/已清理/锁定/远端会话一律拒绝且不产生下载。全程无网络请求、不伪造远程回执。
-
-收尾状态呈现契约（R09C，计数与导出边界经 R09CR 补修）：参与壳每次从持久 summary（`kind`、`complete_ack`、`pending`、记录数与 `delivery`）重建显示，不只看内存 state 字符串，同 state 下的计数/回执/墓碑变化仍会公告。补传次数始终等于持久 `retry_failures`：初次正常发送失败不算补传、显示通用重试文案（无计数）；之后的第 1/2 次补传失败显示“正在补传”及与持久计数一致的数字，第 3 次连续补传失败且本机仍有合法未锁记录时显示“重试上传”和“导出失败数据”；真正有进展的一轮不计数，ACK 重置计数后下一次计数从 1 开始。失败面按持久状态显式排除已收齐的墓碑、已存完成回执（`complete_ack`/`remote_acknowledged`）与前台锁定会话，不能只靠计数恰好为 0；重开的壳不会为已收到的数据显示旧上传失败或旧答案。本地保存失败只报本地错误，不显示“已完成/等待上传”。`study_deleted` 永久删除终止立即停止发送、禁用重试但保留合法本机导出；手动重试不清计数、不解除安全暂停，仍尊重持久退避/`Retry-After`。失败数据导出由原生 GUI 保存对话框与自动化入口共用同一条原子路径：同目录临时文件完整写入、flush、核对回读后才一次替换目标；打开/写入/flush/核对/替换任一步失败都删除临时文件、保留旧目标与本机队列，界面只显示真实结果（已导出路径、明确错误或取消），导出文档不含 proof/token/密码。浏览器 bridge 对每次完成的调用都给显式回复（成功 flush 原本解析为 undefined，旧行为与“桥没有回复”无法区分，会让壳永久忙碌）。
-
-## 实验数据默认字段薄封装（R10）
-
-`data/experiment_data.gd` 保留原有四参数 `record(kind, payload, schema, observed)`，并增加一次声明、重复简短记录：
+原来的四参数 `record(kind, payload, schema, observed)` 仍可用。默认字段薄封装允许先配置，再简短记录：
 
 ```gdscript
-data.configure_defaults({"event_type": "exp.rt", "schema": {"id": "rt", "version": "1"},
-    "fields": {"trial_id": func(): return trial.id, "choice": func(): return trial.choice}})
-var result = await data.record()                       # 读取已声明字段
-var special = await data.record("exp.other", {"note": "explicit"}, {"id": "other", "version": "1"})
+data.configure_defaults({
+    "event_type": "task.response",
+    "schema": {"id": "response", "version": "1"},
+    "fields": {
+        "trial_id": func(): return trial.id,
+        "choice": func(): return trial.choice
+    }
+})
+var result = await data.record()
 ```
 
-- `fields`（`{字段名: Callable}`，按声明顺序逐一显式求值）与 `snapshot_provider`（一个返回 Dictionary 的 Callable）互斥；声明之外的字段、场景树节点、窗口内容和身份秘密都不采集。
-- 显式 `kind`/`schema` 优先于默认；`payload` 非 null 时完全替换 provider/fields 输出，不隐式合并；`payload` 为 null 才读取已声明来源。
-- `observed` 只用调用方显式传入的值，不推测科学时钟；为空时事件不带 `observed_time`。
-- 复制发生在 `record()` 调用时、`await` 之前：之后修改节点或字典不会追改历史记录。provider/字段回调必须返回普通有限 JSON 值（String 键 Dictionary、Array、字符串、有限数字、布尔、null）。
-- 深度与循环：所有会被复制的值（payload、observed、schema、provider/字段输出）都先在复制与任何后端调用之前做有界检查。字典/数组的直接、间接或混合循环报 `invalid_value`；容器嵌套超过公开 `MAX_VALUE_DEPTH = 64`（根 Dictionary/Array 记为第 1 层，每层嵌套 +1）同样报 `invalid_value`。合法共享但无环的子结构照常接受，不会被误判为循环（检查只用当前祖先路径的引用同一性，不用全局 visited）。拒绝先于 `duplicate`、`backend.record` 与引擎递归发生，不依赖引擎栈溢出后的默认返回值；错误 detail 只含截断路径与原因（≤160 字符），不回显原 payload 或凭据。服务端 `validate_tree` 的 16 层限制独立生效，本封装不改变科学协议。
-- `record()` 不隐式 commit/finish，不改变随机化、评分、RT、checkpoint 或科学顺序；底层后端仍校验 schema 绑定与背压，未知 schema 不会先进入 RAW。
+这里的 `trial` 是宿主定义的对象，不是 GEC 提供的任务节点。声明字段必须与实际 schema 一致。
 
-配置与记录都返回明确错误 `{"error": <code>, "detail": ...}`：
+## 字段与复制
 
-| code | 含义 |
-|---|---|
-| `invalid_config` | 配置缺键/多键、`event_type` 为空、`fields` 类型错误或与 provider 同时出现 |
-| `invalid_field` | 字段名或 Callable 无效（配置时，或调用时已失效） |
-| `invalid_provider` | provider 不是有效 Callable 或未返回 Dictionary |
-| `invalid_schema` | schema 不是含非空 String `id`/`version` 的 Dictionary（独立本地后端返回同名错误） |
-| `invalid_defaults` | 未配置默认且调用时缺少 kind/schema |
-| `invalid_payload` | 没有已声明来源且 payload 为 null，或 payload 不是 Dictionary |
-| `invalid_value` | 值不是普通有限 JSON（Node/对象、非有限 float、非 String 键、直接/间接/混合循环引用、超过 `MAX_VALUE_DEPTH` 的嵌套） |
-| `provider_error` / `field_error` | provider/字段返回 `{error: ...}`，按显式失败处理，不写入缓冲区 |
+`fields` 是字段名到 Callable 的映射，与返回 Dictionary 的 `snapshot_provider` 互斥。只读取显式声明的字段，不遍历场景树、窗口或未声明的身份信息。
 
-### 各层边界（客户端缓冲 / 本机持久记录 / 服务端 RAW）
+显式 `kind`／`schema` 覆盖默认值；非 null 的 `payload` 完全替代默认 provider，不隐式合并。复制发生在调用 `record()` 时、异步等待之前，之后修改原对象不会改写历史事件。
 
-- 包装器只做**形状**检查：`schema` 必须是含非空 String `id`/`version` 的 Dictionary；某个 id/version 是否被研究登记由服务端的发行描述符决定。形状检查不是登记检查，也不是绑定检查。
-- `record()` 先进入本机内存/本地队列缓冲；`commit()` 才把记录写入本机持久存储（独立本地后端为 `local.sqlite`，原生远端后端为 `queue.sqlite` 中的会话记录与 `pending` 列表）。`record()` 本身从不上传、commit 或 finish。
-- 只有远端上传通过服务端校验后事件才进入服务端 RAW（事件行）。服务端按 `event_type` 查描述符并要求 `schema_id`/`schema_version` 精确匹配；未登记或版本不符的批次整批拒绝，RAW 零新增。拒绝后本机记录身份、payload 与 `pending` 保持不变，可修复后重试或显式导出；不可重试的 422 会安全暂停并在持久 delivery 中记录 `last_error_kind`，不以超时或重试掩盖。
+只接受可序列化的普通有限 JSON 值。循环对象或超过本地深度限制 64 会被拒绝；合法共享但无环的结构不因此拒绝。服务端的 16 层限制独立生效，宿主不能因为本地接受就假定服务端一定接受。
 
-独立示例（不修改科学任务，真实本地后端、真实 SQLite、零网络请求）：
+`record()` 不自动等同于 `commit()` 或 `finish()`，也不替你定义 trial 边界。来源时钟、随机化、评分、排除和科学顺序都由任务负责。
 
-```sh
-godot --headless --path examples/synthetic_experiment --script ../data_defaults_demo/demo.gd
-```
+## 完成和故障
 
-示例源码与说明在 `examples/data_defaults_demo/`；成功时打印一行 `DATA_DEFAULTS_DEMO {...}` 并按明确路径保存结果 JSONL。同一目录的 `web_demo_bootstrap.gd` 是 P03R10R 浏览器回归用的测试专用入口：测试把真实项目复制到新构建目录、只替换 `bootstrap.gd`，再经真实 Web 导出、真实桥与浏览器 SDK 运行同一套默认字段/显式覆盖/复制与拒绝路径；它不是发行入口，也不修改原项目或科学任务。以上来源约束与逐值对账只代表当前合成配置和本轮实测环境（本机回环、匿名/本地模式），不代表其他代理或部署配置；失败诊断以显式 `error` 及后端/服务器返回为准，成功路径证据不外推为对所有失败模式的结论。
-# 当前 GEC 界面（2026-10-20）
+本地事务成功才可声称已保存；收到并在本地提交有效 ACK 后，才可减少 pending 集合。HTTP 200 不是没有缺失数据的充分条件。
 
-GEC 参与壳默认中文，提供中文／English 切换；Web 与原生源码的参与页居中，采用与 GEP 一致的浅色、细边框和绿色按钮。收尾说明简化为“实验结束，感谢您的参与”，导出数据与其他辅助工具默认位于折叠的高级选项；错误仍按实际情况显示。恢复界面和名单自动恢复提示暂不公开，底层旧数据与补传逻辑保留。
+暂时网络错误按原标识重传并退避，保留 Retry-After；永久授权拒绝或研究删除不会为了凑次数继续重发。正常发送失败后，连续三轮真正执行且没有有效 ACK 进展的补传失败才显示相应失败导出。仅等待、检测离线或三个分片不算三轮失败。
 
-更新 GEC 后重新导出实验并递增程序版本，再上传新实验包；已发布包不原地替换。本轮 Moss Duel Web 包版本为 `moss-duel-2`。接口的本地提交、完成声明与服务器回执语义保持不变。
+结束页先显示任务结束和真实保存／上传状态。失败数据导出只针对设备上合法、未锁定且未清理的记录，不清空队列，不包含 token、proof 或密码。研究删除后旧客户端停止向该研究发送，合法本地导出与后台恢复是不同能力。
+
+## 检查点与恢复
+
+0.1.0 不公开恢复码／恢复许可入口。底层兼容数据和保存机制保留，但不应在新接线中承诺一个尚未提供的恢复界面。
+
+需要 checkpoint 时，任务先定义完整 trial 边界、下一 trial、随机状态及兼容版本。没有这些声明时只可处理已保存数据，不推断继续任务的位置、不补跑已完成 trial。跨版本配置不能改写旧 pending 的研究、release、session 或 event ID。
+
+## 配置与分发
+
+Web 由 GEP 在隔离预览或参与入口注入公开配置；原生从平台下载的完整发行包自带程序同级 `connection.json`。它不是账户密码文件。SDK／协议版本和 `purpose: synthetic` 沿用现有兼容契约，不手工改旧配置来切换研究。
+
+实验 Web 包与后台不共用管理 Cookie，但多个实验仍共用 experiment origin。只上传你有权发布且信任的程序，不把隔离预览误解为任意不可信代码的安全沙箱。

@@ -3,9 +3,9 @@ name = "gep"
 version = "0.1.0"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "Django>=5.2,<5.3",
+    "Django>=5.2.18,<5.3",
     "jsonschema>=4.23,<5",
-    "gunicorn>=23,<24",
+    "gunicorn>=25.3,<26",
     "openpyxl==3.1.5",
 ]
 
