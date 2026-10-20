@@ -108,7 +108,7 @@ ssh -N -L localhost:8080:127.0.0.1:8080 your_user@your_server_ip
 
 确认服务器的公网入口允许 TCP 80 和 443，SSH 仍仅按自己的管理安排开放。不要开放 8000 或 8080。Docker 发布的端口可能绕过 ufw 的常规规则，应同时核对云安全组和 Docker 网络规则，见 [Docker 防火墙说明](https://docs.docker.com/engine/network/packet-filtering-firewalls/)。不要为本教程覆盖已有防火墙。如果 80／443 已由自己的代理占用，让原代理转发两个域名；不要直接停掉已有网站来腾端口。
 
-回到部署目录，编辑 `.env`，将现有空行改为：
+回到部署目录，用 `sudoedit .env` 编辑配置（首次通过 sudo 启动后，该文件由 root 持有），将现有空行改为：
 
 ```dotenv
 GEP_BASE_DOMAIN=example.com
@@ -142,7 +142,7 @@ gep_backup_dir=$(mktemp -d ./backup_XXXXXXXX)
 sudo docker compose --env-file .env -f compose.public.yaml stop
 sudo docker compose --env-file .env -f compose.public.yaml run --rm -T --no-deps \
   --entrypoint tar gep -C /data -czf - . > "$gep_backup_dir/data.tar.gz"
-cp .env "$gep_backup_dir/config.env"
+sudo cat .env > "$gep_backup_dir/config.env"
 tar -tzf "$gep_backup_dir/data.tar.gz" >/dev/null
 sudo docker compose --env-file .env -f compose.public.yaml up -d --wait
 ```

@@ -97,7 +97,7 @@ For `example.com`, create DNS records for `admin.example.com` and `experiment.ex
 
 Ensure public TCP ports 80 and 443 can reach the server; retain your own SSH access restrictions. Do not expose 8000 or 8080. Docker-published ports may bypass ordinary ufw rules, so check cloud security groups and Docker network rules as well; see [Docker's firewall notes](https://docs.docker.com/engine/network/packet-filtering-firewalls/). Do not replace existing firewall rules for this guide. If a reverse proxy already owns 80/443, route the two hostnames through that proxy instead of stopping an existing website.
 
-In the deployment directory, edit the existing empty setting in `.env`:
+In the deployment directory, run `sudoedit .env` and change the existing empty setting. The file is root-owned after an initial sudo launch:
 
 ```dotenv
 GEP_BASE_DOMAIN=example.com
@@ -131,7 +131,7 @@ gep_backup_dir=$(mktemp -d ./backup_XXXXXXXX)
 sudo docker compose --env-file .env -f compose.public.yaml stop
 sudo docker compose --env-file .env -f compose.public.yaml run --rm -T --no-deps \
   --entrypoint tar gep -C /data -czf - . > "$gep_backup_dir/data.tar.gz"
-cp .env "$gep_backup_dir/config.env"
+sudo cat .env > "$gep_backup_dir/config.env"
 tar -tzf "$gep_backup_dir/data.tar.gz" >/dev/null
 sudo docker compose --env-file .env -f compose.public.yaml up -d --wait
 ```
