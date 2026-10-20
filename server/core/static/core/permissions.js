@@ -160,6 +160,20 @@
       }
     });
     writeDrafts(drafts);
+    var saveForm = document.querySelector('[data-save-permissions]');
+    if (saveForm) {
+      var changes = Object.keys(drafts).map(function (key) {
+        var split = key.indexOf('-');
+        var change = {user_id: key.slice(0, split), study_id: key.slice(split + 1)};
+        if (drafts[key].visibility) { change.visibility = '1'; }
+        Object.keys(drafts[key].actions || {}).forEach(function (name) {
+          if (drafts[key].actions[name]) { change['action:' + name] = '1'; }
+        });
+        return change;
+      });
+      saveForm.querySelector('[name=changes]').value = JSON.stringify(changes);
+      saveForm.querySelector('button').disabled = changes.length === 0;
+    }
     each(document.querySelectorAll('[data-matrix-user-row]'), function (row) {
       var id = row.dataset.matrixUserRow;
       var changed = formsFor(id).reduce(function (sum, form) { return sum + changedFields(form); }, 0);
@@ -243,7 +257,10 @@
     var panel = document.querySelector('[data-matrix-studies="' + accountId + '"]');
     var toggle = document.querySelector('[data-matrix-toggle="' + accountId + '"]');
     if (panel) { panel.hidden = !open; }
-    if (toggle) { toggle.setAttribute('aria-expanded', open ? 'true' : 'false'); }
+    if (toggle) {
+      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      toggle.textContent = open ? toggle.dataset.collapseLabel : toggle.dataset.expandLabel;
+    }
   }
 
   each(document.querySelectorAll('[data-matrix-toggle]'), function (toggle) {
@@ -255,6 +272,14 @@
       setPanel(accountId, open);
       collapsed[accountId] = !open;
       saveCollapsed();
+    });
+  });
+
+  each(document.querySelectorAll('[data-platform-toggle]'), function (toggle) {
+    toggle.addEventListener('click', function () {
+      var panel = document.querySelector('[data-platform-panel="' + toggle.dataset.platformToggle + '"]');
+      panel.hidden = !panel.hidden;
+      toggle.setAttribute('aria-expanded', panel.hidden ? 'false' : 'true');
     });
   });
 
@@ -308,6 +333,7 @@
   // also takes keyboard focus (the real outcome).
   var committed = document.querySelector('[data-committed-kind]');
   if (committed) {
+    if (committed.dataset.committedKind === 'matrix_batch') { writeDrafts({}); }
     if (committed.dataset.committedKind === 'matrix' && committed.dataset.committedStudy) {
       var drafts = readDrafts();
       var key = committed.dataset.committedUser + '-' + committed.dataset.committedStudy;
@@ -387,9 +413,12 @@
     originFields = new FormData();
     if (origin) {
       var source = new FormData(origin);
-      ['op', 'username', 'revision', 'preview_id', 'role', 'invitation_id'].forEach(function (name) {
+      ['op', 'username', 'revision', 'preview_id', 'role', 'invitation_id', 'changes'].forEach(function (name) {
         var value = source.get(name);
         if (typeof value === 'string') { originFields.set(name, value); }
+      });
+      source.forEach(function (value, name) {
+        if (name.indexOf('platform:') === 0) { originFields.set(name, value); }
       });
     }
     var op = origin ? originField(origin, 'op') : (trigger.dataset.confirmOp || '');

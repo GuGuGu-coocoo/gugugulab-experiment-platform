@@ -215,8 +215,10 @@ def sessions_module(request, study):
         'sessions_session': session_raw,
         'sessions_status': status,
         'sessions_status_choices': [
-            {'value': value, 'label': ui.tr(lang, STATUS_LABEL_KEYS[value]), 'count': counts[value]}
-            for value in SESSION_STATUSES],
+            {'value': 'complete', 'label': ui.tr(lang, 'sessions_status_complete'), 'count': counts['complete']},
+            {'value': 'incomplete', 'label': ui.tr(lang, 'sessions_status_not_started'),
+             'count': counts['not_started'] + counts['declared_pending'] + counts['revoked']},
+            {'value': 'active', 'label': ui.tr(lang, 'sessions_status_active'), 'count': counts['active']}],
         'sessions_rows': [],
         'sessions_page': 1,
         'sessions_pages': 1,
@@ -235,8 +237,9 @@ def sessions_module(request, study):
             raise Rejected('sessions_invalid_uuid', 400)
         filtered = filtered.filter(id=wanted)
     if status:
-        require(status in SESSION_STATUSES, 'invalid_request', 400)
-        filtered = filtered.filter(computed_state=status)
+        require(status in SESSION_STATUSES or status == 'incomplete', 'invalid_request', 400)
+        filtered = (filtered.filter(computed_state__in=['not_started', 'declared_pending', 'revoked'])
+                    if status == 'incomplete' else filtered.filter(computed_state=status))
     total = filtered.count()
     pages = max(1, math.ceil(total / SESSION_PAGE_SIZE))
     page = _int_param(request, 'page', 1)

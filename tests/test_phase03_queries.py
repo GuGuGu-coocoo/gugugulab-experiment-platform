@@ -204,8 +204,14 @@ def test_sessions_exact_code_search_status_filter_timezone_and_pagination(setup)
     assert timezone.get_current_timezone_name() in rows_page
     assert '(UTC' in rows_page
     assert 'data-timezone="' in rows_page
-    for label in ('未开始', '进行中', '已声明待收齐', '服务器已收齐', '已撤销'):
+    for label in ('未完成', '进行中', '已完成'):
         assert label in rows_page
+    incomplete = client.get(f'/studies/{study.id}/sessions?status=incomplete').content.decode()
+    incomplete_two = client.get(f'/studies/{study.id}/sessions?status=incomplete&page=2').content.decode()
+    for session in (revoked, pending):
+        assert f'data-session-row="{session.id}"' in incomplete + incomplete_two
+    for session in (active, complete):
+        assert f'data-session-row="{session.id}"' not in incomplete + incomplete_two
     # No impossible status filter value is accepted.
     assert client.get(f'/studies/{study.id}/sessions?status=finished').status_code == 400
 
@@ -294,12 +300,12 @@ def test_permission_separation_and_forged_requests(setup):
     assert mapping_client.get(f'/studies/{study.id}/sessions').status_code == 403
     assert mapping_client.get(f'/studies/{study.id}/sessions?code=PRIVATE-CODE-77').status_code == 403
 
-    # session.recover can issue by UUID without rows, RAW or identity mapping.
+    # Recovery UI is withdrawn; the compatibility API still requires its grant.
     recover_user = get_user_model().objects.create_user('queries_recover', password=OWNER_PASSWORD)
     grant(recover_user, study, 'study.view', 'session.recover')
     recover_client = login_client('queries_recover')
     page = recover_client.get(f'/studies/{study.id}/sessions').content.decode()
-    assert 'data-recover-uuid-form="1"' in page and 'value="recover_code"' in page
+    assert 'data-recover-uuid-form="1"' not in page and 'value="recover_code"' not in page
     assert 'data-session-row=' not in page and 'PRIVATE-CODE-77' not in page
     assert recover_client.get(f'/studies/{study.id}/exports').status_code == 403
     assert recover_client.post(f'/studies/{study.id}/sessions',
@@ -501,8 +507,7 @@ def test_session_page_loading_bounded_and_exact_on_large_synthetic_data(setup):
     assert body.count('data-session-row=') == 20
     assert 'data-sessions-total="600"' in body
     # Exact database counts: 596 not started plus the four written-down states.
-    for label, count in (('未开始', 596), ('进行中', 1), ('已声明待收齐', 1),
-                         ('服务器已收齐', 1), ('已撤销', 1)):
+    for label, count in (('未完成', 598), ('进行中', 1), ('已完成', 1)):
         assert f'{label}（{count}）' in body, label
     assert f'data-session-row="{revoked.id}" data-status="revoked"' in body
     assert f'data-session-row="{pending.id}" data-status="declared_pending"' in body
@@ -772,9 +777,9 @@ def test_english_users_page_controls_lifecycle_previews_and_errors(setup):
     client.cookies['gep_lang'] = 'en'
 
     page = client.get('/users').content.decode()
-    for label in ('Accounts &amp; instance governance', 'Instance permission matrix',
+    for label in ('Accounts &amp; permissions', 'Permission management',
                   'Search accounts by username', 'Study visibility: view study overview',
-                  'Explicit actions (expand)', 'Delegable', 'Preview change',
+                  'Permissions (expand)', 'Delegable', 'Confirm changes for this study',
                   'Reset temporary password', 'Save role', 'Disable',
                   'Create invitation (self-set password)', 'Create temporary-password account',
                   'Pending invitations', 'No pending invitations.', 'Excel batch import'):
@@ -806,7 +811,7 @@ def test_english_users_page_controls_lifecycle_previews_and_errors(setup):
                                   'action:data.export_raw': '1'}).content.decode()
     assert 'Change preview (not executed)' in body
     assert 'Account english_matrix_target · study Synthetic A: add data.export_raw, study.view' in body
-    assert 'remove none' in body and 'Actions after the change: data.export_raw, study.view' in body
+    assert 'remove none' in body and 'Permissions after the change: data.export_raw, study.view' in body
     preview = PREVIEW_ID_RE.search(body).group(1)
     body = client.post('/users', {'op': 'matrix_commit', 'preview_id': preview,
                                   'password': 'wrong-password-2026'}).content.decode()
@@ -848,6 +853,6 @@ def test_english_users_page_controls_lifecycle_previews_and_errors(setup):
     # The same controls stay Chinese when the language is switched back.
     client.cookies['gep_lang'] = 'zh'
     page = client.get('/users').content.decode()
-    assert '实例权限矩阵' in page and '研究可见：查看研究概况' in page and '预览更改' in page
+    assert '权限管理' in page and '查看研究' in page and '确认本研究的权限修改' in page
     assert 'Admin 可只读查看实例内全部账号授权' in page
     assert 'Instance permission matrix' not in page

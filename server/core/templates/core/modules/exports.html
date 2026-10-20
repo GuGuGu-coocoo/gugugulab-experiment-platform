@@ -1,4 +1,4 @@
-<section data-exports="1"><h2>{{ui.exports_title}}</h2><p class="muted">{{ui.exports_intro}}</p>
+<section data-exports="1"><h2>{{ui.exports_title}}</h2>
 <form id="export-form" data-exports-form="1">{% csrf_token %}
 <fieldset data-export-views="1"><legend>{{ui.exports_view_label}}</legend>
 {% for option in exports_options.views %}{% if option.allowed %}<label data-export-view-option="{{option.value}}"><input type="radio" name="view" value="{{option.value}}" data-export-view="{{option.value}}" {% if option.value == exports_options.default_view %}checked{% endif %}> {% if option.value == 'identified' %}{{ui.exports_view_identified}} <small data-export-recommended="1">{{ui.exports_view_recommended}}</small>{% else %}{{ui.exports_view_unmapped}}{% endif %} <span class="muted" data-export-view-counts="{{option.value}}">{% if option.value == 'identified' and study.mode != 'anonymous' %}{{ui.exports_count_roster}}{% else %}{{ui.exports_count_participants}}{% endif %} {{option.counts.participants}} · {{ui.exports_count_sessions}} {{option.counts.sessions}} · {{ui.exports_count_events}} {{option.counts.events}}</span></label>
@@ -8,7 +8,6 @@
 <button data-export-submit="1">{{ui.exports_create}}</button>
 <button class="secondary" data-export-v1-submit="1">{{ui.exports_create_v1}}</button>
 </form><p id="export-result" role="status" aria-live="polite"></p>
-<p class="muted" data-export-zip-note="1">{{ui.exports_zip_note}}</p>
 <h3>{{ui.exports_list}}</h3>
 <div id="export-new-snapshots" aria-live="polite"></div>
 {% if exports_rows %}<div class="table-wrap"><table><caption>{{ui.exports_list}}</caption><thead><tr><th scope="col">ID</th><th scope="col">{{ui.exports_col_created}}</th><th scope="col">{{ui.exports_col_formats}}</th></tr></thead><tbody>

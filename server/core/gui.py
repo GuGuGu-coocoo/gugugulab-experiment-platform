@@ -89,19 +89,19 @@ def public_api_url():
 
 
 ACTION_LABELS = {
-    'study.view': '研究可见：查看研究概况',
-    'study.configure': '配置研究：修改参与设置及名单',
-    'build.upload': '上传构建：登记实验资源',
-    'build.preview': '预览构建：打开隔离试运行',
-    'release.approve_pilot': '批准合成发行：允许该版本用于合成参与',
-    'recruitment.manage': '招募管理：开放、暂停或关闭新参与',
-    'data.export_raw': '原始数据导出：可下载研究原始记录，请谨慎授予',
-    'session.recover': '会话恢复：签发原设备恢复许可',
-    'member.manage': '成员管理：邀请或撤销研究成员',
-    'permission.delegate': '权限委派：可转授已获准委派的权限，请谨慎授予',
-    'audit.view': '审计查看：查看管理操作记录',
-    'identity_mapping.read': '身份映射查看：可查看具体名单身份与会话对应关系（不包含答案）',
-    'session.view': '会话查看：查看具体会话状态与对应名单',
+    'study.view': '查看研究',
+    'study.configure': '编辑研究设置与名单',
+    'build.upload': '上传实验',
+    'build.preview': '预览实验',
+    'release.approve_pilot': '发布测试版本',
+    'recruitment.manage': '管理招募',
+    'data.export_raw': '导出原始数据',
+    'session.recover': '恢复参与记录',
+    'member.manage': '管理成员',
+    'permission.delegate': '分配权限',
+    'audit.view': '查看操作记录',
+    'identity_mapping.read': '查看被试 ID',
+    'session.view': '查看参与记录',
 }
 
 ACTION_LABELS_EN = {
@@ -490,7 +490,7 @@ def study_page(request,study_id,module='overview'):
                 guard(request.user,study,'study.configure')
                 mode=request.POST['mode']; require(mode in ('anonymous','id','password'),'mode')
                 require(not Release.objects.filter(study=study,approved=True).exists(),'policy_frozen_after_release',409)
-                limit=int(request.POST['max_sessions']);require(1<=limit<=100,'participation_limit')
+                limit=int(request.POST['max_sessions']);require(1<=limit<=1000,'participation_limit')
                 study.mode=mode;study.max_sessions=limit;study.save()
             elif op=='roster':
                 # The legacy CSV write entry is refused explicitly: a roster

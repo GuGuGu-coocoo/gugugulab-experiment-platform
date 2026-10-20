@@ -9,6 +9,8 @@ operations at /users.
 from django.contrib.auth import get_user_model, update_session_auth_hash
 from django.core.exceptions import ObjectDoesNotExist
 from django.http import JsonResponse
+from django.db import transaction
+import json
 from django.shortcuts import redirect, render
 from django.utils import timezone
 
@@ -174,6 +176,16 @@ def _apply(request):
         resolved = permissions.commit_reconcile(request.user, password, request.POST.get('preview_id'))
         return {'notice': ui.notice(lang, f"已完成 {len(resolved)} 组授权矛盾收敛。",
                                     f"Resolved {len(resolved)} authorization conflict group(s).")}
+    if op == 'matrix_save':
+        changes = json.loads(request.POST.get('changes', '[]'))
+        require(isinstance(changes, list) and bool(changes), 'no_change', 409)
+        with transaction.atomic():
+            for change in changes:
+                preview = permissions.preview_matrix(request.user, change)
+                permissions.commit_matrix(request.user, password, str(preview.pk))
+        return {'notice': ui.notice(lang, f'已保存 {len(changes)} 项权限修改。',
+                                    f'Saved {len(changes)} permission changes.'),
+                'committed': {'kind': 'matrix_batch'}}
     if op == 'matrix_preview':
         preview = permissions.preview_matrix(request.user, request.POST)
         return {'preview': permissions.preview_payload(preview, lang), 'commit_op': 'matrix_commit'}
@@ -189,6 +201,13 @@ def _apply(request):
         # after the server really stored it; the marker carries no secret.
         return {'notice': notice, 'committed': {'kind': 'matrix', 'user_id': result['user_id'],
                                                 'study_id': result['study_id']}}
+    if op == 'platform_save':
+        with transaction.atomic():
+            preview = permissions.preview_platform(request.user, request.POST)
+            result = permissions.commit_platform(request.user, password, str(preview.pk))
+        return {'notice': ui.notice(lang, f"已保存 {result['username']} 的账号管理权限。",
+                                    f"Saved account management permissions for {result['username']}."),
+                'committed': {'kind': 'platform', 'user_id': result['user_id']}}
     if op == 'platform_preview':
         preview = permissions.preview_platform(request.user, request.POST)
         return {'preview': permissions.preview_payload(preview, lang), 'commit_op': 'platform_commit'}
@@ -279,6 +298,7 @@ def users_page(request):
         except (Rejected, ObjectDoesNotExist, ValueError) as error:
             code = error.code if isinstance(error, Rejected) else 'invalid_request'
             extra['error'] = message_for(code, ui.lang_of(request))
+            extra['error_code'] = code
             status = error.status if isinstance(error, Rejected) else 400
             # A rejected confirmation (for example a wrong own password) keeps the
             # still-valid preview visible so the actor can retry it, but only

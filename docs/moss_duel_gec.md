@@ -39,8 +39,6 @@ func _enter_tree() -> void:
 func _ready() -> void:
 	gec = GEC.new()
 	add_child(gec)
-	if not OS.has_feature("web"):
-		gec.display_locale = "en"
 	gec.configure_defaults({"event_type": "game.duel", "schema": {"id": "duel_event", "version": "1"}})
 	game.telemetry_event.connect(_record)
 	game.run_finished.connect(_finished)
@@ -73,7 +71,7 @@ func _retire() -> void:
 
 6. 在文件系统中右键 **gec_entry.tscn**，选择 **设为主场景（Set As Main Scene）**。
 
-这块接线用的是游戏已有的普通事件/结束信号和开始方法。事件类型 `game.duel` 与下方构建描述一致。`_retire()` 同时关闭游戏 HUD 和世界，因为 CanvasLayer 不会随父节点隐藏。原生壳设为英文只是显示选择，不修改参与政策。
+这块接线用的是游戏已有的普通事件/结束信号和开始方法。事件类型 `game.duel` 与下方构建描述一致。`_retire()` 同时关闭游戏 HUD 和世界，因为 CanvasLayer 不会随父节点隐藏。GEC 默认中文，可在界面切换 English。
 
 此时编辑器运行会显示 GEC 入口，但没有连接配置时不能开始远端参与。不要为此把服务器地址写进脚本；接下来通过 GEP 隔离预览和批准的发行测试。
 
@@ -122,8 +120,8 @@ func _retire() -> void:
 2. 导出到 **exports/web/index.html**，取消“导出调试”。运行项目根目录 **package_web.gd**，在弹窗选择刚导出的 `index.html`。
 3. 成功弹窗给出本次 **gep_web.zip** 路径；同名存在时结果带 `_2` 等后缀，旧文件不覆盖。
 4. 登录准备好的**合成实例**，创建新研究“小游戏接入练习”。在“参与与名单”确认“无需 ID”，不使用真实名单。
-5. “构建与发行”上传本次 ZIP。验证后打开“隔离预览”，应先显示 GEC 入口；点击开始才进入游戏。打一局自然胜利或死亡，看到“本地测试完成”。预览只本地保存，不会显示服务器收齐。
-6. 返回后台批准合成发行。在“招募与门户”选择该发行，点击“设为当前发行”，再将“招募状态”改为“开放新参与”（立即保存）。通过分享入口测试可保持研究私有。
+5. “实验上传与发布”上传本次 ZIP。验证后打开“隔离预览”，应先显示 GEC 入口；点击开始才进入游戏。打一局自然胜利或死亡，看到“本地测试完成”。预览只本地保存，不会显示服务器收齐。
+6. 返回后台发布测试版本。在“招募与门户”选择该发行，点击“设为当前版本”，再将“招募状态”改为“开放新参与”（立即保存）。通过分享入口测试可保持研究私有。
 7. 打开分享入口，再打一局。结束后等到 GEC 显示数据上传并确认。
 8. 在“导出”页点击“下载数据（概览 + 明细）”，再点本次快照的“下载 JSONL”。v2 JSONL 的 `event_type` 为 `game.duel`，动作在 `record.payload.kind`，最后只有一条 `round_summary`。记录数量随操作变化。
 
@@ -134,8 +132,8 @@ func _retire() -> void:
 1. 按[通用导出指南的原生部分](gec_godot.md#原生)修改副本的 macOS 或 Windows 预设。原生保留 SQLite 依赖；Windows 选择 x86_64、不嵌入 PCK。
 2. macOS 导出到 **exports/native/moss_duel.zip**；Windows 导出到 **exports/windows/Moss Duel/Moss Duel.exe**。程序名称只是这次练习的选择，通用 GEC 支持自己的名字。
 3. 在脚本编辑器运行 **package_native.gd**，选择导出的 ZIP 或 EXE。弹窗提供程序 ZIP 与配套 `_descriptor.json` 的准确路径。
-4. 创建另一项新合成研究。在“构建与发行”粘贴配套描述文件的**整个 JSON**登记构建，再上传对应程序 ZIP。
-5. 批准后设为当前发行、开放新参与，然后下载 **完整发行包**。
+4. 创建另一项新合成研究。在“实验上传与发布”粘贴配套描述文件的**整个 JSON**登记构建，再上传对应程序 ZIP。
+5. 批准后设为当前版本、开放新参与，然后下载 **完整发行包**。
 6. 解压下载包，运行其中的 `.app` 或 EXE。同级公开 `connection.json` 由 GEP 提供，不要使用 Godot 原始导出目录的程序代替完整下载包。
 7. 打一局，核对收尾与后台 JSONL。GEC 既有原生支持 macOS arm64 / Windows x64；本次新接线的可见原生 GUI 与 Windows 实机完整闭环仍待测试，详见[验收记录](verification.md)。其他系统未验。
 

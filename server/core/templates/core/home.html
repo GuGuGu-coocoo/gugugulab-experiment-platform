@@ -1,5 +1,5 @@
 {% extends 'core/workbench.html' %}{% block content %}
-<h1>{{ui.home_title}}</h1><p class="muted">{{ui.home_intro}}</p>
+<h1>{{ui.home_title}}</h1>
 {% if cards %}<ul class="cards">
 {% for card in cards %}<li class="card" data-study-card="{{card.study.id}}">
 <h2><a href="/studies/{{card.study.id}}">{{card.study.title}}</a></h2>

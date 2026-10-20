@@ -20,8 +20,8 @@ signal local_save_retry_requested()
 const SHELL_CAPABILITY := "gec-shell/v1"
 const LOCALIZED := {
 	"zh": {
-		"title": "合成实验参与",
-		"status": "本地保存与服务器回执是两种状态。",
+		"title": "实验参与",
+		"status": "准备好后，请点击开始。",
 		"anonymous": "本研究无需 ID。",
 		"code": "名单 ID",
 		"code_legacy": "名单 ID（可留空表示匿名）",
@@ -29,12 +29,12 @@ const LOCALIZED := {
 		"recovery_legend": "同设备恢复",
 		"short_code": "六位恢复码（研究者签发）",
 		"recover": "恢复",
-		"advanced": "高级：长许可（兼容路径）",
+		"advanced": "高级选项",
 		"session": "会话 UUID",
 		"permit": "一次性恢复许可",
 		"recover_permit": "使用许可恢复",
 		"start": "开始参与",
-		"export": "导出当前恢复数据",
+		"export": "导出数据",
 		"continue_": "继续上次参与",
 		"start_new": "开始新的参与",
 		"cancel": "取消",
@@ -50,9 +50,9 @@ const LOCALIZED := {
 		"trial": "第 {n} 次试次：按左或右方向键",
 		"save_failed": "保存失败：{code}",
 		"storage_error": "本地保存失败：数据未全部保存，本机记录仍保留。",
-		"finished_local": "任务已完成；本地记录已提交，等待上传确认。",
-		"local_test_complete": "本地测试完成。",
-		"uploaded": "任务已完成；数据已上传并确认，本地只保留已清理标记。",
+		"finished_local": "实验结束，感谢您的参与。",
+		"local_test_complete": "实验结束，感谢您的参与。",
+		"uploaded": "实验结束，感谢您的参与。",
 		"data_only": "仅恢复数据：不会再进行试次。",
 		"save_results": "保存结果 JSONL（本地测试）",
 		"download_results": "下载结果 JSONL（本地测试）",
@@ -91,8 +91,8 @@ const LOCALIZED := {
 		"err_results_export_unavailable": "结果导出失败：无法写入结果文件；本机记录仍保留。",
 	},
 	"en": {
-		"title": "Synthetic experiment",
-		"status": "Local save and server receipt are separate states.",
+		"title": "Experiment participation",
+		"status": "When you are ready, select Start.",
 		"anonymous": "This study does not require an ID.",
 		"code": "Roster ID",
 		"code_legacy": "Roster ID (leave empty for anonymous)",
@@ -100,12 +100,12 @@ const LOCALIZED := {
 		"recovery_legend": "Same-device recovery",
 		"short_code": "Six-digit recovery code (issued by the researcher)",
 		"recover": "Recover",
-		"advanced": "Advanced: long permit (compatibility path)",
+		"advanced": "Advanced",
 		"session": "Session UUID",
 		"permit": "One-time recovery permit",
 		"recover_permit": "Recover with permit",
 		"start": "Start participation",
-		"export": "Export current recovery data",
+		"export": "Export data",
 		"continue_": "Continue previous session",
 		"start_new": "Start a new session",
 		"cancel": "Cancel",
@@ -121,9 +121,9 @@ const LOCALIZED := {
 		"trial": "Trial {n}: press LEFT or RIGHT",
 		"save_failed": "Save failed: {code}",
 		"storage_error": "Local save failed: not all data was saved; local records are kept.",
-		"finished_local": "Task finished; the local records are committed and waiting for upload confirmation.",
-		"local_test_complete": "Local test complete.",
-		"uploaded": "Task finished; data is uploaded and confirmed, and only the cleaned marker remains.",
+		"finished_local": "The experiment has ended. Thank you for participating.",
+		"local_test_complete": "The experiment has ended. Thank you for participating.",
+		"uploaded": "The experiment has ended. Thank you for participating.",
 		"data_only": "Data recovery only: no trials will resume.",
 		"save_results": "Save results JSONL (local test)",
 		"download_results": "Download results JSONL (local test)",
@@ -252,13 +252,7 @@ func setup(selected: Node) -> Dictionary:
 
 
 func _resolve_locale() -> void:
-	var requested := str(config.get("locale", ""))
-	if requested.is_empty():
-		requested = OS.get_locale_language()
-	if LOCALIZED.has(requested):
-		locale = requested
-	else:
-		locale = "zh" if requested.begins_with("zh") else "en"
+	locale = "zh"
 
 
 func _resolve_mode() -> void:
@@ -298,7 +292,8 @@ func set_locale(code: String) -> void:
 	locale = code
 	if message == null:
 		return
-	announce(t("status"))
+	announce(t("uploaded") if state == "uploaded" else (t("finished_local") if finished_announced else t("status")))
+	_web_state({"messages": LOCALIZED[locale], "locale": locale, "finished": finished_announced})
 	if hint != null and mode == "anonymous":
 		hint.text = t("anonymous")
 	if code_field() != null:
@@ -342,11 +337,53 @@ func code_field() -> LineEdit:
 
 
 func _build_native_ui() -> void:
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var palette := Theme.new()
+	palette.default_font_size = 16
+	for type in ["Label", "LineEdit", "Button"]:
+		palette.set_color("font_color", type, Color("17211c"))
+	var card := StyleBoxFlat.new()
+	card.bg_color = Color("ffffff")
+	card.border_color = Color("d5ded7")
+	card.set_border_width_all(1)
+	card.set_corner_radius_all(12)
+	card.content_margin_left = 28
+	card.content_margin_right = 28
+	card.content_margin_top = 24
+	card.content_margin_bottom = 24
+	palette.set_stylebox("panel", "PanelContainer", card)
+	var primary := StyleBoxFlat.new()
+	primary.bg_color = Color("1c5a48")
+	primary.set_corner_radius_all(8)
+	primary.content_margin_top = 10
+	primary.content_margin_bottom = 10
+	primary.content_margin_left = 14
+	primary.content_margin_right = 14
+	for style in ["normal", "hover", "pressed", "focus"]:
+		palette.set_stylebox(style, "Button", primary)
+	palette.set_color("font_color", "Button", Color.WHITE)
+	theme = palette
+	var background := ColorRect.new()
+	background.color = Color("f3f5f2")
+	background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	add_child(background)
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	add_child(center)
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size.x = 520
+	center.add_child(panel)
 	var box = VBoxContainer.new()
 	shell_box = box
-	box.position = Vector2(70, 70)
-	box.size = Vector2(850, 560)
-	add_child(box)
+	box.add_theme_constant_override("separation", 12)
+	panel.add_child(box)
+	var languages := HBoxContainer.new()
+	box.add_child(languages)
+	for language in ["zh", "en"]:
+		var choice := Button.new()
+		choice.text = "中文" if language == "zh" else "English"
+		choice.pressed.connect(set_locale.bind(language))
+		languages.add_child(choice)
 	message = Label.new()
 	message.text = t("status")
 	box.add_child(message)
@@ -357,7 +394,7 @@ func _build_native_ui() -> void:
 		return
 	hint = Label.new()
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hint.custom_minimum_size = Vector2(850, 0)
+	hint.custom_minimum_size = Vector2(400, 0)
 	hint.text = t("anonymous") if mode == "anonymous" else ""
 	box.add_child(hint)
 	if mode != "anonymous":
@@ -369,43 +406,23 @@ func _build_native_ui() -> void:
 		password.secret = true
 		password.placeholder_text = t("password")
 		box.add_child(password)
-	if backend != null and backend.has_method("recover_code"):
-		short_code = LineEdit.new()
-		short_code.max_length = 6
-		short_code.placeholder_text = t("short_code")
-		box.add_child(short_code)
-		recover_button = Button.new()
-		recover_button.text = t("recover")
-		recover_button.pressed.connect(func(): await submit_entry({"short_code": short_code.text}))
-		box.add_child(recover_button)
-		advanced_toggle = Button.new()
-		advanced_toggle.text = t("advanced")
-		advanced_toggle.pressed.connect(_toggle_advanced)
-		box.add_child(advanced_toggle)
-		advanced_box = VBoxContainer.new()
-		advanced_box.visible = false
-		box.add_child(advanced_box)
-		recovery = LineEdit.new()
-		recovery.placeholder_text = t("session")
-		advanced_box.add_child(recovery)
-		permit = LineEdit.new()
-		permit.secret = true
-		permit.placeholder_text = t("permit")
-		advanced_box.add_child(permit)
-		permit_button = Button.new()
-		permit_button.text = t("recover_permit")
-		permit_button.pressed.connect(func(): await submit_entry({"recovery": recovery.text, "permit": permit.text}))
-		advanced_box.add_child(permit_button)
-	elif backend == null or not backend.has_method("recover_code"):
+	if backend == null or not backend.has_method("recover_code"):
 		hint.text = t("no_server")
 	start = Button.new()
 	start.text = t("start")
 	start.pressed.connect(func(): await submit_entry())
 	box.add_child(start)
+	advanced_toggle = Button.new()
+	advanced_toggle.text = t("advanced")
+	advanced_toggle.pressed.connect(_toggle_advanced)
+	box.add_child(advanced_toggle)
+	advanced_box = VBoxContainer.new()
+	advanced_box.visible = false
+	box.add_child(advanced_box)
 	export_button = Button.new()
 	export_button.text = t("export")
 	export_button.pressed.connect(export_recovery)
-	box.add_child(export_button)
+	advanced_box.add_child(export_button)
 	# Failure surface (R09C): only shown when the persisted summary reports three
 	# consecutive retry failures (or the permanent deletion terminal) while legal
 	# unlocked records remain. Retrying never clears the counters or lifts a safe
@@ -419,17 +436,17 @@ func _build_native_ui() -> void:
 	failure_export_button.text = t("export_failure")
 	failure_export_button.visible = false
 	failure_export_button.pressed.connect(_on_failure_export_pressed)
-	box.add_child(failure_export_button)
+	advanced_box.add_child(failure_export_button)
 	if backend != null and backend.has_method("save_results"):
 		save_results_button = Button.new()
 		save_results_button.text = t("save_results")
 		save_results_button.pressed.connect(_on_save_results_pressed)
-		box.add_child(save_results_button)
+		advanced_box.add_child(save_results_button)
 		open_results_button = Button.new()
 		open_results_button.text = t("open_results_dir")
 		open_results_button.visible = false
 		open_results_button.pressed.connect(_on_open_results_pressed)
-		box.add_child(open_results_button)
+		advanced_box.add_child(open_results_button)
 	confirm_box = HBoxContainer.new()
 	confirm_box.visible = false
 	box.add_child(confirm_box)
@@ -463,7 +480,7 @@ func _lock_entry_form() -> void:
 	## stay available.
 	entry_locked = true
 	for control in [code, password, short_code, recovery, permit, hint, start,
-			advanced_toggle, recover_button, permit_button]:
+			recover_button, permit_button]:
 		if control == null:
 			continue
 		control.visible = false
@@ -477,7 +494,7 @@ func _lock_entry_form() -> void:
 		confirm_box.visible = false
 	# Remove the entry callbacks as well: a retired form must not be able to
 	# start, recover or re-submit even if a control were reached again.
-	for button in [start, recover_button, permit_button, advanced_toggle]:
+	for button in [start, recover_button, permit_button]:
 		if button == null:
 			continue
 		for connection in button.pressed.get_connections():
@@ -508,6 +525,7 @@ func _mount_web_shell() -> void:
 				"local_only": local_test_mode,
 				"panel_hidden": not overlay_visible,
 				"local_save_retry": local_save_retry,
+				"locale": locale,
 				"messages": {
 					"anonymous": t("anonymous"),
 					"code": code_label(),
@@ -545,6 +563,10 @@ func _on_web_action(args: Array) -> void:
 		return
 	_focus_canvas()
 	match action:
+		"locale-zh":
+			set_locale("zh")
+		"locale-en":
+			set_locale("en")
 		"start":
 			await submit_entry()
 		"export":
@@ -747,30 +769,6 @@ func _submit_code(code_value: String) -> Dictionary:
 func _submit_named(values: Dictionary) -> Dictionary:
 	var participant_code := str(values.get("code", "")).strip_edges()
 	var password_value := str(values.get("password", ""))
-	if mode in ["id", "password"] and backend != null and backend.has_method("recover_named"):
-		var candidate: Dictionary = await backend.recover_named(participant_code, password_value)
-		if candidate.has("error"):
-			_fail_with(candidate)
-			return candidate
-		match str(candidate.get("state", "none")):
-			"confirm":
-				pending = candidate
-				pending_credentials = {"participant_code": participant_code, "password": password_value}
-				_show_confirmation(candidate, true)
-				return {"state": "confirm"}
-			"ambiguous":
-				_set_error(t("ambiguous"), "ambiguous")
-				print("SYNTHETIC_NAMED ambiguous")
-				return {"state": "ambiguous"}
-			"front_locked":
-				_set_error(t("front_locked"), "front_locked")
-				print("SYNTHETIC_NAMED front_locked")
-				return {"state": "front_locked"}
-			"cleaned":
-				announce(t("cleaned"))
-				print("SYNTHETIC_NAMED cleaned")
-			_:
-				print("SYNTHETIC_NAMED none")
 	var credentials := {"expected_version": program_version}
 	if mode != "anonymous":
 		if not participant_code.is_empty():
@@ -910,6 +908,9 @@ func announce_finished(result: Dictionary = {}) -> void:
 		_web_state({"busy": false, "reason": str(result.get("error", "storage_error"))})
 		return
 	finished_announced = true
+	_web_state({"finished": true, "locale": locale})
+	if advanced_box != null:
+		advanced_box.hide()
 	if local_test_mode:
 		state = "finished_local_test"
 		announce(t("local_test_complete"))

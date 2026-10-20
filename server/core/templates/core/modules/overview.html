@@ -22,7 +22,6 @@
 <p>{% if module_available.participation %}<a href="{{module_links.participation}}" data-module-link="participation">{{ui.module_participation}}</a>{% endif %}</p>
 <h3>{{ui.overview_current_release}}</h3>
 <p data-current-release="{{current_release_id|default:''}}">{{ui.overview_current_release}}：{% if current_release_id %}{{current_release_id}}{% else %}{{ui.publication_current_none}}{% endif %}</p>
-<p class="muted">{{ui.overview_release_note}}</p>
 </section>
 <section data-overview-releases="1"><h2>{{ui.builds_releases}}</h2>
 {% for release in releases %}<p data-release-row="{{release.id}}"><strong>{{release.platform|default:"—"}} · {{release.version|default:"—"}}</strong> <small>{{release.id}}</small>
