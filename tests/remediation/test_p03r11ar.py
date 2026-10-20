@@ -10,7 +10,7 @@ run, never produce a human result and never stand in for R11W:
   the raw harness document, real device OS/architecture/build facts and
   per-event reconciliation exports re-read with their digests - never as a short
   summary of six PASS strings;
-* the program source binding covers the four ``packages/gec_web/*.js`` files the
+* the program source binding covers the four ``GEC_SDK/gec_web/*.js`` files the
   Web build really ships plus the Godot project and packagers; an isolated
   source copy proves a Web SDK change invalidates the digest, and a binding that
   recorded different sources before and after its build is refused;
@@ -305,8 +305,8 @@ def test_windows_run_evidence_refuses_stale_tampered_and_external_evidence(evide
 def test_program_source_binding_includes_web_sdk_and_packager_inputs(tmp_path, evidence_root):
     """The real packaging inputs are bound; a Web SDK change is never invisible."""
     names = [entry['name'] for entry in windows.program_source_inputs()]
-    for required in ('packages/gec_web/sdk.js', 'packages/gec_web/bridge.js',
-                     'packages/gec_web/inputs.js', 'packages/gec_web/shell.js',
+    for required in ('GEC_SDK/gec_web/sdk.js', 'GEC_SDK/gec_web/bridge.js',
+                     'GEC_SDK/gec_web/inputs.js', 'GEC_SDK/gec_web/shell.js',
                      'tools/build.py', 'tools/package_build.py', 'tools/windows_template.py'):
         assert required in names, (required, names[:10])
     assert any(name.endswith('project.godot') for name in names), names[:10]
@@ -315,17 +315,17 @@ def test_program_source_binding_includes_web_sdk_and_packager_inputs(tmp_path, e
     copy = tmp_path / 'source-copy'
     (copy / 'examples').mkdir(parents=True)
     (copy / 'tools').mkdir()
-    (copy / 'packages').mkdir()
+    (copy / 'GEC_SDK').mkdir()
     shutil.copytree(ROOT / 'tests' / 'fixtures' / 'synthetic_experiment',
                     copy / 'tests' / 'fixtures' / 'synthetic_experiment',
                     ignore=shutil.ignore_patterns('.godot', '__pycache__'))
-    shutil.copytree(ROOT / 'packages' / 'gec_web', copy / 'packages' / 'gec_web')
+    shutil.copytree(ROOT / 'GEC_SDK' / 'gec_web', copy / 'GEC_SDK' / 'gec_web')
     for name in ('tools/build.py', 'tools/package_build.py', 'tools/windows_template.py'):
         shutil.copy2(ROOT / name, copy / name)
     baseline = windows.program_source_digest(copy)
     assert windows.program_source_inputs(copy), 'the isolated copy must list its inputs'
 
-    sdk = copy / 'packages' / 'gec_web' / 'sdk.js'
+    sdk = copy / 'GEC_SDK' / 'gec_web' / 'sdk.js'
     sdk_baseline = sdk.read_bytes()
     sdk.write_bytes(sdk_baseline + b'\n// synthetic web sdk change\n')
     web_changed = windows.program_source_digest(copy)

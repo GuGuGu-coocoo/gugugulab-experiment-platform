@@ -4,7 +4,7 @@ import http from 'node:http';
 import path from 'node:path';
 /* P03R09AR real-Chrome check for the shipped browser bridge and SDK.
  *
- * The pytest task driver serves the shipped packages/gec_web modules with a
+ * The pytest task driver serves the shipped GEC_SDK/gec_web modules with a
  * local-preview application context and runs this spec with GEP_REMEDIATION_JOB
  * set. Without that environment the spec skips (tools/verify_browser.py may
  * collect this directory), but the Required Verification driver always sets it

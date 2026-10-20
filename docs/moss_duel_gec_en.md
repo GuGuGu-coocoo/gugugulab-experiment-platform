@@ -15,7 +15,7 @@ Work on a copy and use synthetic data only. The game keeps responsibility for mo
 
 ## 2. Install the generic GEC dependency
 
-Extract `gec_godot_0_1_0.zip` and copy the dependencies and licences listed in the [generic installation guide](gec_godot_en.md#2-install-into-a-project-copy). It has no Moss Duel scene, wiring or export presets. Do not copy the prewired reference's entry script yet.
+The generic GEC source is in the [GEC_SDK folder](../GEC_SDK/). Extract `gec_godot_0_1_0.zip` and copy the dependencies and licences listed in the [generic installation guide](gec_godot_en.md#2-install-into-a-project-copy). It has no Moss Duel scene, wiring or export presets. Do not copy the prewired reference's entry script yet.
 
 The copy now contains the original `main.tscn`, `scripts/` and `assets/`, plus `addons/`, `gec_web/`, `package_web.gd` and `package_native.gd`. Running it still starts the original game: installing files alone has not connected it.
 

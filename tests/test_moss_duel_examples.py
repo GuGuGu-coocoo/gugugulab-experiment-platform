@@ -44,9 +44,9 @@ def test_sdk_sources_match_connected_example_and_regression_host():
     for name, content in dependencies.items():
         if name not in ('README.md', 'gec_descriptor.example.json'):
             assert (ROOT / 'examples/moss_duel_gec' / name).read_bytes() == content, name
-    for source in (ROOT / 'packages/gec_godot/runtime').rglob('*'):
+    for source in (ROOT / 'GEC_SDK/gec_godot/runtime').rglob('*'):
         if source.is_file():
-            fixture = ROOT / 'tests/fixtures/synthetic_experiment' / source.relative_to(ROOT / 'packages/gec_godot/runtime')
+            fixture = ROOT / 'tests/fixtures/synthetic_experiment' / source.relative_to(ROOT / 'GEC_SDK/gec_godot/runtime')
             assert fixture.read_bytes() == source.read_bytes(), source
 
 

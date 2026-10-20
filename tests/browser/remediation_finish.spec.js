@@ -5,7 +5,7 @@ import path from 'node:path';
 /* P03R09A real-Chrome check for the local-only Web preview.
  *
  * The pytest task driver exports the real Godot Web build, points the job at the
- * shipped packages/gec_web modules and the preview application context, and runs
+ * shipped GEC_SDK/gec_web modules and the preview application context, and runs
  * this spec with GEP_REMEDIATION_JOB set. Without that environment the spec skips
  * (tools/verify_browser.py may collect this directory), but the Required
  * Verification command always sets it and the driver requires one passed test.

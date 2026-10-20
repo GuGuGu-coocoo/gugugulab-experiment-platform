@@ -22,20 +22,20 @@ spec.loader.exec_module(addon)
 def prepared(tmp_path, monkeypatch):
     root = tmp_path / 'repo'
     sources = {
-        'packages/gec_godot/runtime/data/experiment_data.gd': 'extends RefCounted\n',
-        'packages/gec_godot/runtime/data/local_backend.gd': 'extends Node\n',
-        'packages/gec_godot/session.gd': 'extends Node\n# generic fixture\n',
-        'packages/gec_godot/package_web.gd': '@tool\nextends EditorScript\n',
-        'packages/gec_godot/package_native.gd': '@tool\nextends EditorScript\n',
-        'packages/gec_godot/gec_descriptor.example.json': '{"version":"example-1"}\n',
-        'packages/gec_godot/runtime/addons/godot-sqlite/gdsqlite.gdextension': '[configuration]\n',
+        'GEC_SDK/gec_godot/runtime/data/experiment_data.gd': 'extends RefCounted\n',
+        'GEC_SDK/gec_godot/runtime/data/local_backend.gd': 'extends Node\n',
+        'GEC_SDK/gec_godot/session.gd': 'extends Node\n# generic fixture\n',
+        'GEC_SDK/gec_godot/package_web.gd': '@tool\nextends EditorScript\n',
+        'GEC_SDK/gec_godot/package_native.gd': '@tool\nextends EditorScript\n',
+        'GEC_SDK/gec_godot/gec_descriptor.example.json': '{"version":"example-1"}\n',
+        'GEC_SDK/gec_godot/runtime/addons/godot-sqlite/gdsqlite.gdextension': '[configuration]\n',
         'LICENSE': (REPO / 'LICENSE').read_text(),
         'third_party/godot_sqlite_license.md': (REPO / 'third_party/godot_sqlite_license.md').read_text(),
-        'docs/gec_godot.md': 'Generic guide [Host example](moss_duel_gec.md). [Protocol](protocol.md)\n',
+        'docs/gec_godot.md': 'Generic guide [Host example](moss_duel_gec.md). [Protocol](protocol.md). [GEC SDK](../GEC_SDK/)\n',
     }
-    sources.update({f'packages/gec_godot/runtime/addons/gec/{name}.gd': 'extends Node\n'
+    sources.update({f'GEC_SDK/gec_godot/runtime/addons/gec/{name}.gd': 'extends Node\n'
                     for name in ('native_backend', 'web_backend', 'shell')})
-    sources.update({f'packages/gec_web/{name}.js': '// generic dependency\n'
+    sources.update({f'GEC_SDK/gec_web/{name}.js': '// generic dependency\n'
                     for name in ('sdk', 'bridge', 'inputs', 'shell')})
     for relative, content in sources.items():
         target = root / relative
@@ -67,7 +67,7 @@ def test_only_generic_allowlisted_dependencies_and_notices_are_shipped(prepared)
     root, _, output = prepared
     # Secrets and project files next to sources must never be collected.
     for name in ('connection.json', '.env', 'main.tscn', 'project.godot', 'export_presets.cfg'):
-        (root / 'packages/gec_godot' / name).write_text('private-or-host sentinel')
+        (root / 'GEC_SDK/gec_godot' / name).write_text('private-or-host sentinel')
     addon.main()
     target = output / addon.ARCHIVE_NAME
     with zipfile.ZipFile(target) as reader:
@@ -81,6 +81,8 @@ def test_only_generic_allowlisted_dependencies_and_notices_are_shipped(prepared)
         assert reader.read('GEC_LICENSE.txt') == (root / 'LICENSE').read_bytes()
         assert reader.read('SQLITE_LICENSE.md') == (root / 'third_party/godot_sqlite_license.md').read_bytes()
         assert 'https://github.com/GuGuGu-coocoo/gugugulab-experiment-platform/blob/main/docs/protocol.md' in reader.read('README.md').decode()
+        assert 'https://github.com/GuGuGu-coocoo/gugugulab-experiment-platform/tree/main/GEC_SDK' in reader.read('README.md').decode()
+        assert '(../GEC_SDK/)' not in reader.read('README.md').decode()
         assert 'SQLite is in the public domain' in reader.read('SQLITE_NOTICE.txt').decode()
         manifest = json.loads(reader.read('content_manifest.json'))
         assert manifest['component'] == 'gec_godot'
@@ -97,12 +99,12 @@ def test_only_generic_allowlisted_dependencies_and_notices_are_shipped(prepared)
 @pytest.mark.parametrize('kind', ['missing', 'empty', 'link'])
 def test_missing_empty_or_linked_session_never_creates_output(prepared, kind):
     root, _, output = prepared
-    source = root / 'packages/gec_godot/session.gd'
+    source = root / 'GEC_SDK/gec_godot/session.gd'
     source.unlink()
     if kind == 'empty':
         source.touch()
     elif kind == 'link':
-        source.symlink_to(root / 'packages/gec_godot/package_web.gd')
+        source.symlink_to(root / 'GEC_SDK/gec_godot/package_web.gd')
     with pytest.raises((FileNotFoundError, ValueError)):
         addon.main()
     assert not output.exists()
@@ -169,9 +171,9 @@ def test_output_paths_cannot_escape_or_follow_links(prepared, monkeypatch, tmp_p
 
 def test_source_parent_link_is_refused(prepared):
     root, _, output = prepared
-    directory = root / 'packages/gec_web'
-    directory.rename(root / 'packages/actual_web')
-    directory.symlink_to(root / 'packages/actual_web', target_is_directory=True)
+    directory = root / 'GEC_SDK/gec_web'
+    directory.rename(root / 'GEC_SDK/actual_web')
+    directory.symlink_to(root / 'GEC_SDK/actual_web', target_is_directory=True)
     with pytest.raises(ValueError, match='path links refused'):
         addon.main()
     assert not output.exists()
@@ -239,7 +241,7 @@ def test_generic_editor_helper_real_godot_boundaries(tmp_path, platform, checks)
     result = subprocess.run([
         godot, '--headless', '--log-file', str(tmp_path / 'packaging.log'),
         '--path', str(project), '--script', str(REPO / f'tests/godot/test_gec_{platform}_package.gd'),
-        '--', str(REPO / f'packages/gec_godot/package_{platform}.gd'), str(tmp_path / 'new_fixtures'),
+        '--', str(REPO / f'GEC_SDK/gec_godot/package_{platform}.gd'), str(tmp_path / 'new_fixtures'),
     ], capture_output=True, text=True, timeout=35)
     transcript = result.stdout + result.stderr
     assert result.returncode == 0, transcript

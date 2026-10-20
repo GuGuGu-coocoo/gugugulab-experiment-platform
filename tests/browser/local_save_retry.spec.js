@@ -5,7 +5,7 @@ import http from 'node:http';
 // Real Chrome and the shipped DOM module verify that local-save retry can
 // actually be clicked above the canvas. The synthetic host models commit
 // faults only; these checks make no API/database/ACK acceptance claim.
-const shellSource = fs.readFileSync(new URL('../../packages/gec_web/shell.js', import.meta.url), 'utf8');
+const shellSource = fs.readFileSync(new URL('../../GEC_SDK/gec_web/shell.js', import.meta.url), 'utf8');
 const html = `<!doctype html><html><head><meta charset="utf-8"></head>
 <body><canvas id="canvas" tabindex="0" width="1000" height="700" style="width:1000px;height:700px"></canvas>
 <script type="module">

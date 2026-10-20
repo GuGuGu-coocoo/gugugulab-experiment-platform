@@ -6,7 +6,7 @@ import path from 'node:path';
  *
  * The pytest task drivers export the real Godot Web builds (with the R10
  * experiment-data wrapper compiled in), point the job at the shipped
- * packages/gec_web modules and a preview application context, and run this spec
+ * GEC_SDK/gec_web modules and a preview application context, and run this spec
  * with GEP_REMEDIATION_JOB set. Without that environment the default test
  * skips (tools/verify_browser.py may collect this directory), but the Required
  * Verification driver always sets it and requires one passed test.

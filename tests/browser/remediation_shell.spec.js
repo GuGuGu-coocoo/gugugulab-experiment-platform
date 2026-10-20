@@ -5,7 +5,7 @@ import path from 'node:path';
 /* P03R09C real-Chrome check of the shipped Web shell.
  *
  * The pytest task driver exports the real Godot Web build (with the shipped
- * packages/gec_web bridge/shell/sdk copied next to it) and starts the synthetic
+ * GEC_SDK/gec_web bridge/shell/sdk copied next to it) and starts the synthetic
  * fault server; this spec serves the export with the same context injection the
  * real host uses (server/core/hosting.py) and drives the real participation
  * panel in real Chrome:

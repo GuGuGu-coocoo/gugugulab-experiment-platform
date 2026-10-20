@@ -647,10 +647,10 @@ def select_preparation(prepare_root, selection_path=None, environ=None):
 
 PROGRAM_PACKAGER_FILES = ('tools/build.py', 'tools/package_build.py', 'tools/windows_template.py')
 # The Web SDK files the Web build really ships: ``build_current_artifacts``
-# copies exactly these four ``packages/gec_web/*.js`` files into the exported
+# copies exactly these four ``GEC_SDK/gec_web/*.js`` files into the exported
 # Web root, so a Web SDK change must invalidate an old program-source binding.
-WEB_SDK_SOURCES = ('packages/gec_web/sdk.js', 'packages/gec_web/bridge.js',
-                   'packages/gec_web/inputs.js', 'packages/gec_web/shell.js')
+WEB_SDK_SOURCES = ('GEC_SDK/gec_web/sdk.js', 'GEC_SDK/gec_web/bridge.js',
+                   'GEC_SDK/gec_web/inputs.js', 'GEC_SDK/gec_web/shell.js')
 
 
 def program_source_paths(root=None):

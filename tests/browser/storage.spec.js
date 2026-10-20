@@ -6,7 +6,7 @@ import {isolated,connectionConfig} from './isolated_target.mjs';
 const target=isolated();
 const config=connectionConfig(target);
 async function setup(page){
- await page.route('**/sdk.js',r=>r.fulfill({path:'packages/gec_web/sdk.js',contentType:'text/javascript'}));
+ await page.route('**/sdk.js',r=>r.fulfill({path:'GEC_SDK/gec_web/sdk.js',contentType:'text/javascript'}));
  await page.goto(target.experiment+'/');
  await page.evaluate(async config=>{const {GEC}=await import('/sdk.js');window.client=new GEC(config);await client.prepare();clearInterval(client.timer);await client.begin();},config);
 }
@@ -55,7 +55,7 @@ test('single writer and shared-device new participation locks old front recovery
  await setup(page);
  const old=await page.evaluate(()=>client.id);
  const other=await context.newPage();await other.goto(target.experiment+'/');
- await other.route('**/sdk.js',r=>r.fulfill({path:'packages/gec_web/sdk.js',contentType:'text/javascript'}));
+ await other.route('**/sdk.js',r=>r.fulfill({path:'GEC_SDK/gec_web/sdk.js',contentType:'text/javascript'}));
  const result=await other.evaluate(async config=>{const {GEC}=await import('/sdk.js');const c=new GEC(config);try{await c.prepare();return 'incorrect'}catch(e){return e.message}},config);
  expect(result).toBe('writer_busy');await other.close();
  await page.evaluate(()=>client.close());await page.reload();
@@ -92,7 +92,7 @@ test('configuration replacement cannot retarget pending records',async({page})=>
  await page.evaluate(()=>client.close());
 });
 test('unknown storage version is preserved and rejected',async({page})=>{
- await page.route('**/sdk.js',r=>r.fulfill({path:'packages/gec_web/sdk.js',contentType:'text/javascript'}));await page.goto(target.experiment+'/');
+ await page.route('**/sdk.js',r=>r.fulfill({path:'GEC_SDK/gec_web/sdk.js',contentType:'text/javascript'}));await page.goto(target.experiment+'/');
  await page.evaluate(()=>new Promise(resolve=>{const r=indexedDB.open('gec-1',2);r.onupgradeneeded=()=>r.result.createObjectStore('future');r.onsuccess=()=>{r.result.close();resolve()}}));
  const message=await page.evaluate(async config=>{const {GEC}=await import('/sdk.js');const c=new GEC(config);try{await c.prepare();return 'bad'}catch(e){c.close();return e.name}},config);
  expect(message).toBe('VersionError');

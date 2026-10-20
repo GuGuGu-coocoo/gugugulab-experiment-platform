@@ -348,7 +348,7 @@ def test_real_web_preview_matches_golden(evidence_root, evidence):
         'preview': True,
     }
     job_path = chrome / 'job.json'
-    job_path.write_text(json.dumps({'export_dir': str(web), 'package_dir': str(ROOT / 'packages' / 'gec_web'),
+    job_path.write_text(json.dumps({'export_dir': str(web), 'package_dir': str(ROOT / 'GEC_SDK' / 'gec_web'),
                                     'evidence_dir': str(chrome), 'api_url': context['api_url'],
                                     'context': context}), encoding='utf-8')
     runner = ROOT / 'node_modules' / '.bin' / 'playwright'

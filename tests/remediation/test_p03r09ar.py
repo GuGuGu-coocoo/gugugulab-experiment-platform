@@ -116,7 +116,7 @@ def test_real_chrome_bridge_export_guard_and_data_only(evidence_root, evidence):
     chrome = evidence_root / 'chrome'
     chrome.mkdir()
     job_path = chrome / 'job.json'
-    job_path.write_text(json.dumps({'package_dir': str(ROOT / 'packages' / 'gec_web'),
+    job_path.write_text(json.dumps({'package_dir': str(ROOT / 'GEC_SDK' / 'gec_web'),
                                     'evidence_dir': str(chrome), 'api_url': context['api_url'],
                                     'context': context}), encoding='utf-8')
     runner = ROOT / 'node_modules' / '.bin' / 'playwright'

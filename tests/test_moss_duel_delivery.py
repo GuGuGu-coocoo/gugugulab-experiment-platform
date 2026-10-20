@@ -45,7 +45,7 @@ def prepared(tmp_path, monkeypatch):
         'LICENSE': (REPO / 'LICENSE').read_text(),
         'third_party/godot_sqlite_license.md': (REPO / 'third_party/godot_sqlite_license.md').read_text(),
     }
-    sources.update({f'packages/gec_web/{name}.js': '// optional adapter\n'
+    sources.update({f'GEC_SDK/gec_web/{name}.js': '// optional adapter\n'
                     for name in ('sdk', 'bridge', 'inputs', 'shell')})
     for relative, content in sources.items():
         target = root / relative

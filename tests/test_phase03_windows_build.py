@@ -103,9 +103,9 @@ def test_build_refuses_mismatched_override_before_copy_and_export(tmp_path, monk
     build = load_module('gep_build_tool_refusal', TOOLS / 'build.py')
     project = tmp_path / 'project'
     (project / '.godot').mkdir(parents=True)
-    (tmp_path / 'packages' / 'gec_web').mkdir(parents=True)
+    (tmp_path / 'GEC_SDK' / 'gec_web').mkdir(parents=True)
     for name in ('sdk.js', 'bridge.js', 'inputs.js', 'shell.js'):
-        (tmp_path / 'packages' / 'gec_web' / name).write_text('// synthetic client file')
+        (tmp_path / 'GEC_SDK' / 'gec_web' / name).write_text('// synthetic client file')
     monkeypatch.setattr(build, 'ROOT', tmp_path)
     monkeypatch.setattr(build, 'PROJECT', project)
     monkeypatch.setattr(build, 'TEMPLATES', project / '.godot' / 'templates')

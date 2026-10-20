@@ -361,11 +361,11 @@ def test_shell_module_and_web_companion_contract():
     assert 'gec-shell/v1' in shell and 'SHELL_CAPABILITY' in shell
     assert 'confirm_session' in shell and 'confirm_new_session' in shell
     assert 'announce_finished' in shell
-    companion = (ROOT / 'packages' / 'gec_web' / 'shell.js').read_text()
+    companion = (ROOT / 'GEC_SDK' / 'gec_web' / 'shell.js').read_text()
     for field in ('gec-input-code', 'gec-input-password', 'gec-input-short-code', 'gec-input-recovery', 'gec-input-permit'):
         assert field in companion
     assert 'ResizeObserver' in companion, 'the Web panel must reflow on resize instead of keeping stale coordinates'
-    bridge = (ROOT / 'packages' / 'gec_web' / 'bridge.js').read_text()
+    bridge = (ROOT / 'GEC_SDK' / 'gec_web' / 'bridge.js').read_text()
     assert 'mount_shell' in bridge and 'on_shell_action' in bridge
     assert 'mount_inputs' in bridge, 'the legacy fallback panel must stay available'
     packaging = (ROOT / 'tools' / 'package_build.py').read_text()
@@ -452,7 +452,7 @@ def completion_probe_package() -> bytes:
     with zipfile.ZipFile(target, 'w') as archive:
         archive.writestr('web/index.html', PROBE_PAGE)
         for name in ('sdk.js', 'bridge.js', 'inputs.js', 'shell.js'):
-            archive.writestr('web/gec/' + name, (ROOT / 'packages' / 'gec_web' / name).read_bytes())
+            archive.writestr('web/gec/' + name, (ROOT / 'GEC_SDK' / 'gec_web' / name).read_bytes())
     return target.getvalue()
 
 

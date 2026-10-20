@@ -173,7 +173,7 @@ def test_real_chrome_local_preview_finish_download_and_storage_failure(evidence_
         'preview': True,
     }
     job_path = chrome / 'job.json'
-    job_path.write_text(json.dumps({'export_dir': str(web), 'package_dir': str(ROOT / 'packages' / 'gec_web'),
+    job_path.write_text(json.dumps({'export_dir': str(web), 'package_dir': str(ROOT / 'GEC_SDK' / 'gec_web'),
                                     'evidence_dir': str(chrome), 'api_url': context['api_url'],
                                     'context': context}), encoding='utf-8')
     report = _run([str(ROOT / 'node_modules' / '.bin' / 'playwright'), 'test', SPEC, '--reporter=json'],

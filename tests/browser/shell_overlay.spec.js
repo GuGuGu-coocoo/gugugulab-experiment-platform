@@ -5,7 +5,7 @@ import http from 'node:http';
 // Load the shipped module unchanged in real Chrome. The short-lived loopback
 // server serves only this synthetic canvas document and the actual shell file;
 // it is not an admission/API/database substitute.
-const shellSource = fs.readFileSync(new URL('../../packages/gec_web/shell.js', import.meta.url), 'utf8');
+const shellSource = fs.readFileSync(new URL('../../GEC_SDK/gec_web/shell.js', import.meta.url), 'utf8');
 const specification = {
   title: 'Synthetic overlay test', status: 'Ready', mode: 'password',
   local_only: false,

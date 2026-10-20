@@ -759,7 +759,7 @@ def build_current_artifacts(build_root, runner):
     web_root = build_root / 'web'
     (web_root / 'gec').mkdir(parents=True, exist_ok=False)
     for name in ('sdk.js', 'bridge.js', 'inputs.js', 'shell.js'):
-        shutil.copy2(ROOT / 'packages' / 'gec_web' / name, web_root / 'gec' / name)
+        shutil.copy2(ROOT / 'GEC_SDK' / 'gec_web' / name, web_root / 'gec' / name)
     export = runner([godot, '--headless', '--path', str(project), '--export-release', 'Web',
                      str(web_root / 'index.html')], build_root / 'web_export.log', timeout=1800)
     if export.returncode != 0:

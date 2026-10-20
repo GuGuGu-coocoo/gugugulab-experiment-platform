@@ -18,9 +18,9 @@ def test_generic_session_queue_retry_finish_and_data_recovery(tmp_path):
     addons = project / "addons/gec"
     addons.mkdir(parents=True)
     for name in ("shell.gd", "native_backend.gd", "web_backend.gd"):
-        shutil.copy2(ROOT / "packages/gec_godot/runtime/addons/gec" / name, addons / name)
-    shutil.copy2(ROOT / "packages/gec_godot/runtime/data/experiment_data.gd", addons / "experiment_data.gd")
-    shutil.copy2(ROOT / "packages/gec_godot/session.gd", addons / "session.gd")
+        shutil.copy2(ROOT / "GEC_SDK/gec_godot/runtime/addons/gec" / name, addons / name)
+    shutil.copy2(ROOT / "GEC_SDK/gec_godot/runtime/data/experiment_data.gd", addons / "experiment_data.gd")
+    shutil.copy2(ROOT / "GEC_SDK/gec_godot/session.gd", addons / "session.gd")
     (project / "project.godot").write_text('config_version=5\n[application]\nconfig/name="Generic session harness"\n[rendering]\nrenderer/rendering_method="gl_compatibility"\n')
     result = subprocess.run(
         [godot, "--headless", "--log-file", str(tmp_path / "generic_session.log"), "--path", str(project),
@@ -38,6 +38,6 @@ def test_generic_session_queue_retry_finish_and_data_recovery(tmp_path):
 
 
 def test_session_source_has_no_experiment_binding():
-    source = (ROOT / "packages/gec_godot/session.gd").read_text()
+    source = (ROOT / "GEC_SDK/gec_godot/session.gd").read_text()
     for binding in ("Moss", "moss", "duel", "Game", "synthetic-1", "telemetry_event", "run_finished"):
         assert binding not in source

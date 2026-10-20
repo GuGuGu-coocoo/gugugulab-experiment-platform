@@ -563,7 +563,7 @@ def build_new_web(run: Run, godot: str) -> Path:
     web.mkdir()
     (web / 'gec').mkdir()
     for name in ('sdk.js', 'bridge.js', 'inputs.js', 'shell.js'):
-        shutil.copy2(ROOT / 'packages' / 'gec_web' / name, web / 'gec' / name)
+        shutil.copy2(ROOT / 'GEC_SDK' / 'gec_web' / name, web / 'gec' / name)
     result = run_process([godot, '--headless', '--path', str(PROJECT), '--export-release', 'Web', str(web / 'index.html')], timeout=300)
     run.require(result.returncode == 0 and (web / 'index.wasm').is_file(), 'the new Web build exported with the pinned Godot',
                 result.stdout[-2000:] + result.stderr[-1000:])

@@ -8,9 +8,9 @@ GEC 是接入依赖，不是实验 Runner。你的 Godot 项目负责刺激、�
 
 ## 1. 获取通用依赖
 
-GEP 服务端发行包只交付 Docker，不是 Godot 插件安装器。GEC 源码及构包工具在同一仓库。已有维护者提供的 `gec_godot_0_1_0.zip` 时直接进入下一节；包不能包含特定游戏、账号或固定研究连接。
+GEP 服务端发行包只交付 Docker，不是 Godot 插件安装器。GEC 源码在仓库的 [GEC_SDK 文件夹](../GEC_SDK/)，包含 Godot 接入代码和 Web SDK。已有维护者提供的 `gec_godot_0_1_0.zip` 时直接进入下一节；包不能包含特定游戏、账号或固定研究连接。
 
-自行生成通用包时，先从 [v0.1.0 源码](https://github.com/GuGuGu-coocoo/gugugulab-experiment-platform/tree/v0.1.0)下载并解压源代码。在开发电脑准备 Python 3.12，下载官方 [godot-sqlite v4.7 demo.zip](https://github.com/2shady4u/godot-sqlite/releases/download/v4.7/demo.zip)，保留原文件。进入源码目录运行：
+自行生成通用包时，先下载并解压[当前源码](https://github.com/GuGuGu-coocoo/gugugulab-experiment-platform/archive/refs/heads/main.zip)。在开发电脑准备 Python 3.12，下载官方 [godot-sqlite v4.7 demo.zip](https://github.com/2shady4u/godot-sqlite/releases/download/v4.7/demo.zip)，保留原文件。进入源码目录运行：
 
 ```sh
 python3 tools/build_gec_addon.py --output build/gec_download \

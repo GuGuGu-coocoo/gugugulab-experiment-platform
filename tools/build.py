@@ -51,7 +51,7 @@ def main():
         (ROOT / 'build' / platform).mkdir(parents=True, exist_ok=True)
     (ROOT / 'build/web/gec').mkdir(exist_ok=True)
     for name in ('sdk.js', 'bridge.js', 'inputs.js', 'shell.js'):
-        shutil.copy2(ROOT / 'packages/gec_web' / name, ROOT / 'build/web/gec' / name)
+        shutil.copy2(ROOT / 'GEC_SDK/gec_web' / name, ROOT / 'build/web/gec' / name)
     if 'windows' in targets:
         TARGETS['windows'][1].parent.mkdir(parents=True, exist_ok=True)
         TEMPLATES.mkdir(parents=True, exist_ok=True)

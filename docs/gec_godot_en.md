@@ -8,9 +8,9 @@ This guide targets GEC 0.1.0, protocol `gep/1` and Godot 4.7.2 standard. Web use
 
 ## 1. Get the generic dependency
 
-The GEP server release is Docker-only, not a Godot plugin installer. GEC source and its packaging tool live in the same repository. If a maintainer supplied `gec_godot_0_1_0.zip`, continue with installation. A generic package must not include a particular game, account or fixed study connection.
+The GEP server release is Docker-only, not a Godot plugin installer. The repository's [GEC_SDK folder](../GEC_SDK/) contains the Godot integration code and Web SDK. If a maintainer supplied `gec_godot_0_1_0.zip`, continue with installation. A generic package must not include a particular game, account or fixed study connection.
 
-To build it yourself, download and extract the [v0.1.0 source](https://github.com/GuGuGu-coocoo/gugugulab-experiment-platform/tree/v0.1.0). On your development computer, install Python 3.12 and download the original official [godot-sqlite v4.7 demo.zip](https://github.com/2shady4u/godot-sqlite/releases/download/v4.7/demo.zip). From the source directory:
+To build it yourself, download and extract the [current source](https://github.com/GuGuGu-coocoo/gugugulab-experiment-platform/archive/refs/heads/main.zip). On your development computer, install Python 3.12 and download the original official [godot-sqlite v4.7 demo.zip](https://github.com/2shady4u/godot-sqlite/releases/download/v4.7/demo.zip). From the source directory:
 
 ```sh
 python3 tools/build_gec_addon.py --output build/gec_download \

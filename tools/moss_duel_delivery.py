@@ -141,7 +141,7 @@ def main():
         path.write_bytes(content)
     for name in ('sdk.js', 'bridge.js', 'inputs.js', 'shell.js'):
         (kit / 'gec_web').mkdir(exist_ok=True)
-        shutil.copy2(ROOT / 'packages/gec_web' / name, kit / 'gec_web' / name)
+        shutil.copy2(ROOT / 'GEC_SDK/gec_web' / name, kit / 'gec_web' / name)
     notice = engine_notice()
     for project in (standalone, kit):
         shutil.copy2(ROOT / 'LICENSE', project / 'LICENSE')

@@ -17,7 +17,7 @@
 
 ## 2. 下载并安装通用 GEC
 
-解压单独的 `gec_godot_0_1_0.zip`，按[通用安装指南](gec_godot.md#安装到现有项目的副本)复制依赖与许可。它和这个游戏无关，也可安装到其他 Godot 项目。不要把已接入版的入口脚本提前复制过来；下面会亲手创建。
+通用 GEC 源码在 [GEC_SDK 文件夹](../GEC_SDK/)。解压单独的 `gec_godot_0_1_0.zip`，按[通用安装指南](gec_godot.md#安装到现有项目的副本)复制依赖与许可。它和这个游戏无关，也可安装到其他 Godot 项目。不要把已接入版的入口脚本提前复制过来；下面会亲手创建。
 
 完成后，项目根目录应有原来的 `project.godot`、`main.tscn`、`scripts/`、`assets/`，以及新增的 `addons/`、`gec_web/`、`package_web.gd`、`package_native.gd`。此时直接运行项目仍是原游戏，**尚未接入**。
 

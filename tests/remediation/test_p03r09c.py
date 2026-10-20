@@ -130,7 +130,7 @@ def test_real_chrome_shell(evidence_root, evidence, fault_server):
     export.mkdir()
     (export / 'gec').mkdir()
     for name in ('sdk.js', 'bridge.js', 'inputs.js', 'shell.js'):
-        shutil.copy2(ROOT / 'packages' / 'gec_web' / name, export / 'gec' / name)
+        shutil.copy2(ROOT / 'GEC_SDK' / 'gec_web' / name, export / 'gec' / name)
     built = _run([godot, '--headless', '--path', str(PROJECT), '--export-release', 'Web', str(export / 'index.html')], timeout=300)
     assert built.returncode == 0 and (export / 'index.wasm').is_file(), built.stdout[-3000:] + built.stderr[-2000:]
 
