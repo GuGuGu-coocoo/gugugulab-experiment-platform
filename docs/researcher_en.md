@@ -4,6 +4,8 @@ English · [中文](researcher.md)
 
 Start with the [deployment guide](deployment_en.md) if the server is not installed. This guide follows the current workbench. Check the target before changing accounts, rosters or deleting a study: study deletion also deletes its data.
 
+Screenshots use synthetic studies, example accounts and data on port 8084; use your own deployment address. Each guide language has matching interface screenshots. Study titles and roster IDs are not translated.
+
 ## 1. Sign in
 
 Use the admin address selected during deployment: locally `http://admin.localhost:8080/login`, or normally `https://admin.<your-domain>/login`. The participant portal is not the workbench login page.
@@ -11,6 +13,8 @@ Use the admin address selected during deployment: locally `http://admin.localhos
 A new instance asks you to choose an Owner username and password. The optional domain does not configure DNS. Other members use an invitation or temporary account supplied by an authorized administrator; change a temporary password when prompted.
 
 **My studies** lists studies you may view. Creation is available according to your permissions. The language switch changes interface labels, not study titles, roster IDs or recorded values. Themes can be light, dark or system-controlled.
+
+![My studies: visible study cards, the Create study form, and language and theme controls](images/en/01_studies.png)
 
 ## 2. Create a study
 
@@ -26,6 +30,8 @@ The maximum participation count per roster ID is 1–1000. Configure participati
 
 Keep participant names and other private information out of publicly displayed study titles.
 
+![Participation settings: ID mode with a maximum participation count per roster ID](images/en/02_participation.png)
+
 ## 3. Import a roster
 
 Download the study's XLSX template from participation and roster settings. Keep the ID column as **text**, so `001` is not converted to numeric 1. For password mode, fill the password column too; participant passwords have a different policy from researcher accounts.
@@ -36,15 +42,19 @@ Values are exact: surrounding spaces are not trimmed and must be entered by the 
 
 Review or search the roster here. Identity mapping requires permission. Store roster files privately; they may contain participation credentials.
 
+![Roster: example IDs 001, 002 and 003 retain leading zeros, with ID search and status](images/en/03_roster.png)
+
 ## 4. Upload a Web experiment
 
 Have the developer supply a standard Web ZIP using the [GEC guide](gec_godot_en.md), not an archive of the entire Godot project.
 
 In **Upload & publish experiment**, upload the ZIP and wait for validation. A successful entry displays its platform and version. Failure leaves the old release unchanged; inspect the error before retrying. The page states the current archive, expanded-size and file-count limits.
 
-Open the isolated preview and check entry, task, recorded fields and completion screen. **Preview saves locally only; it does not upload into live participation records.** Local saving is not server acknowledgement.
+Choose **Preview (no data upload)** and check entry, task, recorded fields and completion screen. **Preview saves locally only; it does not upload into live participation records.** Local saving is not server acknowledgement.
 
 Return to the workbench and choose **Publish version** when satisfied. Multiple versions can be retained. A new publication does not overwrite an old package or relabel its sessions.
+
+![Upload and publish: Web ZIP upload, preview, publication and links for the published version](images/en/04_web_publish.png)
 
 ## 5. Native experiments
 
@@ -56,15 +66,19 @@ The portal can explain native participation, but it does not expose protected pa
 
 ## 6. Choose the current version and recruit
 
-In publication and recruitment:
+In **Recruitment & portal**:
 
-1. Select an approved, available version belonging to this study as the current release and confirm.
-2. To list the study publicly, enable portal visibility, fill its public summary, duration and device requirements, then save.
-3. Choose to open new participation. Recruitment changes save immediately; wait for the saved state.
+1. Select an approved, available version belonging to this study under **Current version** and choose **Set as current version**.
+2. Enable **List on the participation portal**, fill its public summary, duration and device requirements, then choose **Save public policy**.
+3. Choose **Open new participation**. Recruitment changes save immediately; wait for the saved state.
+
+![Recruitment and portal: recruitment state, public access settings and current version are separate controls](images/en/05_recruitment.png)
 
 Share the participant portal `https://experiment.<your-domain>/`, or the stable study entry `/join/<study_id>`. Your personal website can simply link to the portal.
 
 The portal lists only explicitly public, recruiting studies with an available current release. Open recruitment alone does not make a private study public. An ended study appears without a start button only if its ended summary was enabled.
+
+![Participant portal: public study information and entry, without the workbench's full version history](images/en/06_participant_portal.png)
 
 Changing the current version affects new participation through the stable entry. Existing sessions, old links, pending uploads and exports retain their original binding.
 
@@ -82,11 +96,15 @@ Use participation records to search an ID, filter completion state and check tim
 
 When uploads fail, retain the original device, browser storage, program files and error details. Do not clear caches, switch versions or delete files to hide the failure. Recovery-code and permit controls are not exposed in 0.1.0. Retaining data does not guarantee task-state recovery.
 
+![Participation records: ID search and completion filters, with completed, in-progress and incomplete examples](images/en/07_sessions.png)
+
 ## 9. Export data
 
 In **Exports**, choose a view with or without issued participant IDs, then download the overview and event data. GEP creates a fixed snapshot and supplies a ZIP containing `participants.csv` and `events.csv`.
 
 JSONL and `metadata.json` are separate links. Metadata describes schemas, codebook and session declarations; it is not the full event dataset. Later events or study renaming do not change an old snapshot. Create a new snapshot for updated data.
+
+![Exports: data view and header language, ZIP download, and fixed-snapshot JSONL and metadata links](images/en/08_exports.png)
 
 Identified exports need both raw-data export and identity-mapping permission. Unmapped exports omit roster codes and never-participating roster entries, but are not automatically anonymous. Permission is checked again at download, including old links after revocation.
 
@@ -103,7 +121,11 @@ Create an ordinary account or issue an invitation, then follow activation and in
 - **Account management:** creating studies or creating/managing other accounts; assigned by the Owner.
 - **Study permissions:** enable visibility before selecting detailed actions. Hiding a study clears its sub-permissions; showing it again does not restore old selections.
 
+![Permission management: username search, separate username and category columns, and expandable study permissions](images/en/09_permissions.png)
+
 After editing the matrix, submit permission changes and enter **your own current password**, not the target member's password. Check the saved result. Expanding a row does not submit changes, and an error is not confirmation of a save.
+
+![Study permission details: edits remain a draft until submitted using the button below the table](images/en/10_permission_details.png)
 
 For bulk changes, download the matching account or permission template, upload it, review differences and confirm. Retain required operation and current-revision fields; do not guess them or overwrite existing accounts. Disabling an account, resetting a password or changing a role can invalidate existing sign-ins. Check deletion targets carefully.
 

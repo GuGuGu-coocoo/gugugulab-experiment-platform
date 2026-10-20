@@ -15,6 +15,17 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def copy_guide_images(output):
+    # Explicit tutorial assets only, never screenshots from local evidence.
+    for language in ('zh', 'en'):
+        target = output / 'docs' / 'images' / language
+        target.mkdir(parents=True)
+        for name in ('01_studies', '02_participation', '03_roster', '04_web_publish',
+                     '05_recruitment', '06_participant_portal', '07_sessions',
+                     '08_exports', '09_permissions', '10_permission_details'):
+            shutil.copy2(ROOT / 'docs' / 'images' / language / (name + '.png'), target / (name + '.png'))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--image', required=True)
@@ -39,6 +50,7 @@ def main():
                  'gec_godot.md', 'gec_godot_en.md', 'protocol.md', 'security.md'):
         guide = ROOT / 'docs' / name
         shutil.copy2(guide, output / 'docs' / guide.name)
+    copy_guide_images(output)
     (output / 'third_party').mkdir()
     shutil.copy2(ROOT / 'third_party' / 'godot_sqlite_license.md',
                  output / 'third_party' / 'godot_sqlite_license.md')

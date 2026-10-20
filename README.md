@@ -31,7 +31,7 @@ GEP and GEC interfaces support Chinese and English. Recovery controls are not ex
 | Reader | Start here |
 |---|---|
 | Server operator | [Server and Docker deployment](docs/deployment_en.md) |
-| Researcher | [GEP user guide](docs/researcher_en.md) |
+| Researcher | [Illustrated GEP user guide](docs/researcher_en.md) |
 | Godot developer | [GEC integration, events and packaging](docs/gec_godot_en.md) |
 
 See also the [protocol](docs/protocol.md), [security notes](docs/security.md), [engineering verification](docs/verification.md) and [Moss Duel integration example](docs/moss_duel_gec.md).

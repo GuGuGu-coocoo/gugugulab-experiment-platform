@@ -31,7 +31,7 @@ GEP 和 GEC 界面支持中文和英文。0.1.0 暂不公开恢复入口；已�
 | 使用者 | 从这里开始 |
 |---|---|
 | 服务器维护者 | [从服务器到 Docker 部署](docs/deployment.md) |
-| 研究者 | [GEP 详细使用教程](docs/researcher.md) |
+| 研究者 | [GEP 图文使用教程](docs/researcher.md) |
 | Godot 开发者 | [GEC 接入、事件记录与打包](docs/gec_godot.md) |
 
 另有[协议](docs/protocol.md)、[安全说明](docs/security.md)、[工程验证记录](docs/verification.md)和 [Moss Duel 接入示例](docs/moss_duel_gec.md)。
