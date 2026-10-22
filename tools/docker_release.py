@@ -29,6 +29,7 @@ def copy_guide_images(output):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--image', required=True)
+    parser.add_argument('--caddy-image', default='gep-caddy:2.11.7-go1.26.10')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     output = args.output.resolve()
@@ -37,6 +38,9 @@ def main():
     details = json.loads(subprocess.check_output(['docker', 'image', 'inspect', args.image], text=True))[0]
     if details['Os'] != 'linux':
         parser.error('GEP uses Linux containers, including on Windows Docker Desktop.')
+    proxy = json.loads(subprocess.check_output(['docker', 'image', 'inspect', args.caddy_image], text=True))[0]
+    if proxy['Os'] != 'linux' or proxy['Architecture'] != details['Architecture']:
+        parser.error('Build the patched Caddy image for the same Linux architecture first.')
     output.mkdir(parents=True)
     for relative in ('compose.yaml', 'compose.public.yaml', '.env.example', 'deploy/windows.ps1',
                      'deploy/start_windows.cmd', 'deploy/linux.sh', 'deploy/Caddyfile', 'LICENSE',
@@ -44,6 +48,9 @@ def main():
         target = output / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / relative, target)
+    public_compose = output / 'compose.public.yaml'
+    public_compose.write_text(public_compose.read_text(encoding='utf-8').replace(
+        '${GEP_CADDY_IMAGE:-gep-caddy:2.11.7-go1.26.10}', '${GEP_CADDY_IMAGE:-' + args.caddy_image + '}'), encoding='utf-8')
     # Only current user guides: no internal documents or local evidence.
     (output / 'docs').mkdir()
     for name in ('deployment.md', 'deployment_en.md', 'researcher.md', 'researcher_en.md',
@@ -72,9 +79,10 @@ def main():
             suffix = '#' + parsed.fragment if parsed.fragment else ''
             return f'[{label}](https://github.com/GuGuGu-coocoo/gugugulab-experiment-platform/{kind}/main/{quote(relative)}{suffix})'
         guide.write_text(re.sub(r'\[([^\]]+)\]\(([^)]+)\)', link, guide.read_text(encoding='utf-8')), encoding='utf-8')
-    subprocess.run(['docker', 'image', 'save', '--output', str(output / 'gep-image.tar'), args.image], check=True)
+    subprocess.run(['docker', 'image', 'save', '--output', str(output / 'gep-image.tar'), args.image, args.caddy_image], check=True)
     (output / 'docker-release.json').write_text(json.dumps({
         'image': args.image, 'image_id': details['Id'], 'os': details['Os'], 'architecture': details['Architecture'],
+        'caddy_image': args.caddy_image, 'caddy_image_id': proxy['Id'],
         'version': '0.1.0', 'delivery': 'docker-only',
     }, indent=2) + '\n')
     archive = output.parent / (output.name + '.zip')

@@ -8,6 +8,7 @@
 !GEC_SDK/gec_web/sdk.js
 !deploy/
 !deploy/Dockerfile
+!deploy/Caddy.Dockerfile
 !LICENSE
 !third_party/
 !third_party/godot_sqlite_license.md

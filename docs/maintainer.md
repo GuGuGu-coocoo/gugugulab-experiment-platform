@@ -70,7 +70,17 @@ R11W 的正式 Windows 工程验证使用 `.venv/bin/python tools/remediation_wi
 旧包 403 暂停来源与冻结包哈希位置（R11 客户端验证依据，本轮不冒充已跑新旧实机）：旧 Web 壳在 `GEC_SDK/gec_web/sdk.js` 对 401/403/409/422 置 `paused`（并受 32 次上限），旧原生后端在 `tests/fixtures/synthetic_experiment/addons/gec/native_backend.gd` 对 `http_401`/`http_403`/`http_409`/`http_422` 或 32 次上限置 `s.paused`，因此新的 `study_deleted` 403 会让旧包停止自动重试（旧包可能只显示通用错误，但绝不会当作成功）；服务器不重写冻结旧包。旧独立验收冻结包的哈希清单在 `build/independent_acceptance_20260912/sha256.json`（`native_program.zip`、`web_experiment.zip` 等），后续设计者 kit 冻结清单在 `build/phase03_20260920/<stamp>/manifest.json` 的 `packages` 段；这些字节保持原样，R11 才负责旧/新客户端与三平台实机联测。
 # 容器维护（2026-10-23）
 
-运行镜像安装锁定依赖后移除 pip；不要进入正在运行的容器安装软件或修改依赖，更新通过新镜像完成。`compose.public.yaml` 固定 Caddy 镜像摘要；后续升级需核对版本／公告、重新验证并更新摘要，不因版本标签相同就沿用旧结论。安全分支的 Docker、合成整卷恢复和隔离 HTTPS 记录见 [安全审计](SECURITY_AUDIT.md)，不代表现有部署或真实数据已经接受检查。
+运行镜像安装锁定依赖后移除 pip；不要进入正在运行的容器安装软件或修改依赖，更新通过新镜像完成。公开 Compose 使用 `gep-caddy:2.11.7-go1.26.10`，不回退到未重建的官方旧二进制；构建基础镜像固定摘要，Caddy 功能版本不变，修补 Go 和 x/net。后续升级需重新核对公告／实际二进制／依赖，不因版本标签相同就沿用旧结论。安全分支的 Docker、合成整卷恢复和隔离 HTTPS 记录见 [安全审计](SECURITY_AUDIT.md)，不代表现有部署或真实数据已经接受检查。
+
+在只含公开代码的构建目录准备两份同平台镜像，再构包（不会上传注册表或创建 Release）：
+
+```sh
+docker build -f deploy/Dockerfile -t gep:security-candidate .
+docker build -f deploy/Caddy.Dockerfile -t gep-caddy:2.11.7-go1.26.10 .
+python tools/docker_release.py --image gep:security-candidate --output build/security_candidate
+```
+
+`gep-image.tar` 同时保存应用与修补代理，`docker-release.json` 记录两个实际镜像 ID。旧发行附件不变；加载新包后再切换公开 Compose，不仅更换 Caddyfile。不会自动迁移已有数据库，仍按版本说明显式执行迁移和核对。
 
 # 当前界面迭代（2026-10-20）
 

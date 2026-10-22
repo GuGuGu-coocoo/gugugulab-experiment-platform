@@ -6,7 +6,7 @@ This guide uses the GEP 0.1.0 Docker release. Start locally, or use a VPS or you
 
 Read the [security audit and open findings (Chinese)](SECURITY_AUDIT.md) before deployment. Audit-branch fixes have not replaced the 0.1.0 attachment. The actual image, host PHP components, certificates, logs and backups still need environment-specific verification.
 
-The security-branch runtime image does not retain pip: rebuild the image to update dependencies rather than installing software inside a running container. Public Compose pins the Caddy image digest; review and update that digest when upgrading.
+The security-branch runtime image does not retain pip: rebuild the image to update dependencies rather than installing software inside a running container. New deployment bundles include both GEP and a rebuilt Caddy image. Public Compose uses `gep-caddy:2.11.7-go1.26.10`; do not substitute the unpatched upstream binary with the same Caddy feature version.
 
 ## 1. Prepare the server
 
