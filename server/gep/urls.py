@@ -1,6 +1,10 @@
 from django.urls import path
 from core import views
+from core import origins, legacy_queue
 urlpatterns = [
+    path('_internal/tls-allow',origins.tls_allow),
+    path('local-data',legacy_queue.local_data),
+    path('legacy-data/sdk.js',legacy_queue.sdk),
     path('v1/participant/sessions',views.participant),
     path('v1/participant/sessions/<uuid:session_id>/<str:action>',views.participant),
     path('v1/participant/recovery',views.recovery),

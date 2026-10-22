@@ -3,6 +3,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir --require-hashes -r requirements.txt
 COPY server server
+COPY GEC_SDK/gec_web/sdk.js GEC_SDK/gec_web/sdk.js
 COPY LICENSE LICENSE
 COPY third_party/godot_sqlite_license.md third_party/godot_sqlite_license.md
 RUN useradd --uid 10001 --create-home gep \

@@ -121,6 +121,8 @@ func _on_gec_failed(result: Dictionary) -> void:
 
 descriptor 描述程序，不是连接配置。不要写 Owner 密码、名单密码或参与 token。Web 配置由 GEP 注入；原生完整发行的公开 `connection.json` 随包冻结。协议中的 `purpose: synthetic` 是现有兼容字段，保留原值，不因界面去掉“测试”字样而手工改它或替换旧队列配置。
 
+审计分支将每个 Web 发行和预览放在独立来源；不要把当前页面域名当成 API 地址。GEC 已按注入配置的 `api_url` 请求中央 API，程序／SDK 字节无需为此重打包，跨来源权限由服务端按发行核对。旧来源的队列由平台可信页补传，不会自动搬到新来源或自动续试；详见[安全边界](security.md)。
+
 安全审计分支暂不接受 Schema 的 `pattern`／`patternProperties` 正则规则（含嵌套定义）；可用类型、枚举、长度和数值范围表达适用约束。旧发行若含这些规则，也会拒绝新参与及相关事件，返回 `schema_regex_unsupported`，而不是静默跳过校验。不要删掉待传数据或将它重标为新版；普通字段名 `pattern` 不受此限制。详见[协议兼容边界](protocol.md)。
 
 ## 5. 导出和包装

@@ -78,11 +78,12 @@ def test_only_web_builds_offer_preview_and_native_posts_do_not_sign(world):
 
 
 def test_web_preview_still_serves_local_context_and_requires_current_authority(world):
+    from core.origins import isolated_host
     client, study = world['client'], world['study']
     response = client.post(f'/studies/{study.id}/builds',
                            {'op': 'preview', 'build_id': str(world['web'].id)})
     assert response.status_code == 302
-    preview = client.get(response['Location'], HTTP_HOST='experiment.localhost')
+    preview = client.get(response['Location'], HTTP_HOST=isolated_host('p',world['web'].id))
     assert preview.status_code == 200
     assert b'Web only' in preview.content and b'"preview": true' in preview.content
     assert b'"mode": "id"' in preview.content

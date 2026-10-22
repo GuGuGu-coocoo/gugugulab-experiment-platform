@@ -10,7 +10,7 @@
 {% if not release.approved %} · <span class="badge">{{ui.builds_release_unapproved}}</span>{% elif release.platform in native_platforms %}{% if release.artifact_ready %} · <span class="badge ok">{{ui.builds_release_native_complete}}</span>{% else %} · <span class="badge">{{ui.builds_release_native_missing}}</span>{% endif %}{% elif not release.build.package_path %} · <span class="badge">{{ui.builds_release_no_web}}</span>{% else %} · <span class="badge">{{ui.builds_release_web}}</span>{% endif %}
 {% if release.artifact_ready and can_upload %} · <a href="/releases/{{release.id}}/artifact" data-artifact="{{release.id}}">{{ui.builds_download_artifact}}</a> · <a href="/releases/{{release.id}}/artifact/artifact_manifest.json">{{ui.builds_manifest}}</a> · <a href="/releases/{{release.id}}/artifact/{{release.artifact_config_member}}">connection.json</a>{% endif %}
 {% if can_configure %} · <a href="/releases/{{release.id}}/config">{{ui.builds_config_link}}</a>{% endif %}
-{% if release.approved and release.platform == "godot_web" and release.build.package_path %} · <a href="{{public_api_url}}/run/{{release.id}}/web/index.html" target="_blank" rel="noopener noreferrer">{{ui.builds_open_entry}}</a>{% endif %}
+{% if release.approved and release.platform == "godot_web" and release.build.package_path %} · <a href="{{release.web_url}}" target="_blank" rel="noopener noreferrer">{{ui.builds_open_entry}}</a>{% endif %}
 </p>{% empty %}<p data-releases-empty="1">{{ui.builds_releases_empty}}</p>{% endfor %}</section>
 <script nonce="{{request.csp_nonce}}">
 document.querySelectorAll('form[data-package-upload]').forEach(form=>{

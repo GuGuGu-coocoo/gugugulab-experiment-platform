@@ -10,6 +10,7 @@ from .services import (admit_request, context, receive, finish, authorize_sessio
 from .access import guard
 from . import exports as export_core
 from . import deletion
+from .origins import require_body_scope, require_session_scope
 
 
 def endpoint(fn):
@@ -51,9 +52,11 @@ def participant(request, session_id=None, action=None):
         check('admit-global',limit=600)
         check('admit-client:'+request.META.get('REMOTE_ADDR',''),limit=120)
         data=parse_object(request.body)
+        require_body_scope(request,data)
         check('admit:'+str(data.get('study_id'))+':'+str(data.get('participant_code',data.get('operation_id'))))
         session,token=admit_request(data)
         return JsonResponse(dict(context(session), token=token))
+    require_session_scope(request,session_id)
     if action=='recover':
         data=parse_object(request.body)
         return JsonResponse(recover(session_id,data['proof'],data['permit']))
@@ -82,6 +85,7 @@ def recovery(request):
     require(request.get_host().split(':')[0] in (settings.EXPERIMENT_HOST,'127.0.0.1','testserver'), 'wrong_host',403)
     require(request.method=='POST','method',405)
     data=parse_object(request.body)
+    require_body_scope(request,data)
     client=request.META.get('REMOTE_ADDR','')
     capability=data.get('capability')
     if capability==RECOVERY_CODE_CAPABILITY:

@@ -86,7 +86,7 @@ Critical：本次无已验证项；High、Medium、Low 如下。严重性结合�
 |---|---|---|---|---|
 | SA-01 | **High／基线已验证；旧环境残余未确认** | 原 `server/core/hosting.py` 与 `GEC_SDK/gec_web/sdk.js` 共享来源；修复在 `server/core/origins.py`、`hosting.py`、`legacy_queue.py`、`views.py` 与代理模板 | 已改逐发行／预览来源、主机与程序绑定、精确 CORS＋发行/session 授权；门户不再执行上传代码。旧数据留原库，仅可信页按原 ACK 补传。真实 Chrome 的跨研究读取和已知他人 token 路径均拒绝 | **新入口分支已封堵；旧缓存／已泄露凭据／实际部署未验证，不能整体关闭 High** |
 | SA-02 | **High／已验证验证器阻塞** | `server/core/packages.py:71`、`server/core/services.py:159,295`、新增 `server/core/schema_policy.py:15` | 小 Schema 与 33 字符合成值使子进程到 2 秒截止仍未完成；未攻击服务。经用户明确同意，注册／旧发行新准入／相关事件都先拒绝 `pattern`／`patternProperties`；普通字段名不误拦、混合批次原子拒绝，已有数据不改写。一般 Schema 复杂度仍无独立执行预算 | **分支已封堵，未部署；兼容性变化已确认** |
-| SA-03 | **Medium／已验证限速绕过** | `server/core/views.py:43`、`server/core/throttle.py:7`：原计数键含请求自选 operation／ID | 原先更换 operation 后 121 个微小无效请求均无来源门槛；现在解析前固定全局 600/min、直接来源 120/min，再做原细分限速。第 121 个来源请求返回 429／Retry-After；不信任 X-Forwarded-For，不限事件上传 | **分支已修复，未部署；代理共享预算和计数保留仍需配置** |
+| SA-03 | **Medium／已验证限速绕过** | `server/core/views.py:44`、`server/core/throttle.py:7`：原计数键含请求自选 operation／ID | 原先更换 operation 后 121 个微小无效请求均无来源门槛；现在解析前固定全局 600/min、直接来源 120/min，再做原细分限速。第 121 个来源请求返回 429／Retry-After；不信任 X-Forwarded-For，不限事件上传 | **分支已修复，未部署；代理共享预算和计数保留仍需配置** |
 | SA-04 | **Medium／已验证检查顺序；CVE 组件条件静态匹配** | `server/core/excel.py:79`、`server/core/packages.py:481,517`、新增 `server/core/archives.py`、`deploy/Dockerfile:1` | 原 XLSX 在总预算前读关系文件，原生包先读载荷；微小归档与调用探针复现，无压缩炸弹。现完整目录预算先行，只允许 Stored／Deflate，XLSX 新增 256 成员上限，并更新 Python 3.12.15 固定摘要，避免进入 CVE-2026-15310 所涉 BZIP2／LZMA 读取器 | **应用入口已封堵；新镜像未构建，旧镜像未替换** |
 | SA-05 | **Low／已验证** | `server/core/protocol.py:34,86`；`server/core/views.py` 的 API 解析点 | 原大整数转换浮点或非对象 JSON 可触发通用 500；未证实堆栈泄漏。现先查数值范围并强制 API 根对象，返回受控 4xx，不回显输入，不限制合法事件 payload 的 JSON 类型 | **分支已修复，未部署** |
 | SA-06 | **Medium／静态策略差距** | `server/core/researcher_passwords.py`、首次设置／改密：最低 6 位、强制字符类别，无已泄漏密码表／MFA／通行密钥 | 不满足 ASVS 5.0 的最低密码长度要求，单因子账号对被盗／弱口令防护有限。应由使用者确认更强新密码策略及渐进改密／MFA；不擅自改旧密码、锁定账户或重置用户 Owner | **开放；策略待决定** |
@@ -94,7 +94,7 @@ Critical：本次无已验证项；High、Medium、Low 如下。严重性结合�
 | SA-08 | **Medium／已知开发依赖 CVE，未在本机利用** | `pyproject.toml`／`uv.lock`：原 pytest 8.4.2，CVE-2025-71176（Unix 可预测临时目录） | 升级至官方修复的 9.0.3，18 个当前平台开发包重扫零命中；Windows 条件包另扫。生产 requirements 不含 pytest；原 `.venv` 和证据保留，新隔离环境完成回归 | **开发锁定已修复；原开发环境未自动替换** |
 | SA-09 | **未裁定／静态组件匹配** | 公开 0.1.0 镜像的 OS／安装工具组件，见 §2 | 139 个公告 ID 的发行商回补／调用前提未全部裁定；不能当作 139 个已验证漏洞，也不能统一降为 Low／Medium。**潜在 High／Critical 未排除**；需要在隔离环境构建目标镜像并逐项裁定，Caddy／Go 也另扫 | **部署阻断项，未完成** |
 | SA-10 | **Medium／已验证匿名解析先于鉴权** | `server/gep/settings.py` 中间件；新增 `server/core/limits.py:54` | 有公开 CSRF Cookie 的匿名 POST 原可先触发 multipart 解析；两个上传路由微小探针修复前失败。现在 CSRF 视图解析前拒绝匿名上传，不读取正文；已登录请求仍保留 CSRF、当前对象／操作鉴权 | **分支已修复，未部署；不代替实际资源配额** |
-| SA-11 | **Medium／已验证 Cookie 账户替换** | `server/gep/settings.py`：HTTPS 仍用无主机约束前缀的 `gep_admin`／默认 CSRF Cookie；host-only 不阻止同站子域注入父域同名 Cookie | 新 Chrome 中，子域脚本注入攻击者自己的有效合成 Session Cookie，浏览器实际请求头交给真实 Django 后，身份从合成受害者变成攻击者；不是盗取受害者 Cookie 或提升为 Owner。拟在 HTTPS 使用 `__Host-` 前缀＋Secure／Path=/／无 Domain，HTTP 本地模式兼容；升级需重新登录，不改数据库账号 | **已提交补充发现，修复待实施** |
+| SA-11 | **Medium／已验证 Cookie 账户替换** | `server/gep/settings.py`：原 HTTPS Cookie 无主机约束前缀，host-only 不阻止同站子域注入父域同名 Cookie | 子域脚本注入攻击者自己的有效合成 Session Cookie，浏览器实际请求头交给真实 Django 后身份变为攻击者；不是盗取受害者 Cookie 或提升为 Owner。补充报告先提交 `dc5e17f`；现 HTTPS 使用 `__Host-` 前缀＋Secure／Path=/／无 Domain，HTTP loopback 名称兼容。升级需重新登录，不改数据库账号 | **分支已修复；真实 Chrome 同值覆盖被拒绝，未部署** |
 
 SA-01 的 Chrome 证据：同一全新浏览器上下文先在研究 A 用真实 GEC 开始并本地提交记录，关闭客户端连接，再打开仅有研究 B 权限用户签发的 B 预览。结果 `crossStudyRead=true, proofExposed=true, tokenAccepted=true, preview=true`。没有真实被试数据或跨设备攻击；这不是“不用 token 就能读服务器数据”，而是同源脚本能盗取本地 token。
 
@@ -108,7 +108,7 @@ SA-01 修复后沿用同一 GEC 维护源、实际准入和 IndexedDB 记录，�
 
 上游 Python 修复依据：[Python 3.12.15](https://www.python.org/downloads/release/python-31215/)。Caddy 的 [CVE-2026-55458](https://github.com/caddyserver/caddy/security/advisories/GHSA-8qx7-j2v2-x6q5) 涉及 101／WebSocket 升级响应；当前 GEP 无 WebSocket／101 或 FastCGI 路由，未建立适用攻击路径，不把它列成已验证 GEP 漏洞。实际 Caddy 二进制／Go 依赖尚未扫描。
 
-SA-11 的 HTTPS 页面由 Playwright 在新上下文中本地 fulfill，未接触 DNS／证书／外部站点；浏览器实际 Cookie 优先级和真实 Django 合成账户身份均参与，不是手工伪造最终 Cookie 头。修复前 `victim_active=false, attacker_active=true`（`before_cookie_prefix_run03.xml`）；首次探针误读默认 Cookie 配置的失败也保留。此证据不证明部署 TLS 已验证，也不声称原账号凭据已泄漏。[浏览器 Cookie 前缀要求](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Set-Cookie#cookie_prefixes)。
+SA-11 的 HTTPS 页面由 Playwright 在新上下文中本地 fulfill，未接触 DNS／证书／外部站点；浏览器实际 Cookie 优先级和真实 Django 合成账户身份均参与，不是手工伪造最终 Cookie 头。修复前 `victim_active=false, attacker_active=true`（`before_cookie_prefix_run03.xml`），修复后同一覆盖动作被拒绝，Django 保持原受害者账户；HTTPS Cookie／登录／CSRF／代理及隔离相关 43 项通过。首次探针误读默认 Cookie 配置的失败也保留。此证据不证明部署 TLS 已验证，也不声称原账号 Cookie 被读取；已泄漏会话不会因改名自动撤销。[浏览器 Cookie 前缀要求](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Set-Cookie#cookie_prefixes)。
 
 ## 5. 标识符、权限与重点审查矩阵
 
@@ -156,6 +156,7 @@ SA-11 的 HTTPS 页面由 Playwright 在新上下文中本地 fulfill，未接�
 | 正则同值前后探针 | 基线超时并终止；补丁两处拒绝 | `regex_before_after.json`；无网络／数据库，没有无界攻击运行 |
 | 第一批补丁回归 | **303 passed／1 failed／0 skipped**，54.17 秒 | `final_security_and_contracts.xml`；当时包括成功重现尚未修复的同源风险，不冒充来源隔离通过 |
 | 来源隔离、路由迁移、删除／权限／恢复／导出最终定向 | **350 passed／1 failed／0 skipped**，84.21 秒 | `final_isolation_with_deletion.xml`，Python 3.12.15／pytest 9.0.3，351 项；含 40 个初批安全用例及来源隔离增量。唯一失败仍是基线同样失败的隐藏恢复码按钮断言 |
+| 最后的 HTTPS Cookie 补丁及受影响认证／隔离回归 | **43 passed／0 failed／0 skipped**，14.79 秒 | `final_cookie_auth_contracts.xml`；包含真实 Chrome Cookie 优先级＋真实 Django 身份、HTTPS 配置、CSRF／代理、首次设置和来源隔离。上行广泛回归在这项 Cookie 名称变化前运行；不把分开运行相加成一次“全套通过” |
 | 该组真实 Chrome | 6 passed | 预览／另一个发行的跨来源拒绝、旧库关闭重开→补传→ACK 后清理、CSP、两项 ZIP 导出／错误反馈、删除流程；这轮来源隔离通过不覆盖旧缓存或原版部署 |
 | 原有完整默认测试（中间补丁状态） | **838 passed／30 failed／30 skipped**，约 18 分 55 秒 | `full_suite.xml`；在后加的匿名门槛／正则补丁前运行，不冒充最终快照全量通过。最终相关契约另按上行重测 |
 | 最终来源隔离的其余完整集合 | **877 passed／22 failed／31 skipped，另 8 deselected**，330.23 秒 | `final_suite_scoped_run02.xml`；明确不重跑上行已留存的 8 个真实 SDK 失败／超时项。22 fail 全为已对照的 12 个旧 UI 断言＋10 项缺历史包，不当作全绿 |
@@ -171,7 +172,8 @@ SA-11 的 HTTPS 页面由 Playwright 在新上下文中本地 fulfill，未接�
 ```sh
 # 使用同步了本分支 dev 锁定依赖的 Python 3.12 环境。
 GEP_T17_BROWSER=1 python -m pytest -q \
-  tests/test_source_isolation.py tests/test_security_audit.py tests/test_security.py tests/test_protocol.py \
+  tests/test_cookie_boundary.py tests/test_source_isolation.py tests/test_security_audit.py \
+  tests/test_security.py tests/test_protocol.py \
   tests/test_transactions.py tests/test_deploy_proxy.py tests/test_first_run.py \
   tests/test_runtime.py tests/test_gec_addon.py tests/test_gui_packages.py \
   tests/test_phase03_packages.py tests/test_phase03_windows_packages.py \

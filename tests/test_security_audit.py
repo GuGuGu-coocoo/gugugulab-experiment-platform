@@ -1,7 +1,7 @@
 """2026-10-22 defensive audit: synthetic databases and temporary archives only.
 
-The opt-in shared-origin test documents an OPEN finding; its passing result is
-evidence of the risk, not a claim that the browser isolation has been fixed.
+The baseline shared-origin proof is preserved in commit 4603cdf. The opt-in
+browser regression now verifies the isolated release/preview replacement.
 """
 import copy
 import hashlib
@@ -298,9 +298,10 @@ def _web_package(schemas):
     return raw, descriptor, sha
 
 
-@pytest.mark.skipif(os.environ.get('GEP_T17_BROWSER') != '1', reason='Opt-in isolated real Chrome boundary demonstration')
-def test_open_finding_preview_can_read_another_study_local_queue(live_server, setup, settings, tmp_path, monkeypatch):
-    """OPEN HIGH: proves shared-origin access; no genuine participant data."""
+@pytest.mark.skipif(os.environ.get('GEP_T17_BROWSER') != '1', reason='Opt-in isolated real Chrome boundary check')
+def test_preview_cannot_read_another_study_local_queue(live_server, setup, settings, tmp_path, monkeypatch):
+    """Real GEC, CORS and IndexedDB: unrelated origins cannot read the queue."""
+    from core.origins import isolated_origin
     settings.DATA_DIR = tmp_path
     (tmp_path / 'packages').mkdir()
     port = live_server.url.rsplit(':', 1)[1]
@@ -317,6 +318,8 @@ def test_open_finding_preview_can_read_another_study_local_queue(live_server, se
         Grant.objects.create(user=attacker, study=other_study, action=action)
     other_build = Build.objects.create(study=other_study, descriptor=descriptor, digest=sha, package_path=sha + '.zip')
     preview_token = signing.dumps({'build': str(other_build.id), 'user': attacker.pk}, salt='preview')
+    other_release = Release.objects.create(study=other_study, build=other_build, approved=True,
+                                            config={'purpose':'synthetic'})
     assert not Grant.objects.filter(user=attacker, study=setup['study']).exists()
     script = r'''
 import {chromium, expect} from '@playwright/test';
@@ -335,21 +338,34 @@ try {
  await page.goto(process.env.GEP_AUDIT_PREVIEW);
  const evidence = await page.evaluate(async () => {
    const db = await new Promise((resolve,reject) => {const r=indexedDB.open('gec-1',1); r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
-   const rows = await new Promise((resolve,reject) => {const r=db.transaction('sessions').objectStore('sessions').getAll();r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
+   const rows = db.objectStoreNames.contains('sessions') ? await new Promise((resolve,reject) => {const r=db.transaction('sessions').objectStore('sessions').getAll();r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);}) : [];
    db.close();
    const victim = rows.find(s=>s.kind==='session' && s.config.study_id!==globalThis.GEP_CONTEXT.study_id);
-   const response = await fetch('/v1/participant/sessions/'+victim.id+'/context',{headers:{Authorization:'Bearer '+victim.context.token},credentials:'omit'});
-   return {crossStudyRead:victim.records[0].payload.rt_ms===321.5,
-           proofExposed:typeof victim.proof==='string',tokenAccepted:response.status===200,
-           preview:globalThis.GEP_CONTEXT.preview===true};
+   let blocked = false;
+   try { await fetch(globalThis.GEP_CONTEXT.api_url+'/v1/participant/sessions',{
+     method:'POST',headers:{'Content-Type':'application/json'},body:'{}',credentials:'omit'}); }
+   catch { blocked = true; }
+   return {crossStudyRead:!!victim, proofExposed:!!victim?.proof,
+           apiBlocked:blocked, preview:globalThis.GEP_CONTEXT.preview===true};
  });
- expect(evidence).toEqual({crossStudyRead:true,proofExposed:true,tokenAccepted:true,preview:true});
+ expect(evidence).toEqual({crossStudyRead:false,proofExposed:false,apiBlocked:true,preview:true});
+ await page.goto(process.env.GEP_AUDIT_OTHER);
+ const independent = await page.evaluate(async ({victimId,token}) => {
+   const {GEC}=await import('./gec/sdk.js');const client=new GEC(globalThis.GEP_CONTEXT);
+   await client.prepare(); const rows=await client.all();
+   const response=await fetch(globalThis.GEP_CONTEXT.api_url+'/v1/participant/sessions/'+victimId+'/context',{
+     headers:{Authorization:'Bearer '+token},credentials:'omit'});
+   client.close();return {rows:rows.length,status:response.status,code:(await response.json()).code};
+ },{victimId:process.env.GEP_AUDIT_SESSION,token:process.env.GEP_AUDIT_TOKEN});
+ expect(independent).toEqual({rows:0,status:403,code:'origin_binding'});
  console.log(JSON.stringify(evidence));
 } finally {await browser.close();}
 '''
     result = subprocess.run(['node', '--input-type=module', '-e', script], cwd=ROOT,
-                            env={**os.environ, 'GEP_AUDIT_VICTIM': f'{base}/run/{setup["release"].id}/web/index.html',
-                                 'GEP_AUDIT_PREVIEW': f'{base}/preview/{preview_token}/web/index.html'},
+                            env={**os.environ, 'GEP_AUDIT_VICTIM': f'{isolated_origin("r",setup["release"].id)}/run/{setup["release"].id}/web/index.html',
+                                 'GEP_AUDIT_PREVIEW': f'{isolated_origin("p",other_build.id)}/preview/{preview_token}/web/index.html',
+                                 'GEP_AUDIT_OTHER': f'{isolated_origin("r",other_release.id)}/run/{other_release.id}/web/index.html',
+                                 'GEP_AUDIT_SESSION': str(setup['session'].id),'GEP_AUDIT_TOKEN': setup['token']},
                             capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr
-    print('OPEN FINDING, NOT A FIX: ' + result.stdout.strip())
+    print('ISOLATED BROWSER BOUNDARY: ' + result.stdout.strip())

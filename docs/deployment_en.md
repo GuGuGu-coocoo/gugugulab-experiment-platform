@@ -97,7 +97,9 @@ For local use, you can skip this section. Entering a domain in the wizard saves 
 
 For `example.com`, create DNS records for `admin.example.com` and `experiment.example.com`, both pointing to the server's public address. Add AAAA only if IPv6 is actually configured. Leave the personal website's root/www records alone. Ordinary DNS records are sufficient; GEP does not need your DNS-provider credentials.
 
-Ensure public TCP ports 80 and 443 can reach the server; retain your own SSH access restrictions. Do not expose 8000 or 8080. Docker-published ports may bypass ordinary ufw rules, so check cloud security groups and Docker network rules as well; see [Docker's firewall notes](https://docs.docker.com/engine/network/packet-filtering-firewalls/). Do not replace existing firewall rules for this guide. If a reverse proxy already owns 80/443, route the two hostnames through that proxy instead of stopping an existing website.
+The security-audit branch also needs `*.experiment.example.com` pointing to that server for isolated release and preview hosts. The original 0.1.0 attachment does not include this patch.
+
+Ensure public TCP ports 80 and 443 can reach the server; retain your own SSH access restrictions. Do not expose 8000 or 8080. Docker-published ports may bypass ordinary ufw rules, so check cloud security groups and Docker network rules as well; see [Docker's firewall notes](https://docs.docker.com/engine/network/packet-filtering-firewalls/). Do not replace existing firewall rules for this guide. If a reverse proxy already owns 80/443, route the workbench, portal and audit branch's isolated hosts through it instead of stopping an existing website.
 
 In the deployment directory, run `sudoedit .env` and change the existing empty setting. The file is root-owned after an initial sudo launch:
 
@@ -115,9 +117,15 @@ sudo docker compose --env-file .env -f compose.public.yaml logs --tail 60 caddy
 
 Do not stack the two Compose files. The public configuration exposes only Caddy on 80/443, not the application port. When DNS and network access are ready, Caddy obtains and renews certificates; see [Automatic HTTPS](https://caddyserver.com/docs/automatic-https). Retain its certificate volume too.
 
+For `r-<release UUID hex>.experiment.example.com` and `p-<build UUID hex>.experiment.example.com`, the audit template uses per-name certificates and a private allowlist hook; public requests to `/_internal/*` are blocked. No DNS-provider credentials or wildcard certificate are required. DNS remains the deployer's responsibility; first connections can wait for issuance and CA quotas still apply. Do not bypass certificate errors or fall back to a shared origin. See [On-Demand TLS](https://caddyserver.com/docs/caddyfile/options#on-demand-tls). Updating the proxy alone does not update the old application image.
+
 Check `https://admin.example.com/login` and `https://experiment.example.com/`. The browser should accept the certificate, and workbench login should succeed. Investigate certificate warnings instead of bypassing them. Log in again on the new domain: local/HTTP session cookies are not transferred.
 
 Before opening participation, run a synthetic study through upload, participation, completion and export. These instructions do not claim that your server or public network has already been verified.
+
+Before adopting this branch, keep the original volume/API address and a complete backup, and rehearse migration `0016_browser_origin` on a new synthetic volume. Old browser queues remain on their original origin with a trusted upload page; tasks are not automatically resumed or relabelled. Old caches and Service Workers require separate checks: do not clear storage to force an upgrade. This audit has not changed your DNS, certificates, Windows or VPS deployment.
+
+The HTTPS patch also enables browser-enforced host-bound cookie names. Sign in again and refresh old forms; accounts, passwords and participant credentials are unchanged. The name change does not revoke a previously stolen session.
 
 ## 6. Start using GEP
 

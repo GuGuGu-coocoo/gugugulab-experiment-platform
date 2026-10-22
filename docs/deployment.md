@@ -105,10 +105,11 @@ ssh -N -L localhost:8080:127.0.0.1:8080 your_user@your_server_ip
 |---|---|
 | `admin.example.com` | GEP 服务器的公网地址 |
 | `experiment.example.com` | 同一服务器的公网地址 |
+| `*.experiment.example.com`（安全审计分支） | 同一服务器的公网地址，供独立实验／预览来源使用 |
 
 只有实际配置了 IPv6 才添加 AAAA；错误的 AAAA 会影响连接和证书验证。保留原个人网站的根域名／www 记录。普通 DNS 模式就够了，不需要给 GEP 提供 DNS 服务商密钥。
 
-确认服务器的公网入口允许 TCP 80 和 443，SSH 仍仅按自己的管理安排开放。不要开放 8000 或 8080。Docker 发布的端口可能绕过 ufw 的常规规则，应同时核对云安全组和 Docker 网络规则，见 [Docker 防火墙说明](https://docs.docker.com/engine/network/packet-filtering-firewalls/)。不要为本教程覆盖已有防火墙。如果 80／443 已由自己的代理占用，让原代理转发两个域名；不要直接停掉已有网站来腾端口。
+确认服务器的公网入口允许 TCP 80 和 443，SSH 仍仅按自己的管理安排开放。不要开放 8000 或 8080。Docker 发布的端口可能绕过 ufw 的常规规则，应同时核对云安全组和 Docker 网络规则，见 [Docker 防火墙说明](https://docs.docker.com/engine/network/packet-filtering-firewalls/)。不要为本教程覆盖已有防火墙。如果 80／443 已由自己的代理占用，让原代理转发后台、门户及审计分支的独立来源；不要直接停掉已有网站来腾端口。
 
 回到部署目录，用 `sudoedit .env` 编辑配置（首次通过 sudo 启动后，该文件由 root 持有），将现有空行改为：
 
@@ -126,9 +127,15 @@ sudo docker compose --env-file .env -f compose.public.yaml logs --tail 60 caddy
 
 不要把两个 Compose 文件用 `-f` 叠加。公网配置不映射 GEP 应用端口，只有 Caddy 对外提供 80／443。Caddy 在 DNS 和网络条件具备后自动申请、续期证书；详见 [Caddy 自动 HTTPS](https://caddyserver.com/docs/automatic-https)。它的证书卷也要保留。
 
+审计分支还使用 `r-<发行 UUID hex>.experiment.example.com` 与 `p-<构建 UUID hex>.experiment.example.com`。Caddy 按实际名称申请证书，内部许可接口只接受已登记／合法构建发行的名称，公网禁止访问 `/_internal/*`；不需要 DNS 服务商密钥或通配证书。DNS 条件仍要由部署者完成，首次连接可能等待证书签发，也受 CA 配额约束；没有解析或证书时停止诊断，不回退到共享来源、不忽略证书错误。[Caddy On-Demand TLS](https://caddyserver.com/docs/caddyfile/options#on-demand-tls)。原版附件不包含该补丁，不能只换代理模板就算升级完成。
+
 现在检查 `https://admin.example.com/login` 和 `https://experiment.example.com/`。浏览器应认可证书，后台应可登录。看到证书警告时停止检查并诊断，不点击忽略。原 HTTP／localhost 登录 Cookie 不迁移到新域名，重新登录即可。
 
 首次上线先用合成研究核对一次上传、实际参与、完成状态和导出。这里提供部署步骤，不把未在你服务器上运行过的步骤写成已验收。
+
+升级到隔离分支前保留原卷、API 地址和完整备份，先在新合成卷演练 `0016_browser_origin` 迁移。旧本机记录保留原来源，门户提供可信补传页，不自动续接旧任务或把数据移动到新版本；旧浏览器缓存／Service Worker 需另行核查，不能为迁移直接清存储。本轮没有对你的 DNS、证书、Windows 或 VPS 执行这些操作。
+
+HTTPS 补丁还启用浏览器强制的主机绑定 Cookie 名称；重新登录并刷新旧表单即可，不重设账号、密码或参与者凭据。名称变化不是已泄漏会话的自动撤销机制。
 
 ## 6. GEP 的下一步
 

@@ -29,6 +29,7 @@ def test_valid_package():
     assert descriptor['platform']=='godot_web' and len(sha)==64
 
 def test_gui_and_preview_use_configured_public_api(setup,tmp_path,settings,monkeypatch):
+    from core.origins import isolated_host, isolated_origin
     from core.models import Build
     from core.services import SHELL_CAPABILITY
     monkeypatch.setenv('GEP_PUBLIC_API','http://experiment.localhost:8123/')
@@ -47,11 +48,11 @@ def test_gui_and_preview_use_configured_public_api(setup,tmp_path,settings,monke
     c=Client();c.force_login(setup['owner'])
     page=c.get(f'/studies/{setup["study"].id}')
     assert page.status_code==200
-    assert f'http://experiment.localhost:8123/run/{web_release.id}/web/index.html'.encode() in page.content
+    assert f'{isolated_origin("r",web_release.id)}/run/{web_release.id}/web/index.html'.encode() in page.content
     response=c.post(f'/studies/{setup["study"].id}',{'op':'preview','build_id':str(build.id)})
     assert response.status_code==302
-    assert response['Location'].startswith('http://experiment.localhost:8123/preview/')
-    preview=c.get(response['Location'],HTTP_HOST='experiment.localhost:8123')
+    assert response['Location'].startswith(isolated_origin('p',build.id)+'/preview/')
+    preview=c.get(response['Location'],HTTP_HOST=isolated_host('p',build.id)+':8123')
     assert preview.status_code==200
     assert b'"api_url": "http://experiment.localhost:8123"' in preview.content
     assert b'"mode": "id"' in preview.content

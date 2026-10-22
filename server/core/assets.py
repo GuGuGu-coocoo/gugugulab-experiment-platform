@@ -18,6 +18,7 @@ ASSET_ROOT = Path(__file__).resolve().parent / 'static'
 # Exact URL suffix -> (file below ASSET_ROOT, response content type).
 ASSETS = {
     'core/permissions.js': ('core/permissions.js', 'text/javascript'),
+    'core/legacy_queue.js': ('core/legacy_queue.js', 'text/javascript'),
 }
 
 

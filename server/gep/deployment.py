@@ -22,7 +22,7 @@ def setup_values(values):
         except UnicodeError:
             raise ValueError('请输入有效域名，例如 example.com；不要填写网址、端口或路径。') from None
         labels = domain.split('.')
-        valid = len(labels) >= 2 and len('experiment.' + domain) <= 253 and all(
+        valid = len(labels) >= 2 and len('r-' + '0' * 32 + '.experiment.' + domain) <= 253 and all(
             re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label) for label in labels)
         try:
             ipaddress.ip_address(domain)
@@ -51,10 +51,16 @@ def domain_files(domain):
     return {
         'Caddyfile.pending': (
             '# Pending: verify DNS, network access and deployment before enabling.\n'
-            f'admin.{domain} {{\n    reverse_proxy gep:8000\n}}\n\n'
-            f'experiment.{domain} {{\n    reverse_proxy gep:8000\n}}\n'),
+            '# DNS must also resolve *.experiment.<domain>; no DNS is changed here.\n'
+            '{\n    on_demand_tls {\n        ask http://gep:8000/_internal/tls-allow\n    }\n}\n\n'
+            f'admin.{domain}, experiment.{domain} {{\n'
+            '    @internal path /_internal/*\n    respond @internal 404\n'
+            '    reverse_proxy gep:8000 {\n        header_up X-Forwarded-Proto https\n    }\n}\n\n'
+            'https:// {\n    tls {\n        on_demand\n    }\n'
+            '    @internal path /_internal/*\n    respond @internal 404\n'
+            '    reverse_proxy gep:8000 {\n        header_up X-Forwarded-Proto https\n    }\n}\n'),
         'domain.env.pending': (
             '# Pending: enable only together with a verified HTTPS reverse proxy.\n'
             f'GEP_ADMIN_HOST=admin.{domain}\nGEP_EXPERIMENT_HOST=experiment.{domain}\n'
-            f'GEP_ADMIN_ORIGIN=https://admin.{domain}\nGEP_PUBLIC_API=https://experiment.{domain}\nGEP_HTTPS=1\n'),
+            f'GEP_ADMIN_ORIGIN=https://admin.{domain}\nGEP_PUBLIC_API=https://experiment.{domain}\nGEP_HTTPS=1\nGEP_TRUST_PROXY=1\n'),
     }

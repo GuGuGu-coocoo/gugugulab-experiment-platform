@@ -14,6 +14,8 @@ A new instance asks you to choose an Owner username and password. The optional d
 
 **My studies** lists studies you may view. Creation is available according to your permissions. The language switch changes interface labels, not study titles, roster IDs or recorded values. Themes can be light, dark or system-controlled.
 
+After the HTTPS security update, sign in again and refresh old forms. Your account and password are unchanged.
+
 ![My studies: visible study cards, the Create study form, and language and theme controls](images/en/01_studies.png)
 
 ## 2. Create a study
@@ -55,6 +57,8 @@ The security-audit branch accepts Stored/Deflate ZIP and XLSX compression only, 
 If `pattern` or `patternProperties` is reported as unsupported, ask the developer to update the schema and supply a new package. This branch also refuses new admission and affected events for existing versions using these regex rules. Accepted records remain unchanged and pending data is retained; do not delete or relabel it under a different release.
 
 Choose **Preview (no data upload)** and check entry, task, recorded fields and completion screen. **Preview saves locally only; it does not upload into live participation records.** Local saving is not server acknowledgement.
+
+The audit branch gives previews and published versions separate addresses; follow the workbench links. An old address with local records opens a trusted handling page first. Data keeps its original binding, without automatic task resumption or transfer to a new version. Do not clear browser storage; contact the researcher for expired or paused records. Old caches and actual public deployment are not declared verified.
 
 Return to the workbench and choose **Publish version** when satisfied. Multiple versions can be retained. A new publication does not overwrite an old package or relabel its sessions.
 

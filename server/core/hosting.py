@@ -3,23 +3,42 @@ import mimetypes
 import zipfile
 from django.conf import settings
 from django.http import HttpResponse
+from django.shortcuts import redirect
 from .models import Release
 from .gui import connection_config, public_api_url
 from .protocol import require
 from .views import endpoint
 from . import publication
+from .origins import api_origin, isolated_host, isolated_origin, known_host, portal_origin, remember
 
 @endpoint
 def resource(request,release_id,resource_path):
-    require(request.get_host().split(':')[0]==settings.EXPERIMENT_HOST,'wrong_host',403)
+    host=request.get_host().split(':')[0]
+    require(host in (settings.EXPERIMENT_HOST,isolated_host('r',release_id)),'wrong_host',403)
     require(request.method=='GET','method',405)
     release=Release.objects.select_related('build','study').filter(pk=release_id).first()
     # Only a real Web release is served here: a complete native release carries a
     # program archive without any web/ path and must never be presented as one.
     # A deleted or random release id gets the same 404, and a study under
     # deletion is no longer a published resource.
-    require(release is not None and publication.release_kind(release)=='web' and release.study.lifecycle=='active','not_published',404)
+    if release is None or publication.release_kind(release)!='web' or release.study.lifecycle!='active':
+        if resource_path=='web/index.html' and known_host(host):
+            from .legacy_queue import local_data
+            response=local_data(request)
+            response.status_code=404
+            return response
+        require(False,'not_published',404)
     require(resource_path.startswith('web/') and '..' not in resource_path.split('/'),'path',404)
+    if resource_path=='web/index.html':
+        remember('r',release.id)
+    if host==settings.EXPERIMENT_HOST:
+        # Never execute an uploaded program where old shared-origin queues live.
+        # The trusted index interstitial can offer pending-data handling first.
+        if resource_path=='web/index.html':
+            from .legacy_queue import legacy_entry
+            return legacy_entry(request,release)
+        suffix='?'+request.META['QUERY_STRING'] if request.META.get('QUERY_STRING') else ''
+        return redirect(f'{isolated_origin("r",release.id)}/run/{release.id}/{resource_path}'+suffix)
     config=connection_config(release)
     if resource_path=='web/index.html':
         binding=entry_binding(request,release)
@@ -64,7 +83,7 @@ def entry_stale_page(study_id):
           '<meta name="viewport" content="width=device-width,initial-scale=1">'
           '<title>研究入口已更新</title><body><main><h1>研究入口已更新</h1>'
           '<p>当前参与版本或招募状态已变化，本次没有开始新的参与会话。</p>'
-          f'<p><a href="/join/{study_id}">返回研究入口，刷新后重新开始</a></p>'
+          f'<p><a href="{portal_origin()}/join/{study_id}">返回研究入口，刷新后重新开始</a></p>'
           '</main></body></html>')
     response=HttpResponse(body,content_type='text/html; charset=utf-8',status=409)
     response['Cache-Control']='no-store'
@@ -79,8 +98,10 @@ def serve(build,config,resource_path):
         raw=raw.replace(b'<head>',b'<head><script>globalThis.GEP_CONTEXT='+context.encode()+b';</script>',1)
     mime=mimetypes.guess_type(resource_path)[0] or 'application/octet-stream'
     response=HttpResponse(raw,content_type=mime)
-    response['Content-Security-Policy']="default-src 'self' blob:; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; frame-ancestors 'none'; object-src 'none'; base-uri 'none'"
+    response['Content-Security-Policy']=("default-src 'self' blob:; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' "+api_origin()+"; img-src 'self' data: blob:; frame-ancestors 'none'; object-src 'none'; base-uri 'none'")
     response['Cross-Origin-Opener-Policy']='same-origin'
+    response['Cross-Origin-Resource-Policy']='same-origin'
+    response['Origin-Agent-Cluster']='?1'
     return response
 
 @endpoint
@@ -90,7 +111,7 @@ def preview(request,token,resource_path):
     from .models import Build,Instance
     from .access import guard
     from .services import SHELL_CAPABILITY
-    require(request.get_host().split(':')[0]==settings.EXPERIMENT_HOST,'wrong_host',403)
+    host=request.get_host().split(':')[0]
     require(request.method=='GET' and resource_path.startswith('web/') and '..' not in resource_path.split('/'),'path',404)
     try: claims=signing.loads(token,salt='preview',max_age=900)
     except signing.BadSignature:
@@ -102,7 +123,13 @@ def preview(request,token,resource_path):
     # target: the preview never leaks whether the study ever existed.
     from .protocol import require as _require
     _require(build is not None and user is not None and build.study.lifecycle=='active','not_published',404)
+    require(host in (settings.EXPERIMENT_HOST,isolated_host('p',build.id)),'wrong_host',403)
     guard(user,build.study,'build.preview')
     require(build.descriptor.get('platform')=='godot_web' and bool(build.package_path),'web_preview_only',404)
+    if resource_path=='web/index.html':
+        remember('p',build.id)
+    if host==settings.EXPERIMENT_HOST:
+        suffix='?'+request.META['QUERY_STRING'] if request.META.get('QUERY_STRING') else ''
+        return redirect(f'{isolated_origin("p",build.id)}/preview/{token}/{resource_path}'+suffix)
     config={'config_version':'1','protocol_version':'gep/1','sdk_version':'0.1.0','purpose':'synthetic','api_url':public_api_url(),'instance_id':str(Instance.objects.get(pk=1).instance_id),'study_id':str(build.study_id),'release_id':'preview','build_id':str(build.id),'preview':True,'mode':build.study.mode,'shell_capability':SHELL_CAPABILITY}
     return serve(build,config,resource_path)

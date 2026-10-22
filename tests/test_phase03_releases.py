@@ -27,6 +27,7 @@ from django.utils import timezone
 
 from core import publication
 from core.gui import connection_config
+from core.origins import isolated_host, isolated_origin
 from core.models import (Audit, Build, Event, Export, Grant, Instance, Participant,
                          RecoveryPermit, Release, Session, Study)
 from core.protocol import Rejected
@@ -471,7 +472,7 @@ def test_stable_entry_page_binds_current_release_and_stale_admission_fails(monke
     assert f'data-expected-release="{first.id}"' in body and f'data-expected-revision="{study.revision}"' in body
     # The start click composes the gated URL from the observed binding; the href
     # already carries it for the no-script fallback.
-    base = f'http://experiment.localhost:8123/run/{first.id}/web/index.html'
+    base = f'{isolated_origin("r",first.id)}/run/{first.id}/web/index.html'
     gated = f'{base}?entry_release={first.id}&entry_revision={study.revision}'
     assert f'data-start-url="{base}"' in html.unescape(body) and f'href="{gated}"' in html.unescape(body)
 
@@ -519,32 +520,33 @@ def test_entry_gate_serves_only_the_observed_release_and_fails_closed(tmp_path, 
     study.refresh_from_db()
     client = Client()
     base = f'/run/{first.id}/web/index.html'
+    run_host = isolated_host('r',first.id)
 
-    current = client.get(f'{base}?entry_release={first.id}&entry_revision={study.revision}', HTTP_HOST='experiment.localhost')
+    current = client.get(f'{base}?entry_release={first.id}&entry_revision={study.revision}', HTTP_HOST=run_host)
     assert current.status_code == 200
     config = json.loads(re.search(r'globalThis\.GEP_CONTEXT=(\{.*?\});</script>', current.content.decode()).group(1))
     assert config['expected_release_id'] == str(first.id) and config['expected_revision'] == study.revision
     assert config['release_id'] == str(first.id) and config['build_id'] == str(first.build_id)
 
     # The frozen legacy direct URL stays ungated and carries no binding.
-    legacy = client.get(base, HTTP_HOST='experiment.localhost')
+    legacy = client.get(base, HTTP_HOST=run_host)
     assert legacy.status_code == 200 and 'expected_release_id' not in legacy.content.decode()
 
     # A stale revision, a missing half of the binding: refuse without serving the app.
     for refused in (f'{base}?entry_release={first.id}&entry_revision=0', f'{base}?entry_release={first.id}',
                     f'{base}?entry_revision={study.revision}'):
-        page = client.get(refused, HTTP_HOST='experiment.localhost')
+        page = client.get(refused, HTTP_HOST=run_host)
         assert page.status_code == 409 and '研究入口已更新' in page.content.decode()
 
     publication.select_current_release(context['owner'], study, str(study.revision), str(second.id))
     study.refresh_from_db()
-    stale = client.get(f'{base}?entry_release={first.id}&entry_revision=1', HTTP_HOST='experiment.localhost')
+    stale = client.get(f'{base}?entry_release={first.id}&entry_revision=1', HTTP_HOST=run_host)
     assert stale.status_code == 409
     html = stale.content.decode()
     assert '研究入口已更新' in html and 'GEP_CONTEXT' not in html and f'/join/{study.id}' in html
     # A stale entry click creates no session; the old release still serves its frozen URL.
     assert Session.objects.filter(release__study=study).count() == 0
-    frozen = client.get(base, HTTP_HOST='experiment.localhost')
+    frozen = client.get(base, HTTP_HOST=run_host)
     assert frozen.status_code == 200 and 'expected_release_id' not in frozen.content.decode()
     assert 'first synthetic package' in frozen.content.decode()
 
@@ -552,7 +554,7 @@ def test_entry_gate_serves_only_the_observed_release_and_fails_closed(tmp_path, 
     study.recruitment = 'closed'
     study.save()
     closed = client.get(f'/run/{second.id}/web/index.html?entry_release={second.id}&entry_revision={study.revision}',
-                        HTTP_HOST='experiment.localhost')
+                        HTTP_HOST=isolated_host('r',second.id))
     assert closed.status_code == 409 and '研究入口已更新' in closed.content.decode()
 
 
@@ -633,7 +635,7 @@ def test_switch_keeps_old_session_uploads_recovery_config_export_and_resources(t
     client = Client()
     client.force_login(owner)
     resource_url = f'/run/{first.id}/web/index.html'
-    open_url = f'{settings.EXPERIMENT_HOST}'
+    open_url = isolated_host('r',first.id)
     resource_before = client.get(resource_url, HTTP_HOST=open_url)
     config_before = client.get(f'/releases/{first.id}/config')
     export_before = client.post('/v1/admin/exports', {'study_id': str(study.id)}, content_type='application/json')
@@ -744,7 +746,7 @@ def test_hosts_and_admin_cookie_are_isolated(settings):
 
 
 @pytest.mark.django_db
-def test_configured_admin_origin_owns_gui_export_snapshots_and_downloads(settings):
+def test_configured_admin_origin_owns_gui_export_snapshots_and_downloads(settings, monkeypatch):
     """P0309 regression: the configured admin origin, not the built-in default,
     authorizes the GUI and the export routes; no other origin is opened.
 
@@ -759,6 +761,7 @@ def test_configured_admin_origin_owns_gui_export_snapshots_and_downloads(setting
     settings.ADMIN_HOST = 'admin.synthetic.test'
     settings.EXPERIMENT_HOST = 'experiment.synthetic.test'
     settings.WWW_HOST = 'www.synthetic.test'
+    monkeypatch.setenv('GEP_PUBLIC_API', 'https://experiment.synthetic.test')
     settings.ALLOWED_HOSTS = settings.ALLOWED_HOSTS + [settings.ADMIN_HOST, settings.EXPERIMENT_HOST, settings.WWW_HOST]
     # The legacy name stays resolvable by ALLOWED_HOSTS: only the route check may refuse it.
     assert 'admin.localhost' in settings.ALLOWED_HOSTS

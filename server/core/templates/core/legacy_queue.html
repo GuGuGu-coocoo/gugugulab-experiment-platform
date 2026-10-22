@@ -1,0 +1,15 @@
+{% extends 'core/public_base.html' %}
+{% block title %}{{copy.title}}{% endblock %}
+{% block content %}
+<section data-legacy-queue="1">
+<h1>{{copy.title}}</h1><p>{{copy.note}}</p>
+<p id="legacy-status" role="status" aria-live="polite"></p>
+<p id="legacy-count"></p>
+<button type="button" id="legacy-inspect">{{copy.inspect}}</button>
+<button type="button" id="legacy-upload" disabled>{{copy.upload}}</button>
+{% if forward %}<p><a id="legacy-continue" href="{{forward}}">{{copy.continue}}</a></p>{% endif %}
+<p><a href="{{portal_url}}">{{copy.portal}}</a></p>
+</section>
+{{queue_config|json_script:'legacy-config'}}
+<script type="module" src="/static/core/legacy_queue.js"></script>
+{% endblock %}

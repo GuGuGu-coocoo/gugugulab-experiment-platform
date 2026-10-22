@@ -31,6 +31,15 @@ class Instance(models.Model):
     # ``core.access`` and are never treated as v2.
     authorization_version = models.PositiveIntegerField(default=1)
 
+
+class BrowserOrigin(models.Model):
+    """Public routing label retained for trusted offline-queue handling.
+
+    No participant, study name, credential, data or foreign key. Keeping the
+    namespace after deletion never restores a program or an authorization.
+    """
+    label = models.CharField(max_length=34, primary_key=True)
+
 class AccountProfile(models.Model):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='gep_profile')
     role = models.CharField(max_length=16, default='user')

@@ -159,6 +159,8 @@ def study_context(request, study, notice='', module='overview'):
         descriptor=release.build.descriptor if isinstance(release.build.descriptor,dict) else {}
         release.platform=descriptor.get('platform') or ''
         release.version=descriptor.get('version') or ''
+        from .origins import release_url
+        release.web_url=release_url(release) if release.platform=='godot_web' and release.program_bound else ''
     return {
         'study':study, 'notice':notice, 'public_api_url':public_api_url(),
         'native_platforms':NATIVE_PLATFORMS,
@@ -551,7 +553,8 @@ def study_page(request,study_id,module='overview'):
                 require(build.descriptor.get('platform')=='godot_web' and bool(build.package_path),'web_preview_only')
                 from django.core import signing
                 token=signing.dumps({'build':str(build.id),'user':request.user.id},salt='preview')
-                return redirect(public_api_url()+'/preview/'+token+'/web/index.html')
+                from .origins import preview_url
+                return redirect(preview_url(build,token))
             elif op=='approve':
                 guard(request.user,study,'release.approve_pilot')
                 build=Build.objects.get(pk=request.POST['build_id'],study=study)
@@ -564,6 +567,9 @@ def study_page(request,study_id,module='overview'):
                     audited=True
                 else:
                     release=Release.objects.create(study=study,build=build,approved=True,config=config)
+                    if build.descriptor.get('platform')=='godot_web':
+                        from .origins import remember
+                        remember('r',release.id)
                 target=workbench.module_url(study,'builds')+'#release-'+str(release.id)
             elif op=='recruitment':
                 guard(request.user,study,'recruitment.manage')

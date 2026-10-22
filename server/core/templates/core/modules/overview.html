@@ -27,7 +27,7 @@
 {% for release in releases %}<p data-release-row="{{release.id}}"><strong>{{release.platform|default:"—"}} · {{release.version|default:"—"}}</strong> <small>{{release.id}}</small>
 {% if release.artifact_ready and can_upload %} · <a href="/releases/{{release.id}}/artifact" data-artifact="{{release.id}}">{{ui.builds_download_artifact}}</a>{% endif %}
 {% if can_configure %} · <a href="/releases/{{release.id}}/config">{{ui.builds_config_link}}</a>{% endif %}
-{% if release.approved and release.platform == "godot_web" and release.build.package_path %} · <a href="{{public_api_url}}/run/{{release.id}}/web/index.html" target="_blank" rel="noopener noreferrer">{{ui.builds_open_entry}}</a>{% endif %}
+{% if release.approved and release.platform == "godot_web" and release.build.package_path %} · <a href="{{release.web_url}}" target="_blank" rel="noopener noreferrer">{{ui.builds_open_entry}}</a>{% endif %}
 </p>{% empty %}<p>{{ui.builds_releases_empty}}</p>{% endfor %}
 {% if module_available.builds %}<p><a href="{{module_links.builds}}" data-module-link="builds">{{ui.module_builds}}</a></p>{% endif %}
 {% if module_available.recruitment %}<p><a href="{{module_links.recruitment}}" data-module-link="recruitment">{{ui.module_recruitment}}</a></p>{% endif %}

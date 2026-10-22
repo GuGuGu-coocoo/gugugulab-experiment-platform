@@ -17,9 +17,12 @@ ADMIN_HOST = os.environ.get('GEP_ADMIN_HOST', 'admin.localhost')
 ADMIN_ORIGIN = os.environ.get('GEP_ADMIN_ORIGIN', '')
 WWW_HOST = os.environ.get('GEP_WWW_HOST', 'www.localhost')
 ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'admin.localhost', 'experiment.localhost', 'testserver', EXPERIMENT_HOST, ADMIN_HOST, WWW_HOST]
+ALLOWED_HOSTS.append('.' + EXPERIMENT_HOST)
+if os.environ.get('GEP_TRUST_PROXY') == '1' and os.environ.get('GEP_HTTPS') == '1':
+    ALLOWED_HOSTS.append('gep')  # Internal Caddy certificate allowlist hook only.
 ROOT_URLCONF = 'gep.urls'
 INSTALLED_APPS = ['django.contrib.auth', 'django.contrib.contenttypes', 'django.contrib.sessions', 'core']
-MIDDLEWARE = ['core.middleware.ResponseSecurity', 'django.middleware.security.SecurityMiddleware', 'core.limits.RequestLimits', 'django.contrib.sessions.middleware.SessionMiddleware', 'core.limits.UploadIdentityGate', 'django.middleware.csrf.CsrfViewMiddleware', 'django.contrib.auth.middleware.AuthenticationMiddleware', 'core.middleware.AccountGate']
+MIDDLEWARE = ['core.middleware.ResponseSecurity', 'django.middleware.security.SecurityMiddleware', 'core.limits.RequestLimits', 'core.origins.ParticipantCORS', 'django.contrib.sessions.middleware.SessionMiddleware', 'core.limits.UploadIdentityGate', 'django.middleware.csrf.CsrfViewMiddleware', 'django.contrib.auth.middleware.AuthenticationMiddleware', 'core.middleware.AccountGate']
 DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': DATA_DIR / 'gep.sqlite3', 'OPTIONS': {'timeout': 20, 'transaction_mode': 'IMMEDIATE'}}}
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 USE_TZ = True
@@ -27,8 +30,12 @@ USE_TZ = True
 TIME_ZONE = os.environ.get('GEP_TIME_ZONE', 'UTC')
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Strict'
-SESSION_COOKIE_NAME = 'gep_admin'
 SESSION_COOKIE_SECURE = os.environ.get('GEP_HTTPS') == '1'
+# Host-only alone does not prevent a sibling from tossing a parent-domain
+# cookie with the same name. Browsers enforce __Host- against that override.
+SESSION_COOKIE_NAME = '__Host-gep_admin' if SESSION_COOKIE_SECURE else 'gep_admin'
+CSRF_COOKIE_NAME = '__Host-gep_csrf' if SESSION_COOKIE_SECURE else 'csrftoken'
+SESSION_COOKIE_PATH = CSRF_COOKIE_PATH = '/'
 SESSION_COOKIE_DOMAIN = None
 CSRF_COOKIE_DOMAIN = None
 CSRF_COOKIE_SECURE = SESSION_COOKIE_SECURE

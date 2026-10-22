@@ -1,5 +1,27 @@
+{
+	on_demand_tls {
+		ask http://gep:8000/_internal/tls-allow
+	}
+}
+
 admin.{$GEP_BASE_DOMAIN}, experiment.{$GEP_BASE_DOMAIN} {
-    reverse_proxy gep:8000 {
-        header_up X-Forwarded-Proto https
-    }
+	@internal path /_internal/*
+	respond @internal 404
+	reverse_proxy gep:8000 {
+		header_up X-Forwarded-Proto https
+	}
+}
+
+# Only the exact release/build domains allowed by GEP get a certificate.
+# No DNS-provider credential or wildcard certificate is required. DNS still
+# needs *.experiment.<domain> pointing at this server before public activation.
+https:// {
+	tls {
+		on_demand
+	}
+	@internal path /_internal/*
+	respond @internal 404
+	reverse_proxy gep:8000 {
+		header_up X-Forwarded-Proto https
+	}
 }

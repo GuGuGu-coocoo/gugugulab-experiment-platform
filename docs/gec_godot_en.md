@@ -121,6 +121,8 @@ The zero digest is a pre-packaging placeholder. The packaging helper computes it
 
 The descriptor is not connection configuration. Never include Owner passwords, roster passwords or participant tokens. GEP injects Web configuration; a native complete release freezes public `connection.json` beside the program. The existing protocol field `purpose: synthetic` remains unchanged for compatibility. Removing preview wording from the interface does not mean changing this field or rewriting old pending queues.
 
+The audit branch assigns separate origins to Web releases and previews. Do not treat the page hostname as the API address: GEC already uses the injected `api_url` for the central API, where the server enforces the release scope. Program/SDK bytes need no repackaging for this change. Old-origin queues use a trusted upload page, without automatic transfer or trial resumption; see the [security boundary](security.md).
+
 The audit branch temporarily rejects Schema `pattern` and `patternProperties` rules, including nested definitions. Use types, enums, lengths and numeric bounds where appropriate. Existing releases with these rules also refuse new admission and affected events with `schema_regex_unsupported`, rather than silently bypassing validation. Preserve pending data under its original binding; do not delete or relabel it. An ordinary field named `pattern` remains legal. See the [protocol compatibility limits](protocol.md).
 
 ## 5. Export and package

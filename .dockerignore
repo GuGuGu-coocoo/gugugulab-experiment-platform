@@ -3,6 +3,9 @@
 !requirements.txt
 !server/
 !server/**
+!GEC_SDK/
+!GEC_SDK/gec_web/
+!GEC_SDK/gec_web/sdk.js
 !deploy/
 !deploy/Dockerfile
 !LICENSE

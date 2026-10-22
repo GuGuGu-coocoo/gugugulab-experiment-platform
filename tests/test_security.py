@@ -52,6 +52,7 @@ def test_early_body_and_csrf_refusals_also_have_headers(setup):
 
 
 def test_published_game_csp_and_static_caching_unchanged(setup, settings, tmp_path):
+    from core.origins import isolated_host
     settings.DATA_DIR = tmp_path
     (tmp_path / 'packages').mkdir()
     with zipfile.ZipFile(tmp_path / 'packages/game.zip', 'w') as archive:
@@ -60,7 +61,7 @@ def test_published_game_csp_and_static_caching_unchanged(setup, settings, tmp_pa
     build.descriptor['platform'] = 'godot_web'
     build.package_path = 'game.zip'
     build.save()
-    response = Client().get(f"/run/{setup['release'].id}/web/index.html", HTTP_HOST='experiment.localhost')
+    response = Client().get(f"/run/{setup['release'].id}/web/index.html", HTTP_HOST=isolated_host('r',setup['release'].id))
     assert response.status_code == 200
     assert "'wasm-unsafe-eval'" in response['Content-Security-Policy']
     assert "'unsafe-inline'" in response['Content-Security-Policy']

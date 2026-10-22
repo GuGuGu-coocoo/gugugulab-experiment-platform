@@ -19,6 +19,7 @@ from .gui import public_api_url
 from .models import Study
 from .protocol import require
 from .views import endpoint
+from .origins import release_url
 
 EXPERIMENT_LOCAL_HOSTS = ('127.0.0.1',)
 
@@ -40,7 +41,7 @@ def start_url(release):
     whose ``release_kind`` is ``web``; the guard keeps a future caller honest.
     """
     require(publication.release_kind(release) == 'web', 'release_unavailable', 409)
-    return f'{public_api_url()}/run/{release.id}/web/index.html'
+    return release_url(release)
 
 
 def gated_start_url(release, revision):
