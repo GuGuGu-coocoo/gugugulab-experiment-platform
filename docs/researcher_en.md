@@ -50,6 +50,10 @@ Have the developer supply a standard Web ZIP using the [GEC guide](gec_godot_en.
 
 In **Upload & publish experiment**, upload the ZIP and wait for validation. A successful entry displays its platform and version. Failure leaves the old release unchanged; inspect the error before retrying. The page states the current archive, expanded-size and file-count limits.
 
+The security-audit branch accepts Stored/Deflate ZIP and XLSX compression only, with at most 256 internal files in an XLSX workbook. Standard Godot exports and GEP templates meet this rule. This patch has not replaced the released image; check the [audit status (Chinese)](SECURITY_AUDIT.md) before deployment.
+
+If `pattern` or `patternProperties` is reported as unsupported, ask the developer to update the schema and supply a new package. This branch also refuses new admission and affected events for existing versions using these regex rules. Accepted records remain unchanged and pending data is retained; do not delete or relabel it under a different release.
+
 Choose **Preview (no data upload)** and check entry, task, recorded fields and completion screen. **Preview saves locally only; it does not upload into live participation records.** Local saving is not server acknowledgement.
 
 Return to the workbench and choose **Publish version** when satisfied. Multiple versions can be retained. A new publication does not overwrite an old package or relabel its sessions.

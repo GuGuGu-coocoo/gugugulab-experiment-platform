@@ -661,6 +661,8 @@ ERRORS_EN = {
     'schema_object': 'A schema must be a JSON object.',
     'schema_definition': 'A schema definition is invalid: each needs id, version and a valid schema.',
     'schema_references_unsupported': 'Schemas do not accept $ref/$dynamicRef/$id references.',
+    'schema_regex_unsupported': 'The pattern and patternProperties regex rules are temporarily unsupported. Update the experiment schema and upload again; existing data is unchanged.',
+    'compression_unsupported': 'Archives support Stored or Deflate compression only; the archive was rejected as a whole.',
     'schema_limit': 'The schema count must be between 1 and 16.',
     'schema_invalid': 'The schema is not a valid JSON Schema definition.',
     'descriptor_fields': 'The build descriptor is incomplete or has unknown fields; it was rejected as a whole.',

@@ -3,7 +3,7 @@ from django.http import JsonResponse
 from django.conf import settings
 from django.views.decorators.csrf import csrf_exempt
 from django.core.exceptions import ObjectDoesNotExist
-from .protocol import Rejected, require, parse, MAX_EXPORT_ARRAY, MAX_EXPORT_BYTES
+from .protocol import Rejected, require, parse_object, MAX_EXPORT_ARRAY, MAX_EXPORT_BYTES
 from .models import Session, Export
 from .services import (admit_request, context, receive, finish, authorize_session, completion_status, recover,
                        redeem_recovery_code, recover_named, RECOVERY_CODE_CAPABILITY, RECOVERY_NAMED_CAPABILITY)
@@ -27,6 +27,8 @@ def endpoint(fn):
             response=JsonResponse({'code':'invalid_request','retryable':False,'outcome_unknown':False},status=400)
         response['Cache-Control']='no-store'
         response['X-Content-Type-Options']='nosniff'
+        if response.status_code == 429:
+            response.setdefault('Retry-After', '60')
         return response
     return wrapped
 
@@ -42,18 +44,23 @@ def participant(request, session_id=None, action=None):
     require(request.get_host().split(':')[0] in (settings.EXPERIMENT_HOST,'127.0.0.1','testserver'), 'wrong_host',403)
     require(request.method == ('GET' if action in ('status','context') else 'POST'), 'method',405)
     if session_id is None:
-        data=parse(request.body)
         from .throttle import check
+        # Stable budgets precede body parsing and attacker-selected labels.
+        # The direct peer is deliberate: untrusted forwarded headers cannot
+        # mint a fresh budget, including behind an explicitly trusted proxy.
+        check('admit-global',limit=600)
+        check('admit-client:'+request.META.get('REMOTE_ADDR',''),limit=120)
+        data=parse_object(request.body)
         check('admit:'+str(data.get('study_id'))+':'+str(data.get('participant_code',data.get('operation_id'))))
         session,token=admit_request(data)
         return JsonResponse(dict(context(session), token=token))
     if action=='recover':
-        data=parse(request.body)
+        data=parse_object(request.body)
         return JsonResponse(recover(session_id,data['proof'],data['permit']))
     if action=='event-batches':
-        return JsonResponse(receive(session_id,bearer(request),parse(request.body)))
+        return JsonResponse(receive(session_id,bearer(request),parse_object(request.body)))
     if action=='completion':
-        return JsonResponse(finish(session_id,bearer(request),parse(request.body)))
+        return JsonResponse(finish(session_id,bearer(request),parse_object(request.body)))
     session=Session.objects.select_related('release','participant').filter(pk=session_id).first()
     if session is None:
         deletion.session_refusal(session_id,bearer(request))
@@ -74,7 +81,7 @@ def recovery(request):
     """
     require(request.get_host().split(':')[0] in (settings.EXPERIMENT_HOST,'127.0.0.1','testserver'), 'wrong_host',403)
     require(request.method=='POST','method',405)
-    data=parse(request.body)
+    data=parse_object(request.body)
     client=request.META.get('REMOTE_ADDR','')
     capability=data.get('capability')
     if capability==RECOVERY_CODE_CAPABILITY:
@@ -111,7 +118,7 @@ def exports(request, export_id=None):
     require(request.method=='POST','method',405)
     # The export application parses under its own bounded envelope; every other
     # route keeps the unchanged participant protocol bounds.
-    data=parse(request.body,max_bytes=MAX_EXPORT_BYTES,max_array=MAX_EXPORT_ARRAY)
+    data=parse_object(request.body,max_bytes=MAX_EXPORT_BYTES,max_array=MAX_EXPORT_ARRAY)
     # New applications name their version explicitly; a missing field keeps the
     # unchanged v1 contract for old clients, and anything else fails closed.
     version=data.get('format_version','1')

@@ -21,9 +21,11 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font
 
 from .protocol import Rejected, require
+from .archives import check_budget
 
 MAX_COMPRESSED = 2 * 1024 * 1024
 MAX_EXPANDED = 10 * 1024 * 1024
+MAX_FILES = 256
 MAX_ROWS = 1000
 MAX_COLUMNS = 32
 # header + 1000 data rows + one trailing blank row; anything larger is rejected
@@ -80,15 +82,21 @@ def _archive(raw):
         archive = zipfile.ZipFile(io.BytesIO(raw))
     except (zipfile.BadZipFile, OSError):
         raise Rejected('invalid_xlsx')
-    expanded = 0
-    for info in archive.infolist():
-        name = info.filename.replace('\\', '/').lower()
-        require(not name.endswith('vbaproject.bin'), 'macro_rejected', 415)
-        require(not name.startswith('xl/externallinks/'), 'external_link_rejected', 415)
-        if name.endswith('.rels'):
-            require(not _has_external_relationship(archive, info), 'external_link_rejected', 415)
-        expanded += info.file_size
-        require(expanded <= MAX_EXPANDED, 'expanded_too_large', 413)
+    try:
+        entries = archive.infolist()
+        check_budget(entries, max_files=MAX_FILES, max_expanded=MAX_EXPANDED,
+                     expanded_code='expanded_too_large')
+        # The whole directory is checked first: an early relationship part
+        # must not be parsed before a later oversized member is noticed.
+        for info in entries:
+            name = info.filename.replace('\\', '/').lower()
+            require(not name.endswith('vbaproject.bin'), 'macro_rejected', 415)
+            require(not name.startswith('xl/externallinks/'), 'external_link_rejected', 415)
+            if name.endswith('.rels'):
+                require(not _has_external_relationship(archive, info), 'external_link_rejected', 415)
+    except Exception:
+        archive.close()
+        raise
     return archive
 
 

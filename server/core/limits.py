@@ -49,3 +49,24 @@ class RequestLimits:
                 limit=DEFAULT_BODY_LIMIT
             if int(raw)>limit:return JsonResponse({'code':'body_limit'},status=413)
         return self.get_response(request)
+
+
+class UploadIdentityGate:
+    """Refuse anonymous upload-capable POSTs before CSRF parses multipart.
+
+    Django calls process_view after all request middleware has initialized the
+    authenticated user. Register this view hook before CsrfViewMiddleware's
+    hook; do not read POST, FILES or body here. Views keep their own current
+    object/action authorization and CSRF still checks authenticated requests.
+    """
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        return self.get_response(request)
+
+    def process_view(self, request, view_func, view_args, view_kwargs):
+        upload_route = request.path == '/users' or request.path.startswith('/studies/')
+        if request.method == 'POST' and upload_route and not request.user.is_authenticated:
+            return JsonResponse({'code': 'auth_required', 'retryable': False, 'outcome_unknown': False}, status=403)
+        return None

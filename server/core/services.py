@@ -16,6 +16,7 @@ from .access import guard, ensure_principal
 from .artifacts import require_release_artifact
 from .throttle import check
 from . import deletion
+from .schema_policy import reject_regex_rules
 
 
 def digest(value):
@@ -166,6 +167,10 @@ def _create_session(release, data, binding, proof):
         _admission_refusal(study.pk, data, proof, release=release)
     require(release.approved and study.recruitment == 'open', 'admission_closed', 403)
     require_release_artifact(release)
+    # Previously frozen descriptors are not rewritten. Refuse new participation
+    # rather than collect records under a now-unsupported validation rule.
+    for definition in release.build.descriptor.get('schemas', {}).values():
+        reject_regex_rules(definition.get('schema'))
     mode = frozen_mode(release, study)
     if mode == 'anonymous':
         require(data.get('participant_code') is None, 'unexpected_code')
@@ -300,6 +305,9 @@ def validate_event(session, event):
     definition = schemas.get(event['event_type'])
     require(definition is not None, 'unknown_event_type')
     require(event['schema_id'] == definition['id'] and event['schema_version'] == definition['version'], 'schema_binding')
+    # Stored legacy descriptors bypass today's intake checks, so the same
+    # policy must run here before jsonschema can execute a backtracking regex.
+    reject_regex_rules(definition['schema'])
     require(not list(Draft202012Validator(definition['schema']).iter_errors(event['payload'])), 'payload_schema')
     if 'observed_time' in event:
         time = event['observed_time']

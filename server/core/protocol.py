@@ -36,7 +36,9 @@ def validate_tree(value, depth=0, max_array=MAX_EVENTS):
     if value is None or type(value) is bool:
         return
     if type(value) in (int, float):
-        require(math.isfinite(value) and abs(value) <= 9007199254740991, 'number_range')
+        # An integer accepted by json.loads may be too large for conversion to
+        # float. Reject its magnitude before math.isfinite can overflow.
+        require(abs(value) <= 9007199254740991 and math.isfinite(value), 'number_range')
         require(not (isinstance(value, float) and value == 0 and math.copysign(1, value) < 0), 'negative_zero')
     elif isinstance(value, str):
         require(len(value) <= 16384, 'string_limit')
@@ -79,3 +81,10 @@ def equal(a, b):
     if isinstance(a, list):
         return len(a) == len(b) and all(equal(x, y) for x, y in zip(a, b))
     return a == b
+
+
+def parse_object(raw, **limits):
+    """API request envelopes are objects, although JSON values need not be."""
+    value = parse(raw, **limits)
+    require(isinstance(value, dict), 'request_object', 400)
+    return value

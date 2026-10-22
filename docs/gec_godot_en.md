@@ -121,7 +121,11 @@ The zero digest is a pre-packaging placeholder. The packaging helper computes it
 
 The descriptor is not connection configuration. Never include Owner passwords, roster passwords or participant tokens. GEP injects Web configuration; a native complete release freezes public `connection.json` beside the program. The existing protocol field `purpose: synthetic` remains unchanged for compatibility. Removing preview wording from the interface does not mean changing this field or rewriting old pending queues.
 
+The audit branch temporarily rejects Schema `pattern` and `patternProperties` rules, including nested definitions. Use types, enums, lengths and numeric bounds where appropriate. Existing releases with these rules also refuse new admission and affected events with `schema_regex_unsupported`, rather than silently bypassing validation. Preserve pending data under its original binding; do not delete or relabel it. An ordinary field named `pattern` remains legal. See the [protocol compatibility limits](protocol.md).
+
 ## 5. Export and package
+
+The security-audit branch accepts Stored/Deflate program ZIPs only. Keep using the packaging helpers below; do not switch to BZIP2/LZMA. See the [audit status (Chinese)](SECURITY_AUDIT.md); the released image has not been updated automatically.
 
 Use export templates matching Godot 4.7.2. Adjust the project's own presets; do not replace them with another project's complete preset file.
 

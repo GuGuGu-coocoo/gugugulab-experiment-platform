@@ -121,7 +121,11 @@ func _on_gec_failed(result: Dictionary) -> void:
 
 descriptor 描述程序，不是连接配置。不要写 Owner 密码、名单密码或参与 token。Web 配置由 GEP 注入；原生完整发行的公开 `connection.json` 随包冻结。协议中的 `purpose: synthetic` 是现有兼容字段，保留原值，不因界面去掉“测试”字样而手工改它或替换旧队列配置。
 
+安全审计分支暂不接受 Schema 的 `pattern`／`patternProperties` 正则规则（含嵌套定义）；可用类型、枚举、长度和数值范围表达适用约束。旧发行若含这些规则，也会拒绝新参与及相关事件，返回 `schema_regex_unsupported`，而不是静默跳过校验。不要删掉待传数据或将它重标为新版；普通字段名 `pattern` 不受此限制。详见[协议兼容边界](protocol.md)。
+
 ## 5. 导出和包装
+
+安全审计分支只接受 Stored／Deflate 压缩的程序 ZIP；沿用下列打包助手即可，不使用 BZIP2／LZMA。补丁和未关闭风险见[审计报告](SECURITY_AUDIT.md)，不代表已发布镜像自动更新。
 
 使用 Godot 4.7.2 的同版本导出模板。保留原工程自己的预设，按平台调整，不复制整份别人项目的预设覆盖它。
 

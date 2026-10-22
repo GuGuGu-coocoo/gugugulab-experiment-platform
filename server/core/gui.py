@@ -235,6 +235,8 @@ STUDY_MESSAGES = {
     'schema_object':'schema 必须是 JSON 对象。',
     'schema_definition':'schema 定义不合法：每项必须包含 id、version 与合法 schema。',
     'schema_references_unsupported':'schema 不接受 $ref/$dynamicRef/$id 引用。',
+    'schema_regex_unsupported':'暂不支持 pattern 或 patternProperties 正则规则，请修改实验的数据结构定义后重新上传；已有数据未更改。',
+    'compression_unsupported':'压缩包只支持 Stored 或 Deflate 压缩方式，已整体拒绝。',
     'schema_limit':'schema 数量必须在 1–16 之间。',
     'schema_invalid':'schema 不是合法的 JSON Schema 定义。',
     'descriptor_fields':'构建描述字段不完整或包含未知字段，已整体拒绝。',

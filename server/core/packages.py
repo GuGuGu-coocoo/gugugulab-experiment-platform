@@ -10,6 +10,8 @@ import zipfile
 from pathlib import PurePosixPath
 from jsonschema import Draft202012Validator
 from .protocol import require, parse, Rejected
+from .archives import check_budget
+from .schema_policy import reject_regex_rules
 
 MAX_ARCHIVE=128*1024*1024
 MAX_EXPANDED=256*1024*1024
@@ -68,6 +70,7 @@ _HEADER_BYTES=4096
 
 def schema_safe(schema):
     require(isinstance(schema,dict),'schema_object')
+    reject_regex_rules(schema)
     def walk(node):
         if isinstance(node,dict):
             require(not any(k in node for k in ('$ref','$dynamicRef','$id')), 'schema_references_unsupported')
@@ -480,7 +483,7 @@ def validate_package(raw):
     try:
         archive=zipfile.ZipFile(io.BytesIO(raw))
         entries=archive.infolist()
-        require(0<len(entries)<=256,'file_count')
+        check_budget(entries,max_files=256,max_expanded=MAX_EXPANDED,max_ratio=MAX_COMPRESSION_RATIO)
         paths=set(); total=0
         for item in entries:
             path=PurePosixPath(item.filename)
@@ -537,7 +540,7 @@ def native_program_valid(raw,descriptor):
     try:
         archive=zipfile.ZipFile(io.BytesIO(raw))
         entries=archive.infolist()
-        require(0<len(entries)<=MAX_NATIVE_FILES,'file_count')
+        check_budget(entries,max_files=MAX_NATIVE_FILES,max_expanded=MAX_NATIVE_EXPANDED,max_ratio=MAX_COMPRESSION_RATIO)
         heads=_read_native_payload(archive,entries)
         if platform=='macos_arm64':
             summary=_macos_program(entries,descriptor)

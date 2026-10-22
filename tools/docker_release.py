@@ -48,7 +48,7 @@ def main():
     (output / 'docs').mkdir()
     for name in ('deployment.md', 'deployment_en.md', 'researcher.md', 'researcher_en.md',
                  'gec_godot.md', 'gec_godot_en.md', 'moss_duel_gec.md', 'moss_duel_gec_en.md',
-                 'protocol.md', 'security.md'):
+                 'protocol.md', 'security.md', 'SECURITY_AUDIT.md'):
         guide = ROOT / 'docs' / name
         shutil.copy2(guide, output / 'docs' / guide.name)
     copy_guide_images(output)
