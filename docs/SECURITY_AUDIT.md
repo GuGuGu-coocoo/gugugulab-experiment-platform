@@ -192,6 +192,12 @@ GEP_T17_BROWSER=1 python -m pytest -q \
 
 ## 8. 部署前检查表
 
+### 2026-10-23 镜像续检发现（修复前记录）
+
+已在 Windows 的全新目录／合成卷构建 `6552b1b` 候选镜像；Python 3.12.15、OpenSSL 3.5.7（Debian `3.5.7-1~deb13u3`）、glibc `2.41-12+deb13u4`、PCRE2 `10.46-1~deb13u3`、SQLite `3.46.1-7+deb13u2` 已实际盘点。真实 HTTP 合成升级、拒绝越权、上传去重、完整卷冷备份／恢复和恢复后导出核对通过。运行镜像将移除不需要的 pip；没有更新原有 GEP 镜像、容器或用户数据卷。
+
+**SA-12／High（依赖版本及调用路径静态确认，未执行资源耗尽攻击）**：实际 `caddy:2.11.7` 官方 Linux amd64 镜像 `sha256:504a44d7d74bd2bc28a66afc4774912fc21223ca8a67734af1c54ab2f999b489` 的 `caddy build-info` 显示 Go 1.26.8、`golang.org/x/net v0.59.0`。Go 官方 GO-2026-6603／CVE-2026-78659 指出 HTTP/2 Trailer 可绕过请求头预算造成内存耗尽，修复于 Go 1.26.9／x/net 0.60.0；公开 HTTPS Caddy 使用相关 HTTP/2 服务路径，不能只以“不主动调用危险工具”排除。另外 GO-2026-6809／CVE-2026-111943 的证书信任修补需 Go 1.26.10。代理当前未部署此次补丁；计划保持 Caddy 2.11.7 功能版本，重建到 Go 1.26.10、x/net 0.60.0 后重新扫描／验证。`golang.org/x/crypto` 的 OpenPGP 停维公告另核对二进制是否实际链接对应包，不因整个模块存在就直接认定可达。[HTTP/2 公告](https://pkg.go.dev/vuln/GO-2026-6603)、[证书公告](https://pkg.go.dev/vuln/GO-2026-6809)、[Go 修订记录](https://go.dev/doc/devel/release)、[OpenPGP 公告](https://pkg.go.dev/vuln/GO-2026-5932)。
+
 - [ ] 在目标部署和旧设备关闭 SA-01 的残余边界：处理旧队列、检查完整旧缓存／Service Worker 与曾暴露凭据，不用清库掩盖风险；原版升级前不能据分支测试宣称隔离已生效。
 - [ ] SA-02 补丁部署前先核对旧冻结 Schema 是否使用正则、受影响待传记录与兼容发布安排；不删数据或跳过校验。只读检查真实数据另需授权，本轮没有进行。
 - [ ] 在隔离环境构建补丁镜像，逐项裁定 SA-09，并核对 CPython／OS／OpenSSL／SQLite／Caddy／Go 的实际 SBOM 与公告；检查宿主／其他应用是否另装 PHP 及其补丁。
