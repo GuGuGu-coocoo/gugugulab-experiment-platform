@@ -31,7 +31,7 @@ SQLITE_MEMBERS = (
     'addons/godot-sqlite/bin/libgdsqlite.macos.template_release.framework/libgdsqlite.macos.template_release',
 )
 DOC_LINKS = ('gec_godot.md', 'gec_godot_en.md', 'moss_duel_gec.md', 'moss_duel_gec_en.md', 'experiment_developer.md', 'protocol.md',
-             'researcher.md', 'researcher_en.md', 'maintainer.md', 'deployment.md', 'deployment_en.md', 'security.md', 'SECURITY_AUDIT.md')
+             'researcher.md', 'researcher_en.md', 'maintainer.md', 'deployment.md', 'deployment_en.md', 'security.md', 'SECURITY_AUDIT.md', 'security_component_review.md')
 
 
 def read_source(path: Path) -> bytes:
