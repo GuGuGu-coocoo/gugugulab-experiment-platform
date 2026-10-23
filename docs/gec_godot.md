@@ -6,6 +6,8 @@ GEC 是接入依赖，不是实验 Runner。你的 Godot 项目负责刺激、�
 
 当前版本是 GEC 0.1.0、协议 `gep/1`，宿主为 Godot 4.7.2 标准版。Web 使用 Compatibility、单线程和 Chrome；原生依赖提供 macOS universal 与 Windows x64，macOS 实际运行验证为 arm64。其他浏览器、ARM Windows 或 Linux 原生实验不在当前验证范围内。
 
+GEP 服务端 0.1.1 安全更新不更改 GEC SDK 版本或实验程序。现有部署按[升级说明](upgrade_0_1_1.md)处理来源隔离和旧队列，不为升级重写冻结包或改变科学任务。
+
 ## 1. 获取通用依赖
 
 GEP 服务端发行包只交付 Docker，不是 Godot 插件安装器。GEC 源码在仓库的 [GEC_SDK 文件夹](../GEC_SDK/)，包含 Godot 接入代码和 Web SDK。已有维护者提供的 `gec_godot_0_1_0.zip` 时直接进入下一节；包不能包含特定游戏、账号或固定研究连接。

@@ -15,6 +15,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 EXPOSE 8000
 CMD ["gunicorn", "gep.docker_wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "1", "--threads", "4", "--access-logfile", "/dev/null"]
 ARG GEP_REVISION=development
-LABEL org.opencontainers.image.title="GEP" org.opencontainers.image.version="0.1.0" \
+LABEL org.opencontainers.image.title="GEP" org.opencontainers.image.version="0.1.1" \
       org.opencontainers.image.source="https://github.com/GuGuGu-coocoo/gugugulab-experiment-platform" \
       org.opencontainers.image.revision=$GEP_REVISION

@@ -102,7 +102,7 @@ Use participation records to search an ID, filter completion state and check tim
 
 **Completed** means the server has a completion declaration and all declared events/segments. Other records are grouped as in progress or incomplete. Task finished, saved on this device and received by the server are separate facts: a finished task with pending upload is not yet server-complete.
 
-When uploads fail, retain the original device, browser storage, program files and error details. Do not clear caches, switch versions or delete files to hide the failure. Recovery-code and permit controls are not exposed in 0.1.0. Retaining data does not guarantee task-state recovery.
+When uploads fail, retain the original device, browser storage, program files and error details. Do not clear caches, switch versions or delete files to hide the failure. Recovery-code and permit controls are not exposed in GEP 0.1.1. Retaining data does not guarantee task-state recovery. Administrators should read the [0.1.1 upgrade guide](upgrade_0_1_1_en.md) before updating the server, without recreating accounts or studies.
 
 ![Participation records: ID search and completion filters, with completed, in-progress and incomplete examples](images/en/07_sessions.png)
 

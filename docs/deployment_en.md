@@ -2,11 +2,11 @@
 
 English · [中文](deployment.md)
 
-This guide uses the GEP 0.1.0 Docker release. Start locally, or use a VPS or your own server. The Linux instructions target a fresh Ubuntu 24.04/26.04 LTS x86_64 server. The supplied image is linux/amd64, not ARM.
+This guide uses the GEP 0.1.1 Docker release. Start locally, or use a VPS or your own server. The Linux instructions target a fresh Ubuntu 24.04/26.04 LTS x86_64 server. The supplied image is linux/amd64, not ARM. Existing instances need the [upgrade guide](upgrade_0_1_1_en.md), not another first-run installation.
 
-Read the [security audit and open findings (Chinese)](SECURITY_AUDIT.md) before deployment. Audit-branch fixes have not replaced the 0.1.0 attachment. The actual image, host PHP components, certificates, logs and backups still need environment-specific verification.
+Read the [security audit and open findings (Chinese)](SECURITY_AUDIT.md) before deployment. This release includes the audit fixes; the unchanged 0.1.0 attachment does not. Host PHP components, certificates, logs, backups and actual production configuration still need environment-specific verification.
 
-The security-branch runtime image does not retain pip: rebuild the image to update dependencies rather than installing software inside a running container. New deployment bundles include both GEP and a rebuilt Caddy image. Public Compose uses `gep-caddy:2.11.7-go1.26.10`; do not substitute the unpatched upstream binary with the same Caddy feature version.
+The runtime image does not retain pip: rebuild the image to update dependencies rather than installing software inside a running container. The deployment bundle includes both GEP and a rebuilt Caddy image. Public Compose uses `gep-caddy:2.11.7-go1.26.10`; do not substitute the unpatched upstream binary with the same Caddy feature version.
 
 ## 1. Prepare the server
 
@@ -58,10 +58,10 @@ On Linux, create a deployment directory owned by your account:
 ```sh
 mkdir -p gep
 cd gep
-curl -fL -o gep_0_1_0_docker_linux_amd64.zip \
-  https://github.com/GuGuGu-coocoo/gugugulab-experiment-platform/releases/download/v0.1.0/gep_0_1_0_docker_linux_amd64.zip
-unzip gep_0_1_0_docker_linux_amd64.zip
-cd gep_0_1_0_docker_linux_amd64
+curl -fL -o gep_0_1_1_docker_linux_amd64.zip \
+  https://github.com/GuGuGu-coocoo/gugugulab-experiment-platform/releases/download/v0.1.1/gep_0_1_1_docker_linux_amd64.zip
+unzip gep_0_1_1_docker_linux_amd64.zip
+cd gep_0_1_1_docker_linux_amd64
 sudo sh deploy/linux.sh start
 ```
 
@@ -99,9 +99,9 @@ For local use, you can skip this section. Entering a domain in the wizard saves 
 
 For `example.com`, create DNS records for `admin.example.com` and `experiment.example.com`, both pointing to the server's public address. Add AAAA only if IPv6 is actually configured. Leave the personal website's root/www records alone. Ordinary DNS records are sufficient; GEP does not need your DNS-provider credentials.
 
-The security-audit branch also needs `*.experiment.example.com` pointing to that server for isolated release and preview hosts. The original 0.1.0 attachment does not include this patch.
+Version 0.1.1 also needs `*.experiment.example.com` pointing to that server for isolated release and preview hosts. The original 0.1.0 attachment does not include this patch.
 
-Ensure public TCP ports 80 and 443 can reach the server; retain your own SSH access restrictions. Do not expose 8000 or 8080. Docker-published ports may bypass ordinary ufw rules, so check cloud security groups and Docker network rules as well; see [Docker's firewall notes](https://docs.docker.com/engine/network/packet-filtering-firewalls/). Do not replace existing firewall rules for this guide. If a reverse proxy already owns 80/443, route the workbench, portal and audit branch's isolated hosts through it instead of stopping an existing website.
+Ensure public TCP ports 80 and 443 can reach the server; retain your own SSH access restrictions. Do not expose 8000 or 8080. Docker-published ports may bypass ordinary ufw rules, so check cloud security groups and Docker network rules as well; see [Docker's firewall notes](https://docs.docker.com/engine/network/packet-filtering-firewalls/). Do not replace existing firewall rules for this guide. If a reverse proxy already owns 80/443, route the workbench, portal and isolated experiment hosts through it instead of stopping an existing website.
 
 In the deployment directory, run `sudoedit .env` and change the existing empty setting. The file is root-owned after an initial sudo launch:
 
@@ -119,13 +119,13 @@ sudo docker compose --env-file .env -f compose.public.yaml logs --tail 60 caddy
 
 Do not stack the two Compose files. The public configuration exposes only Caddy on 80/443, not the application port. When DNS and network access are ready, Caddy obtains and renews certificates; see [Automatic HTTPS](https://caddyserver.com/docs/automatic-https). Retain its certificate volume too.
 
-For `r-<release UUID hex>.experiment.example.com` and `p-<build UUID hex>.experiment.example.com`, the audit template uses per-name certificates and a private allowlist hook; public requests to `/_internal/*` are blocked. No DNS-provider credentials or wildcard certificate are required. DNS remains the deployer's responsibility; first connections can wait for issuance and CA quotas still apply. Do not bypass certificate errors or fall back to a shared origin. See [On-Demand TLS](https://caddyserver.com/docs/caddyfile/options#on-demand-tls). Updating the proxy alone does not update the old application image.
+For `r-<release UUID hex>.experiment.example.com` and `p-<build UUID hex>.experiment.example.com`, the 0.1.1 template uses per-name certificates and a private allowlist hook; public requests to `/_internal/*` are blocked. No DNS-provider credentials or wildcard certificate are required. DNS remains the deployer's responsibility; first connections can wait for issuance and CA quotas still apply. Do not bypass certificate errors or fall back to a shared origin. See [On-Demand TLS](https://caddyserver.com/docs/caddyfile/options#on-demand-tls). Updating the proxy alone does not update the old application image.
 
 Check `https://admin.example.com/login` and `https://experiment.example.com/`. The browser should accept the certificate, and workbench login should succeed. Investigate certificate warnings instead of bypassing them. Log in again on the new domain: local/HTTP session cookies are not transferred.
 
 Before opening participation, run a synthetic study through upload, participation, completion and export. These instructions do not claim that your server or public network has already been verified.
 
-Before adopting this branch, keep the original volume/API address and a complete backup, and rehearse migration `0016_browser_origin` on a new synthetic volume. Old browser queues remain on their original origin with a trusted upload page; tasks are not automatically resumed or relabelled. Old caches and Service Workers require separate checks: do not clear storage to force an upgrade. This audit has not changed your DNS, certificates, Windows or VPS deployment.
+Before adopting 0.1.1, keep the original volume/API address and a complete backup, and follow the [upgrade guide](upgrade_0_1_1_en.md), including migration `0016_browser_origin` rehearsed on a new synthetic volume. Old browser queues remain on their original origin with a trusted upload page; tasks are not automatically resumed or relabelled. Old caches and Service Workers require separate checks: do not clear storage to force an upgrade. Downloading the archive does not change DNS or certificates.
 
 The HTTPS patch also enables browser-enforced host-bound cookie names. Sign in again and refresh old forms; accounts, passwords and participant credentials are unchanged. The name change does not revoke a previously stolen session.
 
@@ -150,7 +150,7 @@ sudo docker compose --env-file .env -f compose.public.yaml up -d --wait
 
 Confirm that both backup and archive inspection succeeded, then copy the new `backup_…` directory to independent, protected storage. It contains server secrets; never attach it to public issues. Back up Caddy's certificate volume separately. Each run uses a new directory rather than overwriting the previous backup. Binary redirection above is for a Linux shell, not Windows PowerShell 5.1. On Windows, stop writes and use a backup method suitable for your Docker Desktop version; see the [Docker volume documentation](https://docs.docker.com/engine/storage/volumes/#back-up-restore-or-migrate-data-volumes).
 
-Before upgrading, back up and rehearse on an isolated copy. Load the new image, update the launch files and `GEP_IMAGE` in the **existing deployment directory**, retaining its volume, project and UUID. Recreate containers with the configuration you actually use. Follow version-specific migration notes when applicable. Do not run `down -v`, prune volumes or reinitialize the original volume. An older application must not blindly open a database that has already been migrated.
+Before upgrading, back up and rehearse on an isolated copy. For 0.1.0 → 0.1.1, follow the [version-specific guide](upgrade_0_1_1_en.md): load images, update the original deployment files, explicitly migrate, then start containers. Retain the original `.env`, volume, project and UUID. Do not run `down -v`, prune volumes or reinitialize the original volume. An older application must not blindly open a database that has already been migrated.
 
 ## 8. Troubleshooting
 
@@ -160,4 +160,4 @@ Before upgrading, back up and rehearse on an isolated copy. Load the new image, 
 - **A saved domain is unreachable:** the wizard does not change DNS or routing. Check the section 5 prerequisites and certificates.
 - **Public login or forms are refused:** use the matching HTTPS configuration. Do not disable CSRF or trust client-supplied forwarding headers indiscriminately; see [security notes](security.md).
 
-Publishing 0.1.0 does not establish research approval, consent, retention policy, capacity or scientific timing accuracy. Existing engineering checks are described in [verification](verification.md).
+Publishing 0.1.1 does not establish research approval, consent, retention policy, capacity or scientific timing accuracy. Existing engineering checks are described in [verification](verification.md).

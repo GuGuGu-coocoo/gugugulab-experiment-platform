@@ -1,6 +1,6 @@
 # 维护者说明
 
-2026-10-22 安全审计补丁仅在 `codex/security-audit-20261022`，详情见 [SECURITY_AUDIT.md](SECURITY_AUDIT.md)。新增准入总预算、归档解析前完整预算及 Stored／Deflate 限制、匿名上传解析前拒绝、受控 JSON 根类型／数值拒绝，并将 Docker Python 基线更新为 3.12.15、开发 pytest 更新为 9.0.3。用户已同意暂禁 Schema 正则：旧发行的新参与和涉及这些规则的事件也拒绝；先检查受影响的冻结定义和待传数据，再安排新版本，不能重标或删除队列绕过。未迁移用户数据库、改写旧包、清理用户队列或部署；公开旧镜像已静态盘点，但新镜像、宿主和生产配置仍未验证，不能把分支测试当成生产安全结论。
+GEP 0.1.1 收录 2026-10-22 起的安全补修，已合并 main，详情见 [SECURITY_AUDIT.md](SECURITY_AUDIT.md)。新增准入总预算、归档解析前完整预算及 Stored／Deflate 限制、匿名上传解析前拒绝、受控 JSON 根类型／数值拒绝，并将 Docker Python 基线更新为 3.12.15、开发 pytest 更新为 9.0.3。用户已同意暂禁 Schema 正则：旧发行的新参与和涉及这些规则的事件也拒绝；先检查受影响的冻结定义和待传数据，再安排新版本，不能重标或删除队列绕过。隔离 Docker／TLS／恢复证据与后续授权的本地原卷升级分别记录；不能当作公网生产安全结论。
 
 同日追加授权的来源隔离：门户不执行上传程序，Web 逐发行使用 `r-<UUID hex>` 子域名，预览逐构建使用 `p-<UUID hex>`；API 地址不改，CORS 精确并核对发行／会话，原生授权保持。旧数据留原来源，由可信 `/local-data` 页面按原暂停／退避／ACK 补传，不自动续试。新增 `0016_browser_origin` 只存公开路由标签，既有 Web 构建／发行登记后不改原记录；删除后保留标签仅供可信处理页／TLS 路由，不恢复材料、身份或读写权。旧缓存／Service Worker／曾泄漏凭据仍需独立核查，不宣称整体 High 已关闭。
 
@@ -8,7 +8,7 @@ HTTPS 的 Session／CSRF 名称改为 `__Host-gep_admin`／`__Host-gep_csrf`，�
 
 Docker 新增复制**固定的** `GEC_SDK/gec_web/sdk.js` 维护源供可信页复用，`.dockerignore` 只额外放行这一文件，不收集整个 SDK、示例或本机数据。Caddy 模板采用内部许可的逐名称 On-Demand TLS，公开路由阻断 `/_internal/*`；向导仅生成待启用文件。实际 DNS／证书／镜像／卷升级仍需授权和验证。
 
-现有卷不会由网页或服务启动自动迁移。未来采用补丁镜像时，先停写并完成完整备份及合成卷演练，再用**同一部署配置**执行迁移，配置中的卷名／实例 UUID 不可更换。例如维护者可在已确认的隔离演练目录运行下列命令；本轮没有在用户原卷执行，也尚无新正式附件：
+现有卷不会由网页或服务启动自动迁移。按[0.1.1 升级说明](upgrade_0_1_1.md)先停写、完整备份并完成合成卷演练，再用**同一部署配置**执行迁移，配置中的卷名／实例 UUID 不可更换。例如在已确认的演练目录运行：
 
 ```sh
 docker compose --env-file .env -f compose.yaml run --rm --no-deps gep python -c \
@@ -76,12 +76,12 @@ R11W 的正式 Windows 工程验证使用 `.venv/bin/python tools/remediation_wi
 在只含公开代码的构建目录准备两份同平台镜像，再构包（不会上传注册表或创建 Release）：
 
 ```sh
-docker build -f deploy/Dockerfile -t gep:security-candidate .
+docker build -f deploy/Dockerfile -t gep:0.1.1 --build-arg GEP_REVISION="$(git rev-parse HEAD)" .
 docker build -f deploy/Caddy.Dockerfile -t gep-caddy:2.11.7-go1.26.10 .
-python tools/docker_release.py --image gep:security-candidate --output build/security_candidate
+python tools/docker_release.py --image gep:0.1.1 --output build/gep_0_1_1_docker_linux_amd64
 ```
 
-`gep-image.tar` 同时保存应用与修补代理，`docker-release.json` 记录两个实际镜像 ID。旧发行附件不变；加载新包后再切换公开 Compose，不仅更换 Caddyfile。不会自动迁移已有数据库，仍按版本说明显式执行迁移和核对。
+`gep-image.tar` 同时保存应用与修补代理，`docker-release.json` 从 `pyproject.toml` 读取 GEP 版本并记录两个实际镜像 ID；离线指南的源码链接固定到同版标签。旧 0.1.0 附件不变；加载新包后再切换公开 Compose，不仅更换 Caddyfile。不会自动迁移已有数据库，仍按版本说明显式执行迁移和核对。
 
 # 当前界面迭代（2026-10-20）
 

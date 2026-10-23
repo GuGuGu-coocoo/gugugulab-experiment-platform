@@ -6,7 +6,9 @@ GEP is a self-hosted platform for publishing experiments, managing participation
 
 ## Download and deploy
 
-[Download GEP 0.1.0](https://github.com/GuGuGu-coocoo/gugugulab-experiment-platform/releases/tag/v0.1.0). The release contains a Linux **amd64 Docker image**, Compose files and launchers for Linux and Windows. You do not need Python, Node or Godot on the server. ARM servers need a separate build; this download is not an ARM image.
+[Download GEP 0.1.1](https://github.com/GuGuGu-coocoo/gugugulab-experiment-platform/releases/tag/v0.1.1). This security update contains Linux **amd64 Docker images** for GEP and the patched HTTPS proxy, Compose files and launchers for Linux and Windows. You do not need Python, Node or Godot on the server. ARM servers need a separate build; this download is not an ARM image.
+
+Already running GEP? Follow the [0.1.0 → 0.1.1 upgrade guide](docs/upgrade_0_1_1_en.md), not the first-run steps below. Keep the existing account, data volume and configuration; database migration and public-origin configuration require explicit steps. [0.1.0 remains available](https://github.com/GuGuGu-coocoo/gugugulab-experiment-platform/releases/tag/v0.1.0) unchanged, but does not contain these fixes.
 
 - **Windows:** install Docker Desktop, start its Linux container engine, extract the release and double-click `deploy/start_windows.cmd`.
 - **Linux or a VPS:** install Docker Engine and Compose, extract the release and run `sudo sh deploy/linux.sh start`.
@@ -24,7 +26,7 @@ The [deployment guide](docs/deployment_en.md) starts with a new server and cover
 - Participation records, completion filters and permission-checked data exports.
 - Owner, Admin and member accounts, with per-study visibility and permissions.
 
-GEP and GEC interfaces support Chinese and English. Recovery controls are not exposed in 0.1.0; existing local data and pending uploads are retained.
+GEP and GEC interfaces support Chinese and English. Recovery controls are not exposed in GEP 0.1.1; existing local data and pending uploads are retained. The GEC SDK remains 0.1.0, using protocol `gep/1`.
 
 ## Guides
 

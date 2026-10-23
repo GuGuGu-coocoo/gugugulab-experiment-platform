@@ -43,7 +43,7 @@ if (-not (Test-Path -LiteralPath $envPath)) {
     if (-not $Image -and (Test-Path -LiteralPath $manifest)) {
         $Image = (Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json).image
     }
-    if (-not $Image) { $Image = 'gep:0.1.0' }
+    if (-not $Image) { $Image = 'gep:0.1.1' }
     $images = @(Invoke-Docker image ls --format '{{.Repository}}:{{.Tag}}')
     if ($Image -notin $images) {
         $archive = Join-Path $root 'gep-image.tar'

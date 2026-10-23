@@ -2,7 +2,7 @@
 name: ${GEP_PROJECT_NAME:?Keep the original project name}
 services:
   gep:
-    image: ${GEP_IMAGE:-gep:0.1.0}
+    image: ${GEP_IMAGE:-gep:0.1.1}
     environment:
       GEP_EXPECTED_INSTANCE: ${GEP_EXPECTED_INSTANCE:?Keep the initialized instance UUID}
       GEP_DATA_DIR: /data

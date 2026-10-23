@@ -2,11 +2,11 @@
 
 [English](deployment_en.md) · 中文
 
-这份教程使用 GEP 0.1.0 的 Docker 发行包。可以先在本机运行，也可以部署到 VPS 或自己的服务器。以下 Linux 步骤以全新的 Ubuntu 24.04／26.04 LTS、x86_64 服务器为例；发行镜像是 linux/amd64，不适用于 ARM 服务器。
+这份教程使用 GEP 0.1.1 的 Docker 发行包。可以先在本机运行，也可以部署到 VPS 或自己的服务器。以下 Linux 步骤以全新的 Ubuntu 24.04／26.04 LTS、x86_64 服务器为例；发行镜像是 linux/amd64，不适用于 ARM 服务器。已有实例先看[升级说明](upgrade_0_1_1.md)，不要按首次安装创建另一个实例。
 
-部署前先看[安全审计与未关闭风险](SECURITY_AUDIT.md)。审计分支的补丁尚未替换 0.1.0 附件；生产镜像、宿主 PHP、证书、日志与备份仍需在实际环境核查。
+部署前先看[安全审计与未关闭风险](SECURITY_AUDIT.md)。本版包含审计补修；0.1.0 附件保留但不含补丁。宿主 PHP、证书、日志、备份与实际生产配置仍需在目标环境核查。
 
-安全分支的运行镜像不保留 pip，依赖更新须重新构建镜像。新部署包同时携带应用和修补后的 Caddy 镜像，公开 Compose 使用 `gep-caddy:2.11.7-go1.26.10`；不要换回未修补的同版本代理，也不要在运行容器中安装软件。
+运行镜像不保留 pip，依赖更新须重新构建镜像。部署包同时携带应用和修补后的 Caddy 镜像，公开 Compose 使用 `gep-caddy:2.11.7-go1.26.10`；不要换回未修补的同版本代理，也不要在运行容器中安装软件。
 
 ## 1. 准备服务器
 
@@ -58,10 +58,10 @@ Linux 服务器上建立一个自己的部署目录：
 ```sh
 mkdir -p gep
 cd gep
-curl -fL -o gep_0_1_0_docker_linux_amd64.zip \
-  https://github.com/GuGuGu-coocoo/gugugulab-experiment-platform/releases/download/v0.1.0/gep_0_1_0_docker_linux_amd64.zip
-unzip gep_0_1_0_docker_linux_amd64.zip
-cd gep_0_1_0_docker_linux_amd64
+curl -fL -o gep_0_1_1_docker_linux_amd64.zip \
+  https://github.com/GuGuGu-coocoo/gugugulab-experiment-platform/releases/download/v0.1.1/gep_0_1_1_docker_linux_amd64.zip
+unzip gep_0_1_1_docker_linux_amd64.zip
+cd gep_0_1_1_docker_linux_amd64
 sudo sh deploy/linux.sh start
 ```
 
@@ -107,11 +107,11 @@ ssh -N -L localhost:8080:127.0.0.1:8080 your_user@your_server_ip
 |---|---|
 | `admin.example.com` | GEP 服务器的公网地址 |
 | `experiment.example.com` | 同一服务器的公网地址 |
-| `*.experiment.example.com`（安全审计分支） | 同一服务器的公网地址，供独立实验／预览来源使用 |
+| `*.experiment.example.com` | 同一服务器的公网地址，供独立实验／预览来源使用 |
 
 只有实际配置了 IPv6 才添加 AAAA；错误的 AAAA 会影响连接和证书验证。保留原个人网站的根域名／www 记录。普通 DNS 模式就够了，不需要给 GEP 提供 DNS 服务商密钥。
 
-确认服务器的公网入口允许 TCP 80 和 443，SSH 仍仅按自己的管理安排开放。不要开放 8000 或 8080。Docker 发布的端口可能绕过 ufw 的常规规则，应同时核对云安全组和 Docker 网络规则，见 [Docker 防火墙说明](https://docs.docker.com/engine/network/packet-filtering-firewalls/)。不要为本教程覆盖已有防火墙。如果 80／443 已由自己的代理占用，让原代理转发后台、门户及审计分支的独立来源；不要直接停掉已有网站来腾端口。
+确认服务器的公网入口允许 TCP 80 和 443，SSH 仍仅按自己的管理安排开放。不要开放 8000 或 8080。Docker 发布的端口可能绕过 ufw 的常规规则，应同时核对云安全组和 Docker 网络规则，见 [Docker 防火墙说明](https://docs.docker.com/engine/network/packet-filtering-firewalls/)。不要为本教程覆盖已有防火墙。如果 80／443 已由自己的代理占用，让原代理转发后台、门户及独立实验来源；不要直接停掉已有网站来腾端口。
 
 回到部署目录，用 `sudoedit .env` 编辑配置（首次通过 sudo 启动后，该文件由 root 持有），将现有空行改为：
 
@@ -129,13 +129,13 @@ sudo docker compose --env-file .env -f compose.public.yaml logs --tail 60 caddy
 
 不要把两个 Compose 文件用 `-f` 叠加。公网配置不映射 GEP 应用端口，只有 Caddy 对外提供 80／443。Caddy 在 DNS 和网络条件具备后自动申请、续期证书；详见 [Caddy 自动 HTTPS](https://caddyserver.com/docs/automatic-https)。它的证书卷也要保留。
 
-审计分支还使用 `r-<发行 UUID hex>.experiment.example.com` 与 `p-<构建 UUID hex>.experiment.example.com`。Caddy 按实际名称申请证书，内部许可接口只接受已登记／合法构建发行的名称，公网禁止访问 `/_internal/*`；不需要 DNS 服务商密钥或通配证书。DNS 条件仍要由部署者完成，首次连接可能等待证书签发，也受 CA 配额约束；没有解析或证书时停止诊断，不回退到共享来源、不忽略证书错误。[Caddy On-Demand TLS](https://caddyserver.com/docs/caddyfile/options#on-demand-tls)。原版附件不包含该补丁，不能只换代理模板就算升级完成。
+本版使用 `r-<发行 UUID hex>.experiment.example.com` 与 `p-<构建 UUID hex>.experiment.example.com`。Caddy 按实际名称申请证书，内部许可接口只接受已登记／合法构建发行的名称，公网禁止访问 `/_internal/*`；不需要 DNS 服务商密钥或通配证书。DNS 条件仍要由部署者完成，首次连接可能等待证书签发，也受 CA 配额约束；没有解析或证书时停止诊断，不回退到共享来源、不忽略证书错误。[Caddy On-Demand TLS](https://caddyserver.com/docs/caddyfile/options#on-demand-tls)。原版 0.1.0 不包含补丁，不能只换代理模板就算升级完成。
 
 现在检查 `https://admin.example.com/login` 和 `https://experiment.example.com/`。浏览器应认可证书，后台应可登录。看到证书警告时停止检查并诊断，不点击忽略。原 HTTP／localhost 登录 Cookie 不迁移到新域名，重新登录即可。
 
 首次上线先用合成研究核对一次上传、实际参与、完成状态和导出。这里提供部署步骤，不把未在你服务器上运行过的步骤写成已验收。
 
-升级到隔离分支前保留原卷、API 地址和完整备份，先在新合成卷演练 `0016_browser_origin` 迁移。旧本机记录保留原来源，门户提供可信补传页，不自动续接旧任务或把数据移动到新版本；旧浏览器缓存／Service Worker 需另行核查，不能为迁移直接清存储。本轮没有对你的 DNS、证书、Windows 或 VPS 执行这些操作。
+升级到 0.1.1 前保留原卷、API 地址和完整备份，按[升级说明](upgrade_0_1_1.md)先在新合成卷演练 `0016_browser_origin` 迁移。旧本机记录保留原来源，门户提供可信补传页，不自动续接旧任务或把数据移动到新版本；旧浏览器缓存／Service Worker 需另行核查，不能为迁移直接清存储。下载安装包本身不会修改 DNS 或证书。
 
 HTTPS 补丁还启用浏览器强制的主机绑定 Cookie 名称；重新登录并刷新旧表单即可，不重设账号、密码或参与者凭据。名称变化不是已泄漏会话的自动撤销机制。
 
@@ -160,7 +160,7 @@ sudo docker compose --env-file .env -f compose.public.yaml up -d --wait
 
 确认备份命令及归档检查成功后，把新建 `backup_…` 目录转存到独立、受保护的位置。备份内有服务器秘密，不上传公开仓库或 Issue；另行保留 Caddy 证书卷。命令每次新建目录，不覆盖旧备份。上面的二进制重定向是 Linux shell 用法，不要照搬到 Windows PowerShell 5.1。Windows 应在停止服务后用适用于当前 Docker Desktop 的卷备份方式；参见 [Docker 卷说明](https://docs.docker.com/engine/storage/volumes/#back-up-restore-or-migrate-data-volumes)。
 
-升级前先备份，并在隔离副本上演练。加载新版发行包中的镜像，更新**原部署目录**的启动文件和 `GEP_IMAGE`，保留原 `.env` 的卷、项目名和实例 UUID，再用正在使用的 Compose 配置重建容器。涉及迁移的版本按该版升级说明执行。不要运行 `down -v`、卷 prune 或重新初始化原卷；回退也不能让旧程序盲读已经迁移的新库。
+升级前先备份，并在隔离副本上演练。0.1.0 → 0.1.1 必须按[专用升级说明](upgrade_0_1_1.md)载入镜像、更新原部署文件并显式迁移，再启动容器；保留原 `.env` 的卷、项目名和实例 UUID。不要运行 `down -v`、卷 prune 或重新初始化原卷；回退也不能让旧程序盲读已经迁移的新库。
 
 ## 8. 常见问题
 
@@ -170,4 +170,4 @@ sudo docker compose --env-file .env -f compose.public.yaml up -d --wait
 - **域名已填但外网不可访问：**向导不操作 DNS／路由，按第 5 节完成并检查解析、端口和证书。
 - **公网登录或表单被拒绝：**使用配套 HTTPS 配置，不随意信任客户端转发头，不关闭 CSRF。代理设置见[安全说明](security.md)。
 
-0.1.0 的发布不代替研究伦理、同意、保留政策、容量及科学计时验证。已有工程记录见[验证说明](verification.md)。
+0.1.1 的发布不代替研究伦理、同意、保留政策、容量及科学计时验证。已有工程记录见[验证说明](verification.md)。

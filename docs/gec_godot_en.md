@@ -6,6 +6,8 @@ GEC is an integration dependency, not an experiment runner. Your Godot project c
 
 This guide targets GEC 0.1.0, protocol `gep/1` and Godot 4.7.2 standard. Web uses Compatibility, single-threaded export and Chrome. Native dependencies cover macOS universal and Windows x64; actual macOS runtime checks used arm64. Other browsers, ARM Windows and native Linux experiments are outside the current validation scope.
 
+The GEP 0.1.1 server security update does not change the GEC SDK version or experiment program. Follow the [upgrade guide](upgrade_0_1_1_en.md) for isolated origins and old queues; do not rewrite frozen packages or scientific tasks to upgrade the server.
+
 ## 1. Get the generic dependency
 
 The GEP server release is Docker-only, not a Godot plugin installer. The repository's [GEC_SDK folder](../GEC_SDK/) contains the Godot integration code and Web SDK. If a maintainer supplied `gec_godot_0_1_0.zip`, continue with installation. A generic package must not include a particular game, account or fixed study connection.

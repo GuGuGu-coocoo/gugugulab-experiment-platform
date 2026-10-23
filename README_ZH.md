@@ -6,7 +6,9 @@ GEP 是可以部署在自己服务器上的实验管理平台，用来发布实�
 
 ## 下载与部署
 
-[下载 GEP 0.1.0](https://github.com/GuGuGu-coocoo/gugugulab-experiment-platform/releases/tag/v0.1.0)。发行包包含 **Linux amd64 Docker 镜像**、Compose 配置和 Linux／Windows 启动脚本。服务器不用安装 Python、Node 或 Godot。ARM 服务器需要另行构建，不能直接使用这个镜像。
+[下载 GEP 0.1.1](https://github.com/GuGuGu-coocoo/gugugulab-experiment-platform/releases/tag/v0.1.1)。本次为安全修复版，包含 GEP 与修补后 HTTPS 代理的 **Linux amd64 Docker 镜像**、Compose 配置和 Linux／Windows 启动脚本。服务器不用安装 Python、Node 或 Godot。ARM 服务器需要另行构建，不能直接使用这个镜像。
+
+已经部署过 GEP 时，请按 [0.1.0 → 0.1.1 升级说明](docs/upgrade_0_1_1.md)操作，不要重新进行下面的首次设置。保留原账号、数据卷和配置，显式完成数据库迁移及公网来源配置。[0.1.0 保持原样](https://github.com/GuGuGu-coocoo/gugugulab-experiment-platform/releases/tag/v0.1.0)，但不包含本次修复。
 
 - **Windows：**安装 Docker Desktop，启动 Linux 容器引擎，解压发行包，双击 `deploy/start_windows.cmd`。
 - **Linux 或 VPS：**安装 Docker Engine 和 Compose，解压发行包，运行 `sudo sh deploy/linux.sh start`。
@@ -24,7 +26,7 @@ GEP 是可以部署在自己服务器上的实验管理平台，用来发布实�
 - 查看参与记录，按完成状态筛选，按权限导出数据。
 - 管理 Owner、Admin 和成员账号，按研究分配可见性和权限。
 
-GEP 和 GEC 界面支持中文和英文。0.1.0 暂不公开恢复入口；已有本地数据和待上传记录仍保留。
+GEP 和 GEC 界面支持中文和英文。GEP 0.1.1 暂不公开恢复入口；已有本地数据和待上传记录仍保留。GEC SDK 仍为 0.1.0，协议仍为 `gep/1`。
 
 ## 教程
 

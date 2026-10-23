@@ -18,15 +18,19 @@ def bundle(tmp_path, monkeypatch):
     monkeypatch.setattr(release, 'ROOT', tmp_path)
     # Minimal synthetic guide tree; no real images, data or Docker daemon.
     files = ('compose.yaml','compose.public.yaml','.env.example','deploy/windows.ps1',
-             'deploy/start_windows.cmd','deploy/linux.sh','deploy/Caddyfile','LICENSE','README.md','README_ZH.md',
-             'third_party/godot_sqlite_license.md')
+             'deploy/start_windows.cmd','deploy/linux.sh','deploy/Caddyfile','deploy/README.md','LICENSE','README.md','README_ZH.md',
+             'third_party/godot_sqlite_license.md','CHANGELOG.md')
     guides = ('deployment.md','deployment_en.md','researcher.md','researcher_en.md',
               'gec_godot.md','gec_godot_en.md','moss_duel_gec.md','moss_duel_gec_en.md',
-              'protocol.md','security.md','SECURITY_AUDIT.md','security_component_review.md')
+              'protocol.md','security.md','SECURITY_AUDIT.md','security_component_review.md',
+              'upgrade_0_1_1.md','upgrade_0_1_1_en.md','release_notes_0_1_1.md')
     for name in (*files, *('docs/'+name for name in guides)):
         path = tmp_path/name; path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('synthetic guide', encoding='utf-8')
     (tmp_path/'compose.public.yaml').write_text('image: ${GEP_CADDY_IMAGE:-gep-caddy:2.11.7-go1.26.10}')
+    (tmp_path/'pyproject.toml').write_text('[project]\nversion = "0.1.1"\n')
+    (tmp_path/'GEC_SDK').mkdir()
+    (tmp_path/'README.md').write_text('[SDK](GEC_SDK/)')
     monkeypatch.setattr(release, 'copy_guide_images', lambda output: None)
     details = {'app': {'Id':'sha256:synthetic-app','Os':'linux','Architecture':'amd64'},
                'proxy': {'Id':'sha256:synthetic-proxy','Os':'linux','Architecture':'amd64'}}
@@ -52,10 +56,14 @@ def test_archive_selects_both_images_and_records_actual_identity(bundle):
     assert calls[0][-2:] == ['app','proxy']
     metadata=json.loads((root/'build/candidate/docker-release.json').read_text())
     assert metadata['image_id']=='sha256:synthetic-app'
+    assert metadata['version']=='0.1.1'
     assert metadata['caddy_image']=='proxy' and metadata['caddy_image_id']=='sha256:synthetic-proxy'
     assert '${GEP_CADDY_IMAGE:-proxy}' in (root/'build/candidate/compose.public.yaml').read_text()
     with zipfile.ZipFile(root/'build/candidate.zip') as z:
         assert 'candidate/gep-image.tar' in z.namelist()
+        assert 'candidate/docs/upgrade_0_1_1.md' in z.namelist()
+        assert 'candidate/docs/upgrade_0_1_1_en.md' in z.namelist()
+        assert '/tree/v0.1.1/GEC_SDK' in z.read('candidate/README.md').decode()
         assert not any('/data/' in name or '/internal/' in name for name in z.namelist())
 
 

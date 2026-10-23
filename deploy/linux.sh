@@ -4,7 +4,7 @@ set -eu
 umask 077
 task_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 task_action=${1:-start}
-task_image=${2:-gep:0.1.0}
+task_image=${2:-gep:0.1.1}
 task_port=${GEP_PORT:-8080}
 case "$task_port" in ''|*[!0-9]*) echo 'GEP_PORT must be a number.' >&2; exit 2;; esac
 [ "$task_port" -ge 1024 ] && [ "$task_port" -le 65535 ] || { echo 'GEP_PORT must be 1024-65535.' >&2; exit 2; }

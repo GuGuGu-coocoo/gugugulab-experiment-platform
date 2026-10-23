@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import tomllib
 from urllib.parse import quote, urlsplit
 import zipfile
 
@@ -32,6 +33,7 @@ def main():
     parser.add_argument('--caddy-image', default='gep-caddy:2.11.7-go1.26.10')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
+    version = tomllib.loads((ROOT / 'pyproject.toml').read_text(encoding='utf-8'))['project']['version']
     output = args.output.resolve()
     if not output.is_relative_to(ROOT / 'build') or output.exists():
         parser.error('Choose a new directory below build/.')
@@ -43,8 +45,8 @@ def main():
         parser.error('Build the patched Caddy image for the same Linux architecture first.')
     output.mkdir(parents=True)
     for relative in ('compose.yaml', 'compose.public.yaml', '.env.example', 'deploy/windows.ps1',
-                     'deploy/start_windows.cmd', 'deploy/linux.sh', 'deploy/Caddyfile', 'LICENSE',
-                     'README.md', 'README_ZH.md'):
+                     'deploy/start_windows.cmd', 'deploy/linux.sh', 'deploy/Caddyfile', 'deploy/README.md', 'LICENSE',
+                     'README.md', 'README_ZH.md', 'CHANGELOG.md'):
         target = output / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / relative, target)
@@ -55,7 +57,8 @@ def main():
     (output / 'docs').mkdir()
     for name in ('deployment.md', 'deployment_en.md', 'researcher.md', 'researcher_en.md',
                  'gec_godot.md', 'gec_godot_en.md', 'moss_duel_gec.md', 'moss_duel_gec_en.md',
-                 'protocol.md', 'security.md', 'SECURITY_AUDIT.md', 'security_component_review.md'):
+                 'protocol.md', 'security.md', 'SECURITY_AUDIT.md', 'security_component_review.md',
+                 'upgrade_0_1_1.md', 'upgrade_0_1_1_en.md', 'release_notes_0_1_1.md'):
         guide = ROOT / 'docs' / name
         shutil.copy2(guide, output / 'docs' / guide.name)
     copy_guide_images(output)
@@ -65,7 +68,7 @@ def main():
     # Keep packaged guides readable offline. Links to source-only examples
     # point back to the current source, not nonexistent ZIP paths or old tags
     # that predate the connected example.
-    for guide in [output / 'README.md', output / 'README_ZH.md', *(output / 'docs').glob('*.md')]:
+    for guide in [output / 'README.md', output / 'README_ZH.md', output / 'CHANGELOG.md', output / 'deploy/README.md', *(output / 'docs').glob('*.md')]:
         def link(match):
             label, target = match.groups()
             parsed = urlsplit(target)
@@ -77,13 +80,13 @@ def main():
             relative = local.relative_to(output).as_posix()
             kind = 'tree' if (ROOT / relative).is_dir() else 'blob'
             suffix = '#' + parsed.fragment if parsed.fragment else ''
-            return f'[{label}](https://github.com/GuGuGu-coocoo/gugugulab-experiment-platform/{kind}/main/{quote(relative)}{suffix})'
+            return f'[{label}](https://github.com/GuGuGu-coocoo/gugugulab-experiment-platform/{kind}/v{version}/{quote(relative)}{suffix})'
         guide.write_text(re.sub(r'\[([^\]]+)\]\(([^)]+)\)', link, guide.read_text(encoding='utf-8')), encoding='utf-8')
     subprocess.run(['docker', 'image', 'save', '--output', str(output / 'gep-image.tar'), args.image, args.caddy_image], check=True)
     (output / 'docker-release.json').write_text(json.dumps({
         'image': args.image, 'image_id': details['Id'], 'os': details['Os'], 'architecture': details['Architecture'],
         'caddy_image': args.caddy_image, 'caddy_image_id': proxy['Id'],
-        'version': '0.1.0', 'delivery': 'docker-only',
+        'version': version, 'delivery': 'docker-only',
     }, indent=2) + '\n')
     archive = output.parent / (output.name + '.zip')
     with zipfile.ZipFile(archive, 'x', compression=zipfile.ZIP_DEFLATED, compresslevel=1) as bundle:
